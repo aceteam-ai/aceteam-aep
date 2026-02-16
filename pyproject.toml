@@ -7,7 +7,15 @@ license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [{ name = "AceTeam AI", email = "contact@aceteam.ai" }]
 keywords = ["aep", "ai", "agents", "llm", "cost-tracking"]
-
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "openai>=1.65.0,<2.0.0",
     "anthropic>=0.45.0,<1.0.0",
@@ -27,6 +35,10 @@ dev = [
     "ruff>=0.11",
     "pyright>=1.1",
 ]
+
+[project.urls]
+Homepage = "https://aceteam.ai"
+Repository = "https://github.com/aceteam-ai/aceteam-aep"
 
 [build-system]
 requires = ["hatchling"]

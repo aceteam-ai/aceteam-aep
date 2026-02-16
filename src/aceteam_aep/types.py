@@ -89,11 +89,20 @@ class AgentResult:
     iterations: int = 0
 
 
+@dataclass
+class Document:
+    """Simple document container replacing langchain_core.documents.Document."""
+
+    page_content: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
 __all__ = [
     "AgentResult",
     "ChatMessage",
     "ChatResponse",
     "ContentBlock",
+    "Document",
     "StreamChunk",
     "ToolCallRequest",
     "Usage",
