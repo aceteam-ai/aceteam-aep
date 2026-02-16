@@ -25,12 +25,15 @@ class OpenAIEmbeddings:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None = None,
         model: str = "text-embedding-3-small",
         dimensions: int | None = None,
         base_url: str | None = None,
     ) -> None:
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # When api_key is None, openai SDK falls back to OPENAI_API_KEY env var
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key or None, base_url=base_url
+        )
         self._model = model
         self._dimensions = dimensions
 
