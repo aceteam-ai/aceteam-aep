@@ -85,6 +85,26 @@ def _tools_to_google(tools: list[dict[str, Any]]) -> list[genai_types.Tool]:
     return [genai_types.Tool(function_declarations=declarations)] if declarations else []
 
 
+def _apply_response_format(
+    config: genai_types.GenerateContentConfig,
+    response_format: dict[str, Any],
+) -> None:
+    """Apply OpenAI-style response_format to Google GenAI config.
+
+    Converts the OpenAI JSON Schema format to Google's response_mime_type
+    and response_schema parameters.
+    """
+    fmt_type = response_format.get("type")
+    if fmt_type == "json_schema":
+        json_schema_spec = response_format.get("json_schema", {})
+        schema = json_schema_spec.get("schema", {})
+        if schema:
+            config.response_mime_type = "application/json"
+            config.response_schema = schema
+    elif fmt_type == "json_object":
+        config.response_mime_type = "application/json"
+
+
 class GoogleClient:
     """Google GenAI (Gemini) client."""
 
@@ -125,6 +145,9 @@ class GoogleClient:
 
         if tools:
             config.tools = _tools_to_google(tools)
+
+        if response_format:
+            _apply_response_format(config, response_format)
 
         response = await self._client.aio.models.generate_content(
             model=self._model,

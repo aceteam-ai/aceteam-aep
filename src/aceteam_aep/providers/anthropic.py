@@ -11,6 +11,15 @@ import anthropic
 from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
 
 
+def _extract_json_schema(response_format: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the JSON schema dict from an OpenAI-style response_format."""
+    fmt_type = response_format.get("type")
+    if fmt_type == "json_schema":
+        spec = response_format.get("json_schema", {})
+        return spec.get("schema")
+    return None
+
+
 def _format_messages(
     messages: list[ChatMessage],
 ) -> tuple[str | None, list[dict[str, Any]]]:
@@ -147,6 +156,19 @@ class AnthropicClient:
 
         if tools:
             kwargs["tools"] = _tools_to_anthropic(tools)
+
+        if response_format:
+            schema = _extract_json_schema(response_format)
+            if schema:
+                schema_prompt = (
+                    "You must respond with a valid JSON object conforming to this schema:\n"
+                    f"```json\n{json.dumps(schema, indent=2)}\n```\n"
+                    "Output ONLY the JSON object, no other text."
+                )
+                if "system" in kwargs:
+                    kwargs["system"] += f"\n\n{schema_prompt}"
+                else:
+                    kwargs["system"] = schema_prompt
 
         response = await self._client.messages.create(**kwargs)
 

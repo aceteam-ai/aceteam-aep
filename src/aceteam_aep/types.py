@@ -87,6 +87,7 @@ class AgentResult:
     messages: list[ChatMessage]
     usage: Usage = field(default_factory=Usage)
     iterations: int = 0
+    finish_reason: str | None = None
 
 
 @dataclass

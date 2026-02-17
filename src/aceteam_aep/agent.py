@@ -80,6 +80,7 @@ async def run_agent_loop(
     working.extend(messages)
 
     total_usage = Usage()
+    last_finish_reason: str | None = None
     root_span = None
 
     if span_tracker:
@@ -107,6 +108,7 @@ async def run_agent_loop(
             )
 
             total_usage = total_usage + response.usage
+            last_finish_reason = response.finish_reason
 
             # Record cost
             if cost_tracker:
@@ -183,6 +185,7 @@ async def run_agent_loop(
             messages=working,
             usage=total_usage,
             iterations=min(_iteration + 1, max_iterations),
+            finish_reason=last_finish_reason,
         )
 
     except Exception:
@@ -217,6 +220,7 @@ async def run_agent_loop_stream(
     working.extend(messages)
 
     total_usage = Usage()
+    last_finish_reason: str | None = None
     root_span = None
 
     if span_tracker:
@@ -259,6 +263,9 @@ async def run_agent_loop_stream(
 
                 if stream_chunk.usage:
                     call_usage = stream_chunk.usage
+
+                if stream_chunk.finish_reason:
+                    last_finish_reason = stream_chunk.finish_reason
 
             total_usage = total_usage + call_usage
 
@@ -349,7 +356,7 @@ async def run_agent_loop_stream(
             span_tracker.end_span(root_span.span_id)
             yield span_end_event(root_span.span_id)
 
-        yield end_event(total_usage)
+        yield end_event(total_usage, finish_reason=last_finish_reason)
 
     except Exception as e:
         if root_span and span_tracker:

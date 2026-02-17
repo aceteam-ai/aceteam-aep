@@ -95,7 +95,7 @@ def error_event(code: str, message: str) -> StreamEvent:
     return StreamEvent(type="error", data={"code": code, "message": message})
 
 
-def end_event(usage: Usage | None = None) -> StreamEvent:
+def end_event(usage: Usage | None = None, finish_reason: str | None = None) -> StreamEvent:
     data: dict[str, Any] = {}
     if usage:
         data["usage"] = {
@@ -103,6 +103,8 @@ def end_event(usage: Usage | None = None) -> StreamEvent:
             "completion_tokens": usage.completion_tokens,
             "total_tokens": usage.total_tokens,
         }
+    if finish_reason:
+        data["finish_reason"] = finish_reason
     return StreamEvent(type="end", data=data)
 
 
