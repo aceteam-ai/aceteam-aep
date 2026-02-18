@@ -258,7 +258,8 @@ class AnthropicClient:
                 elif event.type == "content_block_stop":
                     if current_tool:
                         try:
-                            args = json.loads(current_tool["arguments"])
+                            raw_args = current_tool["arguments"]
+                            args = json.loads(raw_args) if raw_args.strip() else {}
                         except (json.JSONDecodeError, TypeError):
                             args = {"raw": current_tool["arguments"]}
                         yield StreamChunk(

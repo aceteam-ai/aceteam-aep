@@ -72,7 +72,10 @@ def _parse_tool_calls(
     for tc in tool_calls:
         args_str = tc.function.arguments
         try:
-            args = json.loads(args_str) if isinstance(args_str, str) else args_str
+            if isinstance(args_str, str) and args_str.strip():
+                args = json.loads(args_str)
+            else:
+                args = args_str or {}
         except (json.JSONDecodeError, TypeError):
             args = {"raw": args_str}
         result.append(ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args))
@@ -217,7 +220,8 @@ class OpenAIClient:
                 completed_tool_calls = []
                 for tc_data in partial_tool_calls.values():
                     try:
-                        args = json.loads(tc_data["arguments"])
+                        raw_args = tc_data["arguments"]
+                        args = json.loads(raw_args) if raw_args.strip() else {}
                     except (json.JSONDecodeError, TypeError):
                         args = {"raw": tc_data["arguments"]}
                     completed_tool_calls.append(
