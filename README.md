@@ -1,6 +1,6 @@
 # aceteam-aep
 
-AEP-native execution layer for AI agents. Replaces LangChain with direct provider SDKs while adding AEP protocol compliance (spans, costs, budget enforcement).
+AEP-native execution layer for AI agents. Direct provider SDKs and AEP protocol compliance (spans, costs, budget enforcement).
 
 ## Installation
 
