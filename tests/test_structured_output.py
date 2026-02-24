@@ -253,6 +253,47 @@ class TestGoogleResponseFormat:
             assert config.response_mime_type == "application/json"
             assert config.response_schema is not None
 
+    @pytest.mark.asyncio
+    async def test_additional_properties_stripped_from_schema(self):
+        """additionalProperties must be stripped before passing schema to Gemini.
+
+        Pydantic's model_json_schema() emits additionalProperties: false on every
+        object. Gemini's response_schema uses a restricted OpenAPI 3.0 subset that
+        rejects this field with a 400 INVALID_ARGUMENT error.
+        """
+        from aceteam_aep.providers.google import _apply_response_format
+        from google.genai import types as genai_types
+
+        schema_with_additional_props = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_output",
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "name": {"type": "string"},
+                        "address": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {"city": {"type": "string"}},
+                        },
+                    },
+                    "required": ["name", "address"],
+                },
+            },
+        }
+
+        config = genai_types.GenerateContentConfig(temperature=0.7, max_output_tokens=1000)
+        _apply_response_format(config, schema_with_additional_props)
+
+        schema = config.response_schema
+        assert "additionalProperties" not in schema
+        assert "additionalProperties" not in schema["properties"]["address"]
+        # Other fields are preserved
+        assert schema["properties"]["name"]["type"] == "string"
+        assert schema["required"] == ["name", "address"]
+
 
 class TestStructuredOutputWrapper:
     """Test the structured_output() wrapper function."""

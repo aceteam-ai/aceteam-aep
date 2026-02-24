@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 from google import genai
@@ -91,13 +91,13 @@ def _strip_additional_properties(schema: Any) -> Any:
     Gemini's response_schema uses a restricted OpenAPI 3.0 subset that does not
     support additionalProperties. Passing it causes a 400 INVALID_ARGUMENT error.
     """
-    if isinstance(schema, dict):
+    if isinstance(schema, Mapping):
         return {
             k: _strip_additional_properties(v)
             for k, v in schema.items()
             if k != "additionalProperties"
         }
-    if isinstance(schema, list):
+    if isinstance(schema, Sequence) and not isinstance(schema, str):
         return [_strip_additional_properties(item) for item in schema]
     return schema
 
