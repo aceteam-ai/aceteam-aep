@@ -8,3 +8,6 @@ build/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.direnv/
+result
+result-*
