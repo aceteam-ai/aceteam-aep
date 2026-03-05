@@ -1,6 +1,7 @@
 """Tests for cost tracking."""
 
-from aceteam_aep.costs import MODEL_COSTS, CostTracker
+from aceteam_aep.costs import CostTracker
+from aceteam_aep.models import MODEL_REGISTRY
 from aceteam_aep.types import Usage
 
 
@@ -48,10 +49,10 @@ def test_cost_node_total():
     assert node.total_cost() == node.compute_cost + node.value_added_fee + node.platform_fee
 
 
-def test_model_costs_has_common_models():
-    assert "gpt-4o" in MODEL_COSTS
-    assert "gpt-4o-mini" in MODEL_COSTS
-    assert "text-embedding-3-small" in MODEL_COSTS
+def test_model_registry_has_common_models():
+    assert "gpt-4o" in MODEL_REGISTRY
+    assert "gpt-4o-mini" in MODEL_REGISTRY
+    assert "text-embedding-3-small" in MODEL_REGISTRY
 
 
 def test_unknown_model_gets_default_cost():

@@ -5,37 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from .client import ChatClient
+from .models import PROVIDER_BASE_URLS, detect_provider
 from .providers.anthropic import AnthropicClient
 from .providers.google import GoogleClient
 from .providers.openai import OpenAIClient
-
-# Provider detection rules: (prefix/contains, provider, base_url_override)
-_OPENAI_COMPATIBLE: dict[str, str] = {
-    "sambanova": "https://api.sambanova.ai/v1",
-    "theagentic": "https://api.theagentic.com/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-}
-
-
-def _detect_provider(model: str) -> str:
-    """Detect provider from model name."""
-    model_lower = model.lower()
-
-    if model_lower.startswith("claude") or "anthropic" in model_lower:
-        return "anthropic"
-    if model_lower.startswith("gemini") or "google" in model_lower:
-        return "google"
-    if model_lower.startswith("grok") or "xai" in model_lower:
-        return "xai"
-    if model_lower.startswith("ollama"):
-        return "ollama"
-
-    for prefix, _ in _OPENAI_COMPATIBLE.items():
-        if prefix in model_lower:
-            return prefix
-
-    # Default to OpenAI (covers gpt-*, o1, o3, etc.)
-    return "openai"
 
 
 def create_client(
@@ -64,7 +37,7 @@ def create_client(
     Returns:
         A ChatClient instance for the detected/specified provider.
     """
-    detected = provider or _detect_provider(model)
+    detected = provider or detect_provider(model)
 
     if detected == "anthropic":
         return AnthropicClient(
@@ -104,7 +77,7 @@ def create_client(
         )
 
     # OpenAI or OpenAI-compatible
-    url = base_url or _OPENAI_COMPATIBLE.get(detected)
+    url = base_url or PROVIDER_BASE_URLS.get(detected)
     return OpenAIClient(
         api_key=api_key,
         model=model,

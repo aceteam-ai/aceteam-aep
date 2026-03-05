@@ -1,6 +1,7 @@
 """Tests for OpenAI provider - format conversion only (no real API calls)."""
 
-from aceteam_aep.providers.openai import OpenAIClient, _format_messages
+from aceteam_aep.models import MODEL_REGISTRY, get_model_info
+from aceteam_aep.providers.openai import OpenAIClient, _format_messages, _uses_max_completion_tokens
 from aceteam_aep.types import ChatMessage, ContentBlock, ToolCallRequest
 
 
@@ -63,3 +64,35 @@ def test_format_tool_result():
 def test_openai_client_model_name():
     client = OpenAIClient(api_key="test", model="gpt-4o")
     assert client.model_name == "gpt-4o"
+
+
+def test_uses_max_completion_tokens():
+    # Models that require max_completion_tokens (registry-driven)
+    for model in ("o1", "o1-mini", "o1-preview", "o3", "o3-mini", "gpt-5", "gpt-5-mini", "gpt-5-nano"):
+        assert _uses_max_completion_tokens(model), f"{model} should use max_completion_tokens"
+
+    # Models that use max_tokens
+    for model in ("gpt-4o", "gpt-4o-mini", "gpt-4-turbo"):
+        assert not _uses_max_completion_tokens(model), f"{model} should use max_tokens"
+
+
+def test_registry_drives_max_completion_tokens():
+    """_uses_max_completion_tokens must agree with the registry for all known models."""
+    for model, info in MODEL_REGISTRY.items():
+        if info.provider == "openai" and not info.is_embedding:
+            assert _uses_max_completion_tokens(model) == info.uses_max_completion_tokens
+
+
+def test_registry_model_info():
+    info = get_model_info("gpt-4o")
+    assert info is not None
+    assert info.provider == "openai"
+    assert info.supports_vision
+    assert not info.uses_max_completion_tokens
+
+    o1 = get_model_info("o1")
+    assert o1 is not None
+    assert o1.uses_max_completion_tokens
+    assert not o1.supports_temperature
+
+    assert get_model_info("not-a-real-model") is None
