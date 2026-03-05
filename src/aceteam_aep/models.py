@@ -349,7 +349,7 @@ _PROVIDER_PREFIXES: list[tuple[str, str]] = [
     ("claude", "anthropic"),
     ("gemini", "google"),
     ("grok", "xai"),
-    ("ollama-", "ollama"),
+    ("ollama", "ollama"),
 ]
 
 _PROVIDER_SUBSTRINGS: list[tuple[str, str]] = [
