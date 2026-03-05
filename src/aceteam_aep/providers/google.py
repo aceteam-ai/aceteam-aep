@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 from google import genai
@@ -85,6 +85,23 @@ def _tools_to_google(tools: list[dict[str, Any]]) -> list[genai_types.Tool]:
     return [genai_types.Tool(function_declarations=declarations)] if declarations else []
 
 
+def _strip_additional_properties(schema: Any) -> Any:
+    """Recursively remove additionalProperties from a JSON schema.
+
+    Gemini's response_schema uses a restricted OpenAPI 3.0 subset that does not
+    support additionalProperties. Passing it causes a 400 INVALID_ARGUMENT error.
+    """
+    if isinstance(schema, Mapping):
+        return {
+            k: _strip_additional_properties(v)
+            for k, v in schema.items()
+            if k != "additionalProperties"
+        }
+    if isinstance(schema, Sequence) and not isinstance(schema, str):
+        return [_strip_additional_properties(item) for item in schema]
+    return schema
+
+
 def _apply_response_format(
     config: genai_types.GenerateContentConfig,
     response_format: dict[str, Any],
@@ -100,7 +117,7 @@ def _apply_response_format(
         schema = json_schema_spec.get("schema", {})
         if schema:
             config.response_mime_type = "application/json"
-            config.response_schema = schema
+            config.response_schema = _strip_additional_properties(schema)
     elif fmt_type == "json_object":
         config.response_mime_type = "application/json"
 
