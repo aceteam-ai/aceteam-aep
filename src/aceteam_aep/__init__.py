@@ -4,7 +4,7 @@ from .agent import run_agent_loop, run_agent_loop_stream
 from .budget import BudgetEnforcer, BudgetExceededError, BudgetState, ReservationToken
 from .client import ChatClient
 from .costs import MODEL_COSTS, CostNode, CostTracker
-from .embeddings import EmbeddingClient, OpenAIEmbeddings
+from .embeddings import CohereEmbeddings, EmbeddingClient, OllamaEmbeddings, OpenAIEmbeddings
 from .envelope import Citation, ExecutionEnvelope, ExecutionError
 from .factory import create_client
 from .prompt import wrap_context, wrap_examples, wrap_file, wrap_xml
@@ -41,7 +41,9 @@ __all__ = [
     "CostTracker",
     "MODEL_COSTS",
     # Embeddings
+    "CohereEmbeddings",
     "EmbeddingClient",
+    "OllamaEmbeddings",
     "OpenAIEmbeddings",
     # Envelope
     "Citation",
