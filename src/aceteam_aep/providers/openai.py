@@ -136,7 +136,9 @@ class OpenAIClient:
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
-        token_param = "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
+        token_param = (
+            "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
+        )
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
@@ -175,7 +177,9 @@ class OpenAIClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        token_param = "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
+        token_param = (
+            "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
+        )
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),

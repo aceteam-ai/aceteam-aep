@@ -68,7 +68,17 @@ def test_openai_client_model_name():
 
 def test_uses_max_completion_tokens():
     # Models that require max_completion_tokens (registry-driven)
-    for model in ("o1", "o1-mini", "o1-preview", "o3", "o3-mini", "gpt-5", "gpt-5-mini", "gpt-5-nano"):
+    mct_models = (
+        "o1",
+        "o1-mini",
+        "o1-preview",
+        "o3",
+        "o3-mini",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+    )
+    for model in mct_models:
         assert _uses_max_completion_tokens(model), f"{model} should use max_completion_tokens"
 
     # Models that use max_tokens
