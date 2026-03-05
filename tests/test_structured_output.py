@@ -7,13 +7,11 @@ Each provider's chat() method should either:
 - Inject schema into system prompt (Anthropic)
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from aceteam_aep.types import ChatMessage, ChatResponse, Usage
-
 
 # Standard test schema
 TEST_RESPONSE_FORMAT = {
@@ -53,9 +51,7 @@ class TestOpenAIResponseFormat:
                 finish_reason="stop",
             )
         ]
-        mock_response.usage = MagicMock(
-            prompt_tokens=10, completion_tokens=5, total_tokens=15
-        )
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
         mock_response.model = "gpt-4o"
 
         with patch("openai.AsyncOpenAI") as MockOpenAI:
@@ -83,9 +79,7 @@ class TestOpenAIResponseFormat:
                 finish_reason="stop",
             )
         ]
-        mock_response.usage = MagicMock(
-            prompt_tokens=10, completion_tokens=5, total_tokens=15
-        )
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
         mock_response.model = "gpt-4o"
 
         with patch("openai.AsyncOpenAI") as MockOpenAI:
@@ -193,10 +187,10 @@ class TestGoogleResponseFormat:
 
     @pytest.mark.asyncio
     async def test_response_format_converted_to_google_config(self):
-        from aceteam_aep.providers.google import GoogleClient, _apply_response_format
-
         # Test the helper function directly
         from google.genai import types as genai_types
+
+        from aceteam_aep.providers.google import _apply_response_format
 
         config = genai_types.GenerateContentConfig(temperature=0.7, max_output_tokens=1000)
         _apply_response_format(config, TEST_RESPONSE_FORMAT)
@@ -210,8 +204,9 @@ class TestGoogleResponseFormat:
 
     @pytest.mark.asyncio
     async def test_json_object_format_sets_mime_type_only(self):
-        from aceteam_aep.providers.google import _apply_response_format
         from google.genai import types as genai_types
+
+        from aceteam_aep.providers.google import _apply_response_format
 
         config = genai_types.GenerateContentConfig(temperature=0.7, max_output_tokens=1000)
         _apply_response_format(config, {"type": "json_object"})
@@ -240,9 +235,7 @@ class TestGoogleResponseFormat:
 
         with patch("google.genai.Client") as MockGenAI:
             mock_genai = MockGenAI.return_value
-            mock_genai.aio.models.generate_content = AsyncMock(
-                return_value=mock_response
-            )
+            mock_genai.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
             client = GoogleClient(api_key="test-key", model="gemini-2.5-flash")
             await client.chat(TEST_MESSAGES, response_format=TEST_RESPONSE_FORMAT)
@@ -261,8 +254,9 @@ class TestGoogleResponseFormat:
         object. Gemini's response_schema uses a restricted OpenAPI 3.0 subset that
         rejects this field with a 400 INVALID_ARGUMENT error.
         """
-        from aceteam_aep.providers.google import _apply_response_format
         from google.genai import types as genai_types
+
+        from aceteam_aep.providers.google import _apply_response_format
 
         schema_with_additional_props = {
             "type": "json_schema",

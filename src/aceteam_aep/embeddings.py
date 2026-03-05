@@ -36,9 +36,7 @@ class OpenAIEmbeddings:
         base_url: str | None = None,
     ) -> None:
         # When api_key is None, openai SDK falls back to OPENAI_API_KEY env var
-        self._client = openai.AsyncOpenAI(
-            api_key=api_key or None, base_url=base_url
-        )
+        self._client = openai.AsyncOpenAI(api_key=api_key or None, base_url=base_url)
         self._model = model
         self._dimensions = dimensions
 
