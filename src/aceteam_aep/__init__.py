@@ -3,10 +3,11 @@
 from .agent import run_agent_loop, run_agent_loop_stream
 from .budget import BudgetEnforcer, BudgetExceededError, BudgetState, ReservationToken
 from .client import ChatClient
-from .costs import MODEL_COSTS, CostNode, CostTracker
+from .costs import CostNode, CostTracker
 from .embeddings import CohereEmbeddings, EmbeddingClient, OllamaEmbeddings, OpenAIEmbeddings
 from .envelope import Citation, ExecutionEnvelope, ExecutionError
 from .factory import create_client
+from .models import MODEL_REGISTRY, ModelInfo, detect_provider, get_model_info
 from .prompt import wrap_context, wrap_examples, wrap_file, wrap_xml
 from .spans import Span, SpanTracker
 from .stream import StreamEvent
@@ -39,7 +40,11 @@ __all__ = [
     # Costs
     "CostNode",
     "CostTracker",
-    "MODEL_COSTS",
+    # Models
+    "MODEL_REGISTRY",
+    "ModelInfo",
+    "detect_provider",
+    "get_model_info",
     # Embeddings
     "CohereEmbeddings",
     "EmbeddingClient",

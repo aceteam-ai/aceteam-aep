@@ -7,6 +7,7 @@ from typing import Any
 
 import openai
 
+from ..models import get_model_info
 from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
 
 
@@ -82,6 +83,16 @@ def _parse_tool_calls(
     return result
 
 
+def _uses_max_completion_tokens(model: str) -> bool:
+    """Return True if the model requires max_completion_tokens instead of max_tokens."""
+    info = get_model_info(model)
+    if info is not None:
+        return info.uses_max_completion_tokens
+    # Fallback prefix check for models not yet in the registry.
+    prefixes = ("o1", "o3", "gpt-5")
+    return any(model == p or model.startswith(p + "-") for p in prefixes)
+
+
 def _extract_usage(usage: Any) -> Usage:
     if usage is None:
         return Usage()
@@ -125,11 +136,14 @@ class OpenAIClient:
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
+        token_param = (
+            "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
+        )
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
             "temperature": temperature if temperature is not None else self._temperature,
-            "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
+            token_param: max_tokens if max_tokens is not None else self._max_tokens,
         }
 
         if tools:
@@ -163,11 +177,14 @@ class OpenAIClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        token_param = (
+            "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
+        )
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
             "temperature": temperature if temperature is not None else self._temperature,
-            "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
+            token_param: max_tokens if max_tokens is not None else self._max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }

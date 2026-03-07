@@ -8,30 +8,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
+from .models import MODEL_REGISTRY
 from .types import Usage
 
-# Approximate per-token costs (USD) for common models.
-# These are rough estimates; actual costs vary by provider and plan.
-MODEL_COSTS: dict[str, tuple[Decimal, Decimal]] = {
-    # (input_cost_per_token, output_cost_per_token)
-    # OpenAI
-    "gpt-4o": (Decimal("0.0000025"), Decimal("0.000010")),
-    "gpt-4o-mini": (Decimal("0.00000015"), Decimal("0.0000006")),
-    "gpt-4-turbo": (Decimal("0.000010"), Decimal("0.000030")),
-    "gpt-4.5-preview": (Decimal("0.000075"), Decimal("0.00015")),
-    "o1": (Decimal("0.000015"), Decimal("0.000060")),
-    "o3-mini": (Decimal("0.0000011"), Decimal("0.0000044")),
-    # Anthropic
-    "claude-opus-4-5-20250514": (Decimal("0.000015"), Decimal("0.000075")),
-    "claude-sonnet-4-5-20250514": (Decimal("0.000003"), Decimal("0.000015")),
-    "claude-haiku-4-5-20251001": (Decimal("0.0000008"), Decimal("0.000004")),
-    # Google
-    "gemini-2.5-flash": (Decimal("0.00000015"), Decimal("0.0000006")),
-    "gemini-2.5-pro": (Decimal("0.00000125"), Decimal("0.000010")),
-    # Embeddings
-    "text-embedding-3-small": (Decimal("0.00000002"), Decimal("0")),
-    "text-embedding-3-large": (Decimal("0.00000013"), Decimal("0")),
-}
+# Fallback per-token costs for models not in the registry.
+_FALLBACK_LLM_COSTS = (Decimal("0.000001"), Decimal("0.000002"))
+_FALLBACK_EMBEDDING_COSTS = (Decimal("0.00000002"), Decimal("0"))
 
 
 CostCategory = Literal["llm_tokens", "embedding", "compute", "storage", "api"]
@@ -76,7 +58,9 @@ class CostTracker:
         parent_cost_id: str | None = None,
     ) -> CostNode:
         """Record cost for an LLM call based on token usage."""
-        input_rate, output_rate = MODEL_COSTS.get(model, (Decimal("0.000001"), Decimal("0.000002")))
+        info = MODEL_REGISTRY.get(model)
+        input_rate = info.input_cost_per_token if info else _FALLBACK_LLM_COSTS[0]
+        output_rate = info.output_cost_per_token if info else _FALLBACK_LLM_COSTS[1]
         cost = (input_rate * usage.prompt_tokens) + (output_rate * usage.completion_tokens)
 
         node = CostNode(
@@ -104,7 +88,8 @@ class CostTracker:
         parent_cost_id: str | None = None,
     ) -> CostNode:
         """Record cost for an embedding call."""
-        input_rate, _ = MODEL_COSTS.get(model, (Decimal("0.00000002"), Decimal("0")))
+        info = MODEL_REGISTRY.get(model)
+        input_rate = info.input_cost_per_token if info else _FALLBACK_EMBEDDING_COSTS[0]
         cost = input_rate * token_count
 
         node = CostNode(
@@ -132,4 +117,4 @@ class CostTracker:
         return sum((node.total_cost() for node in self._nodes), Decimal("0"))
 
 
-__all__ = ["CostCategory", "CostNode", "CostTracker", "MODEL_COSTS"]
+__all__ = ["CostCategory", "CostNode", "CostTracker"]
