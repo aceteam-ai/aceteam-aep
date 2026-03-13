@@ -5,7 +5,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from .costs import CostNode
 
 
 @dataclass
@@ -20,6 +23,7 @@ class Span:
     started_at: str = ""
     ended_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    cost: CostNode | None = None
 
     @property
     def duration_ms(self) -> float | None:

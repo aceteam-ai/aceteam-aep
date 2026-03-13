@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from .budget import BudgetState
 from .costs import CostNode
+from .governance import CitationClassification, SecurityLevel
 from .spans import Span
 
 
@@ -19,6 +20,28 @@ class Citation:
     source_type: str
     content: str
     confidence: float | None = None
+    classifications: list[CitationClassification] | None = None
+
+    @classmethod
+    def from_extraction(
+        cls,
+        *,
+        entity_id: str,
+        entity_type: str,
+        text: str,
+        confidence: float = 0.0,
+        node_id: str = "extraction",
+        security_level: SecurityLevel = SecurityLevel.INTERNAL,
+    ) -> Citation:
+        return cls(
+            span_id=node_id,
+            source_type="extraction",
+            content=text,
+            confidence=confidence,
+            classifications=(
+                [CitationClassification(level=security_level)] if security_level else None
+            ),
+        )
 
 
 @dataclass
@@ -43,6 +66,7 @@ class ExecutionEnvelope:
     errors: list[ExecutionError] | None = None
     warnings: list[str] | None = None
     budget_state: BudgetState | None = None
+    suspended_context: dict[str, Any] | None = None
 
     def add_citation(self, citation: Citation) -> None:
         if self.citations is None:

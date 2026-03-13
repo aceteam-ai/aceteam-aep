@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from .models import MODEL_REGISTRY
+from .pricing import PricingProvider
 from .types import Usage
 
 # Fallback per-token costs for models not in the registry.
@@ -46,9 +47,14 @@ class CostTracker:
     a CostNode linked to its parent span.
     """
 
-    def __init__(self, entity: str = "platform") -> None:
+    def __init__(self, entity: str = "platform", pricing: PricingProvider | None = None) -> None:
         self._nodes: list[CostNode] = []
         self._entity = entity
+        self._pricing = pricing
+
+    def add_node(self, node: CostNode) -> None:
+        """Add a pre-built CostNode to the tracker."""
+        self._nodes.append(node)
 
     def record_llm_cost(
         self,
@@ -58,10 +64,13 @@ class CostTracker:
         parent_cost_id: str | None = None,
     ) -> CostNode:
         """Record cost for an LLM call based on token usage."""
-        info = MODEL_REGISTRY.get(model)
-        input_rate = info.input_cost_per_token if info else _FALLBACK_LLM_COSTS[0]
-        output_rate = info.output_cost_per_token if info else _FALLBACK_LLM_COSTS[1]
-        cost = (input_rate * usage.prompt_tokens) + (output_rate * usage.completion_tokens)
+        if self._pricing:
+            cost = self._pricing.get_cost(model, usage.prompt_tokens, usage.completion_tokens)
+        else:
+            info = MODEL_REGISTRY.get(model)
+            input_rate = info.input_cost_per_token if info else _FALLBACK_LLM_COSTS[0]
+            output_rate = info.output_cost_per_token if info else _FALLBACK_LLM_COSTS[1]
+            cost = (input_rate * usage.prompt_tokens) + (output_rate * usage.completion_tokens)
 
         node = CostNode(
             id=uuid.uuid4().hex,
