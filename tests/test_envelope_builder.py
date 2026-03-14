@@ -9,7 +9,6 @@ from aceteam_aep.envelope_helpers import compute_duration, extract_primary_model
 from aceteam_aep.spans import Span
 from aceteam_aep.types import Usage
 
-
 # --- EnvelopeBuilder lifecycle ---
 
 
@@ -33,7 +32,9 @@ def test_multi_node_with_citations_and_costs():
 
     # Node 1: extraction with citations
     s1 = builder.begin_node("node-1", "Extraction")
-    citations = [Citation(span_id="node-1", source_type="extraction", content="test", confidence=0.9)]
+    citations = [
+        Citation(span_id="node-1", source_type="extraction", content="test", confidence=0.9),
+    ]
     builder.end_node(s1, citations=citations)
 
     # Node 2: LLM with cost
@@ -158,7 +159,10 @@ def test_reconstruct_from_node_records():
 
 def test_sum_cost_tree():
     nodes = [
-        CostNode(id="1", parent_id=None, entity="org:1", category="llm_tokens", compute_cost=Decimal("0.10")),
+        CostNode(
+            id="1", parent_id=None, entity="org:1",
+            category="llm_tokens", compute_cost=Decimal("0.10"),
+        ),
         CostNode(
             id="2",
             parent_id=None,
