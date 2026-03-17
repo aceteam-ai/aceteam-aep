@@ -38,6 +38,7 @@ from .types import (
     ToolCallRequest,
     Usage,
 )
+from .wrap import AepSession, SafetySignal, wrap
 
 __all__ = [
     # Agent loop
@@ -106,6 +107,10 @@ __all__ = [
     # Tools
     "Tool",
     "tool",
+    # Wrapper
+    "wrap",
+    "AepSession",
+    "SafetySignal",
     # Types
     "AgentResult",
     "ChatMessage",
