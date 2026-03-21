@@ -213,6 +213,43 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
     return client
 
 
+def _wrap_openai_async(client: Any, session: AepSession) -> Any:
+    """Intercept async client.chat.completions.create on an AsyncOpenAI-like client."""
+    original_create = client.chat.completions.create
+
+    async def patched_create(*args: Any, **kwargs: Any) -> Any:
+        call_id = uuid.uuid4().hex[:8]
+        result = await original_create(*args, **kwargs)
+
+        try:
+            usage = result.usage
+            model = result.model or kwargs.get("model", "unknown")
+            input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            output_tokens = getattr(usage, "completion_tokens", 0) or 0
+            output_text = ""
+            for choice in getattr(result, "choices", []):
+                msg = getattr(choice, "message", None)
+                if msg and hasattr(msg, "content") and msg.content:
+                    output_text += msg.content
+            input_text = _extract_input_text(kwargs.get("messages", []))
+            session._record_call(
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                call_id=call_id,
+                output_text=output_text,
+                input_text=input_text,
+            )
+        except Exception:
+            pass
+
+        return result
+
+    client.chat.completions.create = patched_create
+    client.aep = session
+    return client
+
+
 # ---------------------------------------------------------------------------
 # Anthropic wrapper
 # ---------------------------------------------------------------------------
@@ -252,6 +289,53 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
     client.messages.create = patched_create
     client.aep = session
     return client
+
+
+def _wrap_anthropic_async(client: Any, session: AepSession) -> Any:
+    """Intercept async client.messages.create on an AsyncAnthropic client."""
+    original_create = client.messages.create
+
+    async def patched_create(*args: Any, **kwargs: Any) -> Any:
+        call_id = uuid.uuid4().hex[:8]
+        result = await original_create(*args, **kwargs)
+
+        try:
+            usage = result.usage
+            model = result.model or kwargs.get("model", "unknown")
+            input_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+            output_text = ""
+            for block in getattr(result, "content", []):
+                if hasattr(block, "text"):
+                    output_text += block.text
+            input_text = _extract_input_text(kwargs.get("messages", []))
+            session._record_call(
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                call_id=call_id,
+                output_text=output_text,
+                input_text=input_text,
+            )
+        except Exception:
+            pass
+
+        return result
+
+    client.messages.create = patched_create
+    client.aep = session
+    return client
+
+
+def _is_async_client(client: Any) -> bool:
+    """Check if a client is async (has coroutine .create methods)."""
+    import asyncio
+
+    if hasattr(client, "chat") and hasattr(client.chat, "completions"):
+        return asyncio.iscoroutinefunction(client.chat.completions.create)
+    if hasattr(client, "messages"):
+        return asyncio.iscoroutinefunction(client.messages.create)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -304,14 +388,17 @@ def wrap(
         session._registry.add(det)
 
     client_type = type(client).__name__
+    is_async = _is_async_client(client)
 
     # Detect Anthropic by duck-typing: has .messages but not .chat
     if hasattr(client, "messages") and not hasattr(client, "chat"):
-        return _wrap_anthropic(client, session)
+        wrapper = _wrap_anthropic_async if is_async else _wrap_anthropic
+        return wrapper(client, session)
 
     # OpenAI or OpenAI-compatible: has .chat.completions
     if hasattr(client, "chat") and hasattr(client.chat, "completions"):
-        return _wrap_openai(client, session)
+        wrapper = _wrap_openai_async if is_async else _wrap_openai
+        return wrapper(client, session)
 
     raise TypeError(
         f"Cannot wrap client of type '{client_type}'. "
