@@ -104,6 +104,19 @@ class AepSession:
         """Number of LLM calls recorded."""
         return self._call_count
 
+    def print_summary(self) -> None:
+        """Print a colored CLI summary of this session."""
+        from .cli import format_session_summary
+
+        print(
+            format_session_summary(
+                cost=self.cost_usd,
+                signals=self._safety_signals,
+                call_count=self._call_count,
+                policy=self._policy,
+            )
+        )
+
     def _record_call(
         self,
         model: str,
