@@ -164,6 +164,14 @@ result = await run_agent_loop(
 )
 ```
 
+## Workshop Guide
+
+Step-by-step setup in 5 minutes — from install to safety signals firing:
+
+**[docs/workshop-guide.md](docs/workshop-guide.md)**
+
+Covers: proxy setup, routing agents (Python/OpenClaw/curl), triggering safety signals, governance headers, custom detectors. Works for workshops, onboarding, or self-guided evaluation.
+
 ## Providers
 
 - **OpenAI** (GPT-4o, GPT-5, o1, o3)
