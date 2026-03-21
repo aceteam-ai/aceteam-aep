@@ -1,17 +1,38 @@
 # aceteam-aep
 
-Trust & safety infrastructure for AI agents. Wrap any LLM client with one line — get cost tracking, safety signals, and enforcement for free.
+Trust & safety infrastructure for AI agents. Add cost tracking, safety detection, and enforcement to any LLM-powered tool — **zero code changes required.**
 
 ## Installation
 
 ```bash
-pip install aceteam-aep                    # Core (cost tracking + regex safety)
-pip install aceteam-aep[safety]            # + HuggingFace model-based detectors
-pip install aceteam-aep[safety,dashboard]  # + Local web dashboard
-pip install aceteam-aep[all]               # Everything
+pip install aceteam-aep[all]               # Everything (recommended)
+pip install aceteam-aep[safety,proxy]      # Safety detectors + proxy
+pip install aceteam-aep                    # Core only (cost tracking + regex safety)
 ```
 
-## Quick Start — Wrap Your Existing Client
+## Quick Start — Make OpenClaw (or any agent) Safe
+
+No code changes. Just run the proxy and point your agent at it:
+
+```bash
+# Terminal 1: Start the AEP safety proxy
+aceteam-aep proxy --port 8080
+
+# Terminal 2: Run OpenClaw through the proxy
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=sk-your-key
+openclaw run "analyze these financial statements"
+```
+
+Open **http://localhost:8080/aep/** — the dashboard shows every LLM call flowing through in real-time: cost, safety signals, and enforcement decisions.
+
+The proxy intercepts **both directions**:
+- **Incoming requests** — blocks dangerous prompts before they reach the API
+- **Outgoing responses** — blocks PII, toxic content, and cost anomalies before the agent sees them
+
+Works with OpenClaw, LangChain, CrewAI, curl, or any tool that calls the OpenAI API.
+
+## Python SDK — Wrap Your Existing Client
 
 ```python
 import openai
