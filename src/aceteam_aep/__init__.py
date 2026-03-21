@@ -19,6 +19,7 @@ from .governance import (
     PromptLayer,
     SecurityLevel,
 )
+from .instrument import instrument, uninstrument
 from .models import MODEL_REGISTRY, ModelInfo, detect_provider, get_model_info
 from .pricing import DefaultPricingProvider, PricingProvider
 from .prompt import wrap_context, wrap_examples, wrap_file, wrap_xml
@@ -38,7 +39,6 @@ from .types import (
     ToolCallRequest,
     Usage,
 )
-from .instrument import instrument, uninstrument
 from .wrap import AepSession, SafetySignal, wrap
 
 __all__ = [
