@@ -38,6 +38,7 @@ from .types import (
     ToolCallRequest,
     Usage,
 )
+from .instrument import instrument, uninstrument
 from .wrap import AepSession, SafetySignal, wrap
 
 __all__ = [
@@ -111,6 +112,9 @@ __all__ = [
     "wrap",
     "AepSession",
     "SafetySignal",
+    # Instrumentation
+    "instrument",
+    "uninstrument",
     # Types
     "AgentResult",
     "ChatMessage",

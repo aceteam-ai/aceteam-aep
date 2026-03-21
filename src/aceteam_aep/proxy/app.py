@@ -214,7 +214,7 @@ def create_proxy_app(
         target_url = f"{state.target_base_url}{path}"
 
         # Forward headers (especially Authorization)
-        forward_headers = {}
+        forward_headers: dict[str, str] = {}
         if request.headers.get("authorization"):
             forward_headers["Authorization"] = request.headers["authorization"]
         if request.headers.get("content-type"):
@@ -224,6 +224,48 @@ def create_proxy_app(
             if request.headers.get(key):
                 forward_headers[key] = request.headers[key]
 
+        # --- STREAMING BRANCH ---
+        if body.get("stream"):
+            from .streaming import handle_streaming_request
+
+            def on_stream_complete(**kwargs: Any) -> None:
+                model = kwargs.get("model", "unknown")
+                inp = kwargs.get("input_tokens", 0)
+                out = kwargs.get("output_tokens", 0)
+                signals = kwargs.get("signals", [])
+                decision = kwargs.get("decision")
+
+                span = state.span_tracker.start_span(
+                    executor_type="llm",
+                    executor_id=model,
+                    metadata={"call_id": call_id, "streaming": True},
+                )
+                usage = Usage(
+                    prompt_tokens=inp,
+                    completion_tokens=out,
+                    total_tokens=inp + out,
+                )
+                state.cost_tracker.record_llm_cost(
+                    span_id=span.span_id, model=model, usage=usage,
+                )
+                state.span_tracker.end_span(span.span_id)
+                state.call_count += 1
+                state.signals.extend(signals)
+                if decision:
+                    state.decisions.append(decision)
+
+            return await handle_streaming_request(
+                target_url=target_url,
+                body_bytes=body_bytes,
+                headers=forward_headers,
+                call_id=call_id,
+                input_text=input_text,
+                registry=state.registry,
+                policy=state.policy,
+                on_complete=on_stream_complete,
+            )
+
+        # --- NON-STREAMING BRANCH ---
         async with httpx.AsyncClient(timeout=120.0) as client:
             upstream_resp = await client.request(
                 method=request.method,
