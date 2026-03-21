@@ -29,7 +29,8 @@ xai = ["openai>=1.65.0,<2.0.0"]
 ollama = ["ollama>=0.4.0,<1.0.0"]
 safety = ["transformers>=4.40", "torch>=2.0"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
-all = ["aceteam-aep[xai,ollama,safety,dashboard]"]
+proxy = ["aceteam-aep[dashboard]"]
+all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy]"]
 dev = [
     "aceteam-aep[all]",
     "httpx>=0.28",
@@ -38,6 +39,9 @@ dev = [
     "ruff>=0.11",
     "pyright>=1.1",
 ]
+
+[project.scripts]
+aceteam-aep = "aceteam_aep.proxy.cli:main"
 
 [project.urls]
 Homepage = "https://aceteam.ai"
