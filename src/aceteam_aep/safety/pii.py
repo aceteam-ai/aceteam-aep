@@ -74,7 +74,7 @@ class PiiDetector:
         seen_types: set[str] = set()
         for entity in results:
             ent_type = entity.get("entity_group", "").upper()
-            if ent_type not in seen_types:
+            if ent_type in _PII_ENTITIES and ent_type not in seen_types:
                 seen_types.add(ent_type)
                 signals.append(
                     SafetySignal(

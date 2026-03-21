@@ -72,7 +72,7 @@ class DataClassifier:
     def _classify(self, text: str, *, pii_detected: bool = False) -> str:
         if pii_detected or _FINANCIAL_PATTERNS.search(text):
             return "confidential"
-        if _HEALTH_PATTERNS.search(text) or _LEGAL_PATTERNS.search(text):
+        if _HEALTH_PATTERNS.search(text):
             return "confidential"
         if _LEGAL_PATTERNS.search(text):
             return "internal"

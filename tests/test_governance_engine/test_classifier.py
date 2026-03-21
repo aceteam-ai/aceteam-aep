@@ -24,9 +24,9 @@ def test_health_keywords_confidential() -> None:
     assert c.classify_text("Patient diagnosis: stage 2 cancer") == "confidential"
 
 
-def test_legal_keywords_confidential() -> None:
+def test_legal_keywords_internal() -> None:
     c = DataClassifier()
-    assert c.classify_text("This is attorney-client privileged") == "confidential"
+    assert c.classify_text("This is attorney-client privileged") == "internal"
 
 
 def test_as_safety_detector() -> None:

@@ -16,7 +16,7 @@ def serve(session: AepSession, port: int = 8899) -> None:
 
     app = create_app(session=session)
     print(f"\n  AEP Dashboard: http://localhost:{port}\n")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
 __all__ = ["serve"]
