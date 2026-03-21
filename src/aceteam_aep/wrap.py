@@ -18,6 +18,7 @@ Usage::
     print(client.aep.get_cost_tree())   # per-call breakdown
     print(client.aep.get_spans())       # execution trace
     print(client.aep.safety_signals)    # T&S flags raised this session
+    print(client.aep.enforcement)       # latest PASS/FLAG/BLOCK decision
 
 Supports:
 - openai.OpenAI / openai.AsyncOpenAI
@@ -27,52 +28,35 @@ Supports:
 
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 from .costs import CostTracker
+from .enforcement import EnforcementDecision, EnforcementPolicy, evaluate
+from .safety.base import DetectorRegistry, SafetySignal
+from .safety.cost_anomaly import CostAnomalyDetector
 from .spans import Span, SpanTracker
 from .types import Usage
 
-# ---------------------------------------------------------------------------
-# T&S signal detection — lightweight, regex-based, no external deps
-# ---------------------------------------------------------------------------
 
-# Patterns that may indicate PII in model output
-_PII_PATTERNS = [
-    re.compile(r"\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b"),           # SSN
-    re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b"),                  # credit card
-    re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),  # email
-    re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),  # phone
-]
+def _default_detectors() -> list[Any]:
+    """Build the default detector list. Model-based detectors only if available."""
+    detectors: list[Any] = [CostAnomalyDetector()]
+    try:
+        from .safety.pii import PiiDetector
 
-# Simple heuristics for content classification
-_HARMFUL_KEYWORDS = frozenset([
-    "how to make a bomb", "synthesis of", "step by step hack",
-    "bypass security", "exploit vulnerability", "malware payload",
-])
+        detectors.append(PiiDetector())
+    except Exception:
+        pass
+    try:
+        from .safety.content import ContentSafetyDetector
 
-_SENSITIVE_TOPICS = frozenset([
-    "suicide", "self-harm", "child abuse", "csam",
-    "terrorism", "extremism",
-])
-
-
-@dataclass
-class SafetySignal:
-    """A single T&S flag raised during a session."""
-
-    # signal_type: "pii_in_output", "harmful_content", "sensitive_topic", "cost_anomaly"
-    signal_type: str
-    # severity: "low", "medium", "high"
-    severity: str
-    call_id: str
-    detail: str
-    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+        detectors.append(ContentSafetyDetector())
+    except Exception:
+        pass
+    return detectors
 
 
 @dataclass
@@ -82,8 +66,14 @@ class AepSession:
     entity: str
     _cost_tracker: CostTracker = field(default_factory=CostTracker)
     _span_tracker: SpanTracker = field(default_factory=SpanTracker)
+    _registry: DetectorRegistry = field(default_factory=DetectorRegistry)
     _safety_signals: list[SafetySignal] = field(default_factory=list)
     _call_costs: list[Decimal] = field(default_factory=list)
+    _policy: EnforcementPolicy = field(default_factory=EnforcementPolicy)
+    _last_enforcement: EnforcementDecision = field(
+        default_factory=lambda: EnforcementDecision(action="pass")
+    )
+    _call_count: int = 0
 
     @property
     def cost_usd(self) -> Decimal:
@@ -104,6 +94,16 @@ class AepSession:
         """All T&S flags raised this session."""
         return list(self._safety_signals)
 
+    @property
+    def enforcement(self) -> EnforcementDecision:
+        """Latest enforcement decision."""
+        return self._last_enforcement
+
+    @property
+    def call_count(self) -> int:
+        """Number of LLM calls recorded."""
+        return self._call_count
+
     def _record_call(
         self,
         model: str,
@@ -115,7 +115,8 @@ class AepSession:
         input_text: str = "",
     ) -> None:
         """Record cost + span for one LLM call and run T&S checks."""
-        # Span first so we have span_id for cost attribution
+        self._call_count += 1
+
         span = self._span_tracker.start_span(
             executor_type="llm",
             executor_id=model,
@@ -138,60 +139,23 @@ class AepSession:
         self._span_tracker.end_span(span.span_id)
         self._call_costs.append(cost_node.compute_cost)
 
-        # T&S checks
-        self._check_pii(output_text, call_id)
-        self._check_content(input_text + " " + output_text, call_id)
-        self._check_cost_anomaly(cost_node.compute_cost, call_id)
+        # Run all registered detectors
+        signals = self._registry.run_all(
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            call_cost=cost_node.compute_cost,
+        )
+        self._safety_signals.extend(signals)
 
-    def _check_pii(self, text: str, call_id: str) -> None:
-        for pattern in _PII_PATTERNS:
-            if pattern.search(text):
-                self._safety_signals.append(SafetySignal(
-                    signal_type="pii_in_output",
-                    severity="high",
-                    call_id=call_id,
-                    detail="Potential PII pattern detected in model output",
-                ))
-                break  # one signal per call is enough
-
-    def _check_content(self, text: str, call_id: str) -> None:
-        lower = text.lower()
-        for kw in _HARMFUL_KEYWORDS:
-            if kw in lower:
-                self._safety_signals.append(SafetySignal(
-                    signal_type="harmful_content",
-                    severity="high",
-                    call_id=call_id,
-                    detail=f"Potentially harmful keyword detected: '{kw}'",
-                ))
-                return
-        for topic in _SENSITIVE_TOPICS:
-            if topic in lower:
-                self._safety_signals.append(SafetySignal(
-                    signal_type="sensitive_topic",
-                    severity="medium",
-                    call_id=call_id,
-                    detail=f"Sensitive topic detected: '{topic}'",
-                ))
-                return
-
-    def _check_cost_anomaly(self, cost: Decimal, call_id: str) -> None:
-        """Flag calls that cost 5x more than session average."""
-        if len(self._call_costs) < 3:
-            return
-        avg = sum(self._call_costs[:-1], Decimal("0")) / len(self._call_costs[:-1])
-        if avg > 0 and cost > avg * 5:
-            self._safety_signals.append(SafetySignal(
-                signal_type="cost_anomaly",
-                severity="medium",
-                call_id=call_id,
-                detail=f"Call cost ${cost:.6f} is >5x session average ${avg:.6f}",
-            ))
+        # Evaluate enforcement on the new signals
+        self._last_enforcement = evaluate(signals, self._policy)
 
 
 # ---------------------------------------------------------------------------
 # OpenAI wrapper
 # ---------------------------------------------------------------------------
+
 
 def _wrap_openai(client: Any, session: AepSession) -> Any:
     """Intercept client.chat.completions.create on an OpenAI-like client."""
@@ -201,7 +165,6 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
         call_id = uuid.uuid4().hex[:8]
         result = original_create(*args, **kwargs)
 
-        # Extract usage and text from response
         try:
             usage = result.usage
             model = result.model or kwargs.get("model", "unknown")
@@ -234,6 +197,7 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
 # ---------------------------------------------------------------------------
 # Anthropic wrapper
 # ---------------------------------------------------------------------------
+
 
 def _wrap_anthropic(client: Any, session: AepSession) -> Any:
     """Intercept client.messages.create on an Anthropic client."""
@@ -275,13 +239,24 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
 # Public API
 # ---------------------------------------------------------------------------
 
-def wrap(client: Any, *, entity: str = "default") -> Any:
+
+def wrap(
+    client: Any,
+    *,
+    entity: str = "default",
+    detectors: list[Any] | None = None,
+    policy: EnforcementPolicy | None = None,
+) -> Any:
     """Wrap any OpenAI or Anthropic client with AEP accountability + T&S.
 
     Args:
         client: An ``openai.OpenAI()``, ``anthropic.Anthropic()``, or any
                 OpenAI-compatible client instance.
         entity: Logical entity name for cost attribution (org ID, user ID, etc.).
+        detectors: Custom list of SafetyDetector instances. If None, uses defaults
+                   (PII, content safety, cost anomaly).
+        policy: Custom EnforcementPolicy. If None, uses default (block on high,
+                flag on medium).
 
     Returns:
         The same client object, mutated in-place with AEP instrumentation.
@@ -298,9 +273,17 @@ def wrap(client: Any, *, entity: str = "default") -> Any:
             messages=[{"role": "user", "content": "Hello"}],
         )
         print(f"Cost: ${client.aep.cost_usd}")
-        print(f"Safety signals: {client.aep.safety_signals}")
+        print(f"Safety: {client.aep.enforcement.action}")
     """
-    session = AepSession(entity=entity)
+    session = AepSession(
+        entity=entity,
+        _policy=policy or EnforcementPolicy(),
+    )
+
+    # Register detectors
+    for det in detectors or _default_detectors():
+        session._registry.add(det)
+
     client_type = type(client).__name__
 
     # Detect Anthropic by duck-typing: has .messages but not .chat
@@ -331,4 +314,4 @@ def _extract_input_text(messages: list[Any]) -> str:
     return " ".join(parts)
 
 
-__all__ = ["wrap", "AepSession", "SafetySignal"]
+__all__ = ["AepSession", "SafetySignal", "wrap"]

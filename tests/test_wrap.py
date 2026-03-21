@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from aceteam_aep import AepSession, SafetySignal, wrap
+from aceteam_aep import AepSession, wrap
+from aceteam_aep.enforcement import EnforcementPolicy
+from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +39,6 @@ def _make_openai_client(response: Any | None = None) -> MagicMock:
     """Fake openai.OpenAI() — has .chat.completions.create."""
     client = MagicMock()
     client.chat.completions.create.return_value = response or _make_openai_response()
-    # Make hasattr checks work
     del client.messages  # no .messages — so wrap() picks OpenAI path
     return client
 
@@ -55,6 +57,10 @@ def _make_anthropic_client(response: Any | None = None) -> MagicMock:
     return client
 
 
+# Use only cost anomaly detector for most tests (fast, no model loading)
+_FAST_DETECTORS = [CostAnomalyDetector()]
+
+
 # ---------------------------------------------------------------------------
 # wrap() detection
 # ---------------------------------------------------------------------------
@@ -62,13 +68,13 @@ def _make_anthropic_client(response: Any | None = None) -> MagicMock:
 
 def test_wrap_returns_same_object() -> None:
     client = _make_openai_client()
-    wrapped = wrap(client, entity="test")
+    wrapped = wrap(client, entity="test", detectors=_FAST_DETECTORS)
     assert wrapped is client
 
 
 def test_wrap_attaches_aep_session() -> None:
     client = _make_openai_client()
-    wrap(client, entity="org:test")
+    wrap(client, entity="org:test", detectors=_FAST_DETECTORS)
     assert hasattr(client, "aep")
     assert isinstance(client.aep, AepSession)
     assert client.aep.entity == "org:test"
@@ -85,8 +91,10 @@ def test_wrap_raises_on_unknown_client() -> None:
 
 
 def test_openai_cost_recorded() -> None:
-    client = _make_openai_client(_make_openai_response(input_tokens=100, output_tokens=200))
-    wrap(client)
+    client = _make_openai_client(
+        _make_openai_response(input_tokens=100, output_tokens=200)
+    )
+    wrap(client, detectors=_FAST_DETECTORS)
     client.chat.completions.create(
         model="gpt-4o",
         messages=[{"role": "user", "content": "Hi"}],
@@ -96,7 +104,7 @@ def test_openai_cost_recorded() -> None:
 
 def test_openai_spans_recorded() -> None:
     client = _make_openai_client()
-    wrap(client)
+    wrap(client, detectors=_FAST_DETECTORS)
     client.chat.completions.create(model="gpt-4o", messages=[])
     spans = client.aep.get_spans()
     assert len(spans) == 1
@@ -104,12 +112,24 @@ def test_openai_spans_recorded() -> None:
 
 
 def test_openai_multiple_calls_accumulate() -> None:
-    client = _make_openai_client(_make_openai_response(input_tokens=50, output_tokens=50))
-    wrap(client)
+    client = _make_openai_client(
+        _make_openai_response(input_tokens=50, output_tokens=50)
+    )
+    wrap(client, detectors=_FAST_DETECTORS)
     client.chat.completions.create(model="gpt-4o", messages=[])
     client.chat.completions.create(model="gpt-4o", messages=[])
     assert len(client.aep.get_spans()) == 2
     assert len(client.aep.get_cost_tree()) == 2
+
+
+def test_openai_call_count() -> None:
+    client = _make_openai_client()
+    wrap(client, detectors=_FAST_DETECTORS)
+    assert client.aep.call_count == 0
+    client.chat.completions.create(model="gpt-4o", messages=[])
+    assert client.aep.call_count == 1
+    client.chat.completions.create(model="gpt-4o", messages=[])
+    assert client.aep.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +139,7 @@ def test_openai_multiple_calls_accumulate() -> None:
 
 def test_anthropic_cost_recorded() -> None:
     client = _make_anthropic_client()
-    wrap(client)
+    wrap(client, detectors=_FAST_DETECTORS)
     client.messages.create(
         model="claude-sonnet-4-5",
         messages=[{"role": "user", "content": "Hi"}],
@@ -130,43 +150,56 @@ def test_anthropic_cost_recorded() -> None:
 
 def test_anthropic_spans_recorded() -> None:
     client = _make_anthropic_client()
-    wrap(client)
+    wrap(client, detectors=_FAST_DETECTORS)
     client.messages.create(model="claude-sonnet-4-5", messages=[], max_tokens=100)
     spans = client.aep.get_spans()
     assert len(spans) == 1
 
 
 # ---------------------------------------------------------------------------
-# T&S signal detection
+# T&S signal detection (using PII detector with regex fallback)
 # ---------------------------------------------------------------------------
 
 
 def test_pii_detection_ssn() -> None:
+    from aceteam_aep.safety.pii import PiiDetector
+
     client = _make_openai_client(
         _make_openai_response(content="Your SSN is 123-45-6789.")
     )
-    wrap(client)
+    wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
     client.chat.completions.create(model="gpt-4o", messages=[])
     signals = client.aep.safety_signals
-    assert any(s.signal_type == "pii_in_output" for s in signals)
+    assert any(s.signal_type == "pii" for s in signals)
     assert any(s.severity == "high" for s in signals)
 
 
 def test_pii_detection_email() -> None:
+    from aceteam_aep.safety.pii import PiiDetector
+
     client = _make_openai_client(
         _make_openai_response(content="Contact admin@example.com for help.")
     )
-    wrap(client)
+    wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
     client.chat.completions.create(model="gpt-4o", messages=[])
-    assert any(s.signal_type == "pii_in_output" for s in client.aep.safety_signals)
+    assert any(s.signal_type == "pii" for s in client.aep.safety_signals)
 
 
 def test_no_false_positive_on_clean_output() -> None:
-    client = _make_openai_client(_make_openai_response(content="The capital of France is Paris."))
-    wrap(client)
+    from aceteam_aep.safety.pii import PiiDetector
+
+    client = _make_openai_client(
+        _make_openai_response(content="The capital of France is Paris.")
+    )
+    wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
     client.chat.completions.create(model="gpt-4o", messages=[])
     signals = client.aep.safety_signals
-    assert not any(s.signal_type == "pii_in_output" for s in signals)
+    assert not any(s.signal_type == "pii" for s in signals)
+
+
+# ---------------------------------------------------------------------------
+# Cost anomaly detection
+# ---------------------------------------------------------------------------
 
 
 def test_cost_anomaly_detection() -> None:
@@ -174,16 +207,13 @@ def test_cost_anomaly_detection() -> None:
     cheap = _make_openai_response(input_tokens=5, output_tokens=5)
     expensive = _make_openai_response(input_tokens=5000, output_tokens=5000)
 
-    # Save the original mock before wrap() replaces .create
     client = _make_openai_client(cheap)
     original_mock = client.chat.completions.create
-    wrap(client)
+    wrap(client, detectors=[CostAnomalyDetector()])
 
-    # Establish baseline (3 cheap calls)
     for _ in range(3):
         client.chat.completions.create(model="gpt-4o", messages=[])
 
-    # Switch the underlying mock to return the expensive response
     original_mock.return_value = expensive
     client.chat.completions.create(model="gpt-4o", messages=[])
 
@@ -191,12 +221,78 @@ def test_cost_anomaly_detection() -> None:
 
 
 def test_no_cost_anomaly_with_fewer_than_3_calls() -> None:
-    """Cost anomaly detection requires at least 3 prior calls to establish baseline."""
     expensive = _make_openai_response(input_tokens=10000, output_tokens=10000)
     client = _make_openai_client(expensive)
-    wrap(client)
+    wrap(client, detectors=[CostAnomalyDetector()])
     client.chat.completions.create(model="gpt-4o", messages=[])
-    assert not any(s.signal_type == "cost_anomaly" for s in client.aep.safety_signals)
+    assert not any(
+        s.signal_type == "cost_anomaly" for s in client.aep.safety_signals
+    )
+
+
+# ---------------------------------------------------------------------------
+# Enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_enforcement_defaults_to_pass() -> None:
+    client = _make_openai_client()
+    wrap(client, detectors=_FAST_DETECTORS)
+    client.chat.completions.create(model="gpt-4o", messages=[])
+    assert client.aep.enforcement.action == "pass"
+
+
+def test_enforcement_blocks_on_pii() -> None:
+    from aceteam_aep.safety.pii import PiiDetector
+
+    client = _make_openai_client(
+        _make_openai_response(content="SSN: 123-45-6789")
+    )
+    wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
+    client.chat.completions.create(model="gpt-4o", messages=[])
+    assert client.aep.enforcement.action == "block"
+
+
+def test_custom_policy() -> None:
+    from aceteam_aep.safety.pii import PiiDetector
+
+    # Allow PII — custom policy that doesn't block on anything
+    policy = EnforcementPolicy(block_on=frozenset(), flag_on=frozenset())
+    client = _make_openai_client(
+        _make_openai_response(content="SSN: 123-45-6789")
+    )
+    wrap(
+        client,
+        detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")],
+        policy=policy,
+    )
+    client.chat.completions.create(model="gpt-4o", messages=[])
+    assert client.aep.enforcement.action == "pass"
+    # But signals are still recorded
+    assert len(client.aep.safety_signals) > 0
+
+
+def test_custom_detectors() -> None:
+    """Pass a custom detector list to wrap()."""
+
+    class AlwaysFlagDetector:
+        name = "always_flag"
+
+        def check(self, **kwargs: Any) -> list[SafetySignal]:
+            return [
+                SafetySignal(
+                    signal_type="custom",
+                    severity="medium",
+                    call_id=kwargs.get("call_id", ""),
+                    detail="always flags",
+                )
+            ]
+
+    client = _make_openai_client()
+    wrap(client, detectors=[AlwaysFlagDetector()])
+    client.chat.completions.create(model="gpt-4o", messages=[])
+    assert any(s.signal_type == "custom" for s in client.aep.safety_signals)
+    assert client.aep.enforcement.action == "flag"
 
 
 # ---------------------------------------------------------------------------
@@ -207,11 +303,11 @@ def test_no_cost_anomaly_with_fewer_than_3_calls() -> None:
 def test_instrumentation_error_does_not_break_call() -> None:
     """If usage extraction fails, the original response is still returned."""
     bad_resp = MagicMock()
-    bad_resp.usage = None  # will cause AttributeError in extraction
+    bad_resp.usage = None
     bad_resp.model = "gpt-4o"
     bad_resp.choices = []
 
     client = _make_openai_client(bad_resp)
-    wrap(client)
+    wrap(client, detectors=_FAST_DETECTORS)
     result = client.chat.completions.create(model="gpt-4o", messages=[])
-    assert result is bad_resp  # original returned even on AEP error
+    assert result is bad_resp
