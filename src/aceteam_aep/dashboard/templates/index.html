@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AEP Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; padding: 24px; }
+  h1 { font-size: 20px; color: #58a6ff; margin-bottom: 24px; }
+  h1 span { color: #8b949e; font-weight: normal; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+  .card-label { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .card-value { font-size: 32px; font-weight: bold; }
+  .cost { color: #58a6ff; }
+  .calls { color: #c9d1d9; }
+  .badge { display: inline-block; padding: 4px 16px; border-radius: 4px; font-weight: bold; font-size: 14px; text-transform: uppercase; }
+  .badge-pass { background: #238636; color: #fff; }
+  .badge-flag { background: #9e6a03; color: #fff; }
+  .badge-block { background: #da3633; color: #fff; }
+  .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .section h2 { font-size: 14px; color: #8b949e; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .signal { padding: 8px 12px; border-radius: 4px; margin-bottom: 8px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .signal-high { background: rgba(218, 54, 51, 0.15); border-left: 3px solid #da3633; }
+  .signal-medium { background: rgba(158, 106, 3, 0.15); border-left: 3px solid #9e6a03; }
+  .signal-low { background: rgba(88, 166, 255, 0.15); border-left: 3px solid #58a6ff; }
+  .sev { font-weight: bold; font-size: 11px; text-transform: uppercase; min-width: 56px; }
+  .sev-high { color: #da3633; }
+  .sev-medium { color: #d29922; }
+  .sev-low { color: #58a6ff; }
+  .span-item { padding: 6px 12px; border-radius: 4px; margin-bottom: 4px; font-size: 13px; background: #0d1117; display: flex; justify-content: space-between; }
+  .span-model { color: #58a6ff; }
+  .span-dur { color: #8b949e; }
+  .empty { color: #484f58; font-style: italic; font-size: 13px; }
+  .pulse { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .footer { margin-top: 24px; text-align: center; color: #484f58; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>AEP Dashboard <span class="pulse">&#x25cf; live</span></h1>
+
+<div class="grid">
+  <div class="card">
+    <div class="card-label">Total Cost</div>
+    <div class="card-value cost" id="cost">$0.000000</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Calls</div>
+    <div class="card-value calls" id="calls">0</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Safety Status</div>
+    <div class="card-value" id="status"></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Safety Signals</h2>
+  <div id="signals"></div>
+</div>
+
+<div class="section">
+  <h2>Call Timeline</h2>
+  <div id="spans"></div>
+</div>
+
+<div class="footer">AEP Trust Engine &mdash; aceteam.ai</div>
+
+<script>
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.textContent;
+}
+
+function setBadge(el, action) {
+  el.textContent = '';
+  var span = document.createElement('span');
+  var validActions = ['pass', 'flag', 'block'];
+  var cls = validActions.indexOf(action) >= 0 ? action : 'pass';
+  span.className = 'badge badge-' + cls;
+  span.textContent = action.toUpperCase();
+  el.appendChild(span);
+}
+
+function renderSignals(container, signals) {
+  container.textContent = '';
+  if (signals.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No signals detected';
+    container.appendChild(empty);
+    return;
+  }
+  signals.forEach(function(s) {
+    var row = document.createElement('div');
+    var validSev = ['high', 'medium', 'low'];
+    var sevCls = validSev.indexOf(s.severity) >= 0 ? s.severity : 'low';
+    row.className = 'signal signal-' + sevCls;
+
+    var sev = document.createElement('span');
+    sev.className = 'sev sev-' + sevCls;
+    sev.textContent = s.severity.toUpperCase();
+    row.appendChild(sev);
+
+    var detail = document.createElement('span');
+    detail.textContent = esc(s.type) + ': ' + esc(s.detail);
+    row.appendChild(detail);
+
+    container.appendChild(row);
+  });
+}
+
+function renderSpans(container, spans) {
+  container.textContent = '';
+  if (spans.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No calls recorded';
+    container.appendChild(empty);
+    return;
+  }
+  spans.forEach(function(s) {
+    var row = document.createElement('div');
+    row.className = 'span-item';
+
+    var model = document.createElement('span');
+    model.className = 'span-model';
+    model.textContent = esc(s.executor);
+    row.appendChild(model);
+
+    var dur = document.createElement('span');
+    dur.className = 'span-dur';
+    dur.textContent = s.duration_ms ? Math.round(s.duration_ms) + 'ms' : '...';
+    row.appendChild(dur);
+
+    container.appendChild(row);
+  });
+}
+
+async function refresh() {
+  try {
+    var res = await fetch('/api/state');
+    var data = await res.json();
+    document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
+    document.getElementById('calls').textContent = String(data.calls);
+    setBadge(document.getElementById('status'), data.action);
+    renderSignals(document.getElementById('signals'), data.signals);
+    renderSpans(document.getElementById('spans'), data.spans);
+  } catch (e) {}
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

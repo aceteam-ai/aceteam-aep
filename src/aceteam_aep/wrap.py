@@ -117,6 +117,12 @@ class AepSession:
             )
         )
 
+    def serve_dashboard(self, port: int = 8899) -> None:
+        """Start a local web dashboard (blocking). Opens http://localhost:{port}."""
+        from .dashboard import serve
+
+        serve(self, port=port)
+
     def _record_call(
         self,
         model: str,
