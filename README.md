@@ -32,6 +32,64 @@ The proxy intercepts **both directions**:
 
 Works with OpenClaw, LangChain, CrewAI, curl, or any tool that calls the OpenAI API.
 
+## What the Proxy Sees
+
+The proxy is a reverse proxy (man-in-the-middle by design). It reads the full request AND full response. It can block in either direction.
+
+```
+Your Agent
+    │
+    ├─── REQUEST ──────────────────────────────┐
+    │    messages: [user prompt, tool results]  │
+    │                                           ▼
+    │                                    ┌─────────────┐
+    │                                    │  AEP Proxy   │
+    │                                    │              │
+    │                                    │  ✓ Input     │──── if dangerous ──→ BLOCK (never reaches API)
+    │                                    │    text      │
+    │                                    │              │──── if safe ──→ forward to OpenAI
+    │                                    │              │
+    │                                    │  ✓ Output    │──── if PII/toxic ──→ BLOCK (agent never sees it)
+    │                                    │    text      │
+    │                                    │              │──── if safe ──→ return to agent
+    │                                    │  ✓ Cost      │
+    │                                    │  ✓ Tool calls│
+    │                                    └─────────────┘
+    │                                           │
+    ◄─── RESPONSE ─────────────────────────────┘
+         assistant message, token usage
+```
+
+| Data | Proxy Sees It? | Details |
+|------|:--------------:|---------|
+| User messages (input text) | **Yes** | Full message array from request body |
+| LLM response (output text) | **Yes** | Full response including all choices |
+| Tool call requests | **Yes** | What functions the LLM asks to call |
+| Tool call results | **Yes** | Included in next request's messages |
+| Token usage + cost | **Yes** | From response usage field |
+| **Agent actions between calls** | **No** | File writes, code execution, browser actions happen inside the agent, not via the LLM API |
+| **Application context** | **No** | Who is calling, data classification — unless sent via `X-AEP-*` headers |
+
+**The proxy sees every word going to and from the LLM.** It cannot see what the agent does *between* LLM calls. For that, use the SDK (Layer 2).
+
+## Two Layers: Proxy + SDK
+
+Think **WireGuard + Tailscale**. WireGuard is a minimal wire protocol. Tailscale adds identity and management on top. Same here:
+
+**Layer 1 — AEP Proxy (free, zero code changes)**
+- Sees all LLM traffic (input, output, tool calls, cost)
+- Runs safety detectors, enforces PASS/FLAG/BLOCK
+- Dashboard at `/aep/`
+- Works with any language, any framework
+
+**Layer 2 — AEP SDK (application-level context)**
+- Adds identity: `X-AEP-Entity: org:acme`
+- Adds governance: `X-AEP-Classification: confidential`
+- Adds provenance: citation chains, source tracking
+- Via HTTP headers through the proxy, or via Python `wrap()`
+
+Layer 1 gets developers in the door. Layer 2 is what enterprises need for compliance.
+
 ## Python SDK — Wrap Your Existing Client
 
 ```python
