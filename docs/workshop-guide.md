@@ -1,6 +1,6 @@
-# AEP Trust Engine — Workshop Guide
+# AEP™ Trust Engine — Workshop Guide
 
-> Add safety, cost tracking, and accountability to any AI agent in 5 minutes.
+> Add safety, cost tracking, and accountability to any AI agent in 5 minutes with the Agentic Execution Protocol™.
 
 This guide works for anyone — workshop attendees, solo developers, or enterprise teams evaluating agent safety infrastructure.
 

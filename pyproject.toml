@@ -1,7 +1,7 @@
 [project]
 name = "aceteam-aep"
 version = "0.4.0"
-description = "AEP-native execution layer for AI agents - spans, costs, budget enforcement"
+description = "Agentic Execution Protocol™ (AEP™) - trust & safety infrastructure for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"

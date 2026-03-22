@@ -1,6 +1,6 @@
 # aceteam-aep
 
-Trust & safety infrastructure for AI agents. Add cost tracking, safety detection, and enforcement to any LLM-powered tool — **zero code changes required.**
+AceTeam™ trust & safety infrastructure for AI agents. The Agentic Execution Protocol™ (AEP™) adds cost tracking, safety detection, and enforcement to any LLM-powered tool — **zero code changes required.**
 
 ## Installation
 
@@ -238,3 +238,7 @@ Covers: proxy setup, routing agents (Python/OpenClaw/curl), triggering safety si
 - **xAI** (Grok)
 - **Ollama** (local models)
 - **OpenAI-compatible** (SambaNova, TheAgentic, DeepSeek)
+
+## Trademarks
+
+"Agentic Execution Protocol," "AEP," and "AceTeam" are trademarks of AceTeam. The software is licensed under Apache 2.0. The trademark is not included in the license grant — you may not use these names to endorse or promote derivative works without written permission.

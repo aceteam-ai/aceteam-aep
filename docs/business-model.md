@@ -1,8 +1,8 @@
-# AEP Business Model: Free Proxy → Paid Safety
+# AEP™ Business Model: Free Proxy → Paid Safety
 
 ## The Two-Layer Model
 
-AEP ships as one package with two tiers of integration. The proxy (Layer 1) is the distribution wedge. The SDK + active safety (Layer 2) is the revenue engine.
+The Agentic Execution Protocol™ (AEP™) ships as one package with two tiers of integration. The proxy (Layer 1) is the distribution wedge. The SDK + active safety (Layer 2) is the revenue engine.
 
 ```
 ┌─────────────────────────────────────────────────────┐
