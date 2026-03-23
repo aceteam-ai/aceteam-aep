@@ -33,12 +33,14 @@ class CostAnomalyDetector:
         prior = self._history[:-1]
         avg = sum(prior, Decimal("0")) / len(prior)
         if avg > 0 and call_cost > avg * self._multiplier:
+            cost_ratio = float(call_cost / avg) if avg > 0 else 0.0
             signals.append(
                 SafetySignal(
                     signal_type="cost_anomaly",
                     severity="medium",
                     call_id=call_id,
                     detail=f"Cost ${call_cost:.6f} is >{self._multiplier}x session avg ${avg:.6f}",
+                    score=cost_ratio,
                 )
             )
         return signals

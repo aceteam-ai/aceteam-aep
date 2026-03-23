@@ -38,8 +38,18 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _build_detectors(args: argparse.Namespace) -> list[object] | None:
-    """Build detector list from CLI args."""
+def _resolve_policy(args: argparse.Namespace) -> object | None:
+    """Resolve enforcement policy from --policy flag or AEP_POLICY env var."""
+    from ..enforcement import EnforcementPolicy
+
+    policy_path = getattr(args, "policy", None) or os.environ.get("AEP_POLICY")
+    if policy_path:
+        return EnforcementPolicy.from_yaml(policy_path)
+    return None
+
+
+def _build_detectors(args: argparse.Namespace, policy: object | None = None) -> list[object] | None:
+    """Build detector list from CLI args and policy."""
     from ..safety.cost_anomaly import CostAnomalyDetector
 
     if args.no_safety:
@@ -54,6 +64,12 @@ def _build_detectors(args: argparse.Namespace) -> list[object] | None:
             detectors.append(_load_detector(path))
         return detectors
 
+    # If policy has detector overrides, build from policy
+    if policy is not None and hasattr(policy, "overrides") and policy.overrides:  # type: ignore[union-attr]
+        from ..enforcement import build_detectors_from_policy
+
+        return build_detectors_from_policy(policy)  # type: ignore[arg-type]
+
     return None
 
 
@@ -63,11 +79,13 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     from .app import create_proxy_app
 
-    detectors = _build_detectors(args)
+    policy = _resolve_policy(args)
+    detectors = _build_detectors(args, policy)
 
     app = create_proxy_app(
         target_base_url=args.target,
         detectors=detectors,
+        policy=policy,
         dashboard=not args.no_dashboard,
     )
 
@@ -104,11 +122,13 @@ def _run_wrap(args: argparse.Namespace) -> None:
 
     port = args.port or _find_free_port()
 
-    detectors = _build_detectors(args)
+    policy = _resolve_policy(args)
+    detectors = _build_detectors(args, policy)
 
     app = create_proxy_app(
         target_base_url=args.target,
         detectors=detectors,
+        policy=policy,
         dashboard=not args.no_dashboard,
     )
 
@@ -249,6 +269,12 @@ def main() -> None:
         metavar="MODULE:CLASS",
         help="Add a custom detector (module:Class). Repeatable.",
     )
+    proxy_parser.add_argument(
+        "--policy",
+        type=str,
+        default=None,
+        help="Path to AEP policy YAML file (or set AEP_POLICY env var)",
+    )
 
     # --- wrap subcommand ---
     wrap_parser = sub.add_parser(
@@ -275,6 +301,12 @@ def main() -> None:
         action="append",
         metavar="MODULE:CLASS",
         help="Add a custom detector (module:Class). Repeatable.",
+    )
+    wrap_parser.add_argument(
+        "--policy",
+        type=str,
+        default=None,
+        help="Path to AEP policy YAML file (or set AEP_POLICY env var)",
     )
     wrap_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command to run (after --)")
 

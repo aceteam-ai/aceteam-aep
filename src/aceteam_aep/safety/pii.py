@@ -82,12 +82,14 @@ class PiiDetector:
             ent_type = entity.get("entity_group", "").upper()
             if ent_type in _PII_ENTITIES and ent_type not in seen_types:
                 seen_types.add(ent_type)
+                entity_score = entity.get("score", 1.0)
                 signals.append(
                     SafetySignal(
                         signal_type="pii",
                         severity="high",
                         call_id=call_id,
-                        detail=f"PII detected: {ent_type} (score={entity.get('score', 0):.2f})",
+                        detail=f"PII detected: {ent_type} (score={entity_score:.2f})",
+                        score=float(entity_score),
                     )
                 )
         return signals
@@ -103,6 +105,7 @@ class PiiDetector:
                         severity="high",
                         call_id=call_id,
                         detail=f"PII pattern detected: {pii_type} (regex fallback)",
+                        score=1.0,
                     )
                 )
         return signals

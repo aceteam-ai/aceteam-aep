@@ -73,13 +73,13 @@ class ProxyState:
         self,
         target_base_url: str = "https://api.openai.com",
         detectors: list[Any] | None = None,
-        policy: EnforcementPolicy | None = None,
+        policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
         self.cost_tracker = CostTracker()
         self.span_tracker = SpanTracker()
         self.registry = DetectorRegistry()
-        self.policy = policy or EnforcementPolicy()
+        self.policy = EnforcementPolicy.from_config(policy)
         self.signals: list[SafetySignal] = []
         self.call_count = 0
         self.decisions: list[EnforcementDecision] = []
@@ -157,7 +157,7 @@ def _default_proxy_detectors() -> list[Any]:
 def create_proxy_app(
     target_base_url: str = "https://api.openai.com",
     detectors: list[Any] | None = None,
-    policy: EnforcementPolicy | None = None,
+    policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     dashboard: bool = True,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""

@@ -74,6 +74,7 @@ class AgentThreatDetector:
                             severity="high",
                             call_id=call_id,
                             detail=f"{desc} detected in {source}",
+                            score=1.0,
                         )
                     )
         return signals

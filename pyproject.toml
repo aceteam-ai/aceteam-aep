@@ -30,7 +30,8 @@ ollama = ["ollama>=0.4.0,<1.0.0"]
 safety = ["transformers>=4.40", "torch>=2.0"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
 proxy = ["aceteam-aep[dashboard]"]
-all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy]"]
+yaml = ["pyyaml>=6.0"]
+all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml]"]
 dev = [
     "aceteam-aep[all]",
     "httpx>=0.28",

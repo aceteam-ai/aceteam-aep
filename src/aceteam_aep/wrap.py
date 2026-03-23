@@ -36,7 +36,12 @@ from decimal import Decimal
 from typing import Any
 
 from .costs import CostTracker
-from .enforcement import EnforcementDecision, EnforcementPolicy, evaluate
+from .enforcement import (
+    EnforcementDecision,
+    EnforcementPolicy,
+    build_detectors_from_policy,
+    evaluate,
+)
 from .safety.base import DetectorRegistry, SafetySignal
 from .safety.cost_anomaly import CostAnomalyDetector
 from .spans import Span, SpanTracker
@@ -454,7 +459,7 @@ def wrap(
     *,
     entity: str = "default",
     detectors: list[Any] | None = None,
-    policy: EnforcementPolicy | None = None,
+    policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     verbose: bool = False,
 ) -> Any:
     """Wrap any OpenAI or Anthropic client with AEP accountability + T&S.
@@ -464,9 +469,10 @@ def wrap(
                 OpenAI-compatible client instance.
         entity: Logical entity name for cost attribution (org ID, user ID, etc.).
         detectors: Custom list of SafetyDetector instances. If None, uses defaults
-                   (PII, content safety, cost anomaly).
-        policy: Custom EnforcementPolicy. If None, uses default (block on high,
-                flag on medium).
+                   (PII, content safety, cost anomaly). When ``policy`` has detector
+                   configs and ``detectors`` is None, detectors are built from policy.
+        policy: Enforcement policy. Accepts ``EnforcementPolicy``, a dict, a YAML
+                file path, or None for defaults.
         verbose: Print input/output snippets and detector results for each call.
                  Also enabled by setting the ``AEP_LOG=1`` environment variable.
 
@@ -479,22 +485,30 @@ def wrap(
         import openai
         from aceteam_aep import wrap
 
-        client = wrap(openai.OpenAI(), entity="org:acme")
-        client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "Hello"}],
-        )
-        print(f"Cost: ${client.aep.cost_usd}")
-        print(f"Safety: {client.aep.enforcement.action}")
+        client = wrap(openai.OpenAI(), policy={
+            "default_action": "flag",
+            "detectors": {
+                "pii": {"action": "block", "threshold": 0.8},
+                "cost_anomaly": {"action": "pass", "multiplier": 10},
+            },
+        })
     """
+    resolved_policy = EnforcementPolicy.from_config(policy)
+
     session = AepSession(
         entity=entity,
-        _policy=policy or EnforcementPolicy(),
+        _policy=resolved_policy,
         _verbose=verbose or os.environ.get("AEP_LOG", "") in ("1", "true", "yes"),
     )
 
-    # Register detectors
-    for det in detectors or _default_detectors():
+    # Register detectors: explicit > policy-derived > defaults
+    if detectors is not None:
+        resolved_detectors = detectors
+    elif resolved_policy.overrides:
+        resolved_detectors = build_detectors_from_policy(resolved_policy)
+    else:
+        resolved_detectors = _default_detectors()
+    for det in resolved_detectors:
         session._registry.add(det)
 
     client_type = type(client).__name__
