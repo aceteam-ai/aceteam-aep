@@ -24,6 +24,7 @@ from ..safety.base import DetectorRegistry, SafetySignal
 from ..safety.cost_anomaly import CostAnomalyDetector
 from ..spans import SpanTracker
 from ..types import Usage
+from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ class ProxyState:
         self.call_count = 0
         self.decisions: list[EnforcementDecision] = []
         self._call_costs: list[Decimal] = []
+        self.governance_contexts: list[dict[str, Any]] = []
 
         # Register detectors
         for det in detectors or _default_proxy_detectors():
@@ -127,6 +129,7 @@ class ProxyState:
                 }
                 for s in self.span_tracker.get_spans()
             ],
+            "governance": self.governance_contexts[-1] if self.governance_contexts else None,
         }
 
 
@@ -176,6 +179,20 @@ def create_proxy_app(
         except json.JSONDecodeError:
             body = {}
 
+        # --- PARSE AEP GOVERNANCE HEADERS ---
+        aep_ctx = parse_aep_headers(request.headers)
+        if aep_ctx.entity != "default" or aep_ctx.classification != "public" or aep_ctx.consent:
+            state.governance_contexts.append(
+                {
+                    "entity": aep_ctx.entity,
+                    "classification": aep_ctx.classification,
+                    "consent": aep_ctx.consent,
+                    "budget": str(aep_ctx.budget) if aep_ctx.budget is not None else None,
+                    "sources": aep_ctx.sources,
+                    "trace_id": aep_ctx.trace_id,
+                }
+            )
+
         # --- INPUT SAFETY CHECK ---
         input_text = ""
         if "messages" in body:
@@ -208,7 +225,7 @@ def create_proxy_app(
         # --- FORWARD TO TARGET API ---
         target_url = f"{state.target_base_url}{path}"
 
-        # Forward headers (especially Authorization)
+        # Forward headers (especially Authorization), stripping AEP governance headers
         forward_headers: dict[str, str] = {}
         if request.headers.get("authorization"):
             forward_headers["Authorization"] = request.headers["authorization"]
@@ -218,6 +235,8 @@ def create_proxy_app(
         for key in ("x-api-key", "anthropic-version"):
             if request.headers.get(key):
                 forward_headers[key] = request.headers[key]
+        # Strip X-AEP-* headers so they don't leak to the LLM provider
+        forward_headers = strip_aep_headers(forward_headers)
 
         # --- STREAMING BRANCH ---
         if body.get("stream"):
@@ -338,13 +357,14 @@ def create_proxy_app(
             )
 
         # --- PASS THROUGH (with AEP metadata header) ---
-        resp_headers = {
-            "X-AEP-Cost": str(cost_node.compute_cost),
-            "X-AEP-Enforcement": decision.action,
-            "X-AEP-Call-ID": call_id,
-        }
-        if decision.action == "flag":
-            resp_headers["X-AEP-Flag-Reason"] = decision.reason
+        resp_headers = build_response_headers(
+            cost=cost_node.compute_cost,
+            enforcement=decision.action,
+            call_id=call_id,
+            classification=aep_ctx.classification,
+            flag_reason=decision.reason if decision.action == "flag" else "",
+            trace_id=aep_ctx.trace_id,
+        )
 
         return Response(
             content=upstream_resp.content,
