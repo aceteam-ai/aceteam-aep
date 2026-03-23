@@ -1,0 +1,28 @@
+# Example: AEP sidecar proxy with any agent container
+#
+# Usage:
+#   docker compose -f docker-compose.sidecar.yml up
+#
+# The agent container sends LLM requests to http://aep-proxy:8899/v1
+# instead of https://api.openai.com/v1. The proxy adds cost tracking,
+# safety detection, and audit trails — zero code changes in the agent.
+
+services:
+  aep-proxy:
+    build: .
+    ports:
+      - "8899:8899"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+  # Example: any agent container
+  # Uncomment and replace with your agent image.
+  #
+  # agent:
+  #   image: your-agent:latest
+  #   environment:
+  #     OPENAI_BASE_URL: http://aep-proxy:8899/v1
+  #     OPENAI_API_KEY: ${OPENAI_API_KEY}
+  #   depends_on:
+  #     - aep-proxy
