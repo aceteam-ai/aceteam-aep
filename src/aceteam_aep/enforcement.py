@@ -77,7 +77,13 @@ class EnforcementPolicy:
     @classmethod
     def from_yaml(cls, path: str | Path) -> EnforcementPolicy:
         """Load policy from a YAML file."""
-        import yaml  # type: ignore[import-untyped]
+        try:
+            import yaml  # type: ignore[import-untyped]
+        except ImportError:
+            raise ImportError(
+                "pyyaml is required for YAML policy files. "
+                "Install it with: pip install aceteam-aep[yaml]"
+            ) from None
 
         data = yaml.safe_load(Path(path).read_text())
         if not isinstance(data, dict):
