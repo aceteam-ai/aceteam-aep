@@ -118,32 +118,38 @@ function renderSignals(container, signals) {
   });
 }
 
-function renderGovernance(container, gov) {
+function renderGovernance(container, govList) {
   var section = document.getElementById('governance-section');
-  if (!gov) { section.style.display = 'none'; return; }
+  if (!govList || govList.length === 0) { section.style.display = 'none'; return; }
   section.style.display = '';
   container.textContent = '';
-  var fields = [
-    ['Entity', gov.entity],
-    ['Classification', gov.classification],
-    ['Consent', gov.consent ? Object.keys(gov.consent).map(function(k){ return k + '=' + gov.consent[k]; }).join(', ') : null],
-    ['Budget', gov.budget],
-    ['Sources', gov.sources && gov.sources.length ? gov.sources.join(', ') : null],
-    ['Trace ID', gov.trace_id]
-  ];
-  fields.forEach(function(f) {
-    if (!f[1]) return;
-    var row = document.createElement('div');
-    row.className = 'span-item';
-    var label = document.createElement('span');
-    label.className = 'span-model';
-    label.textContent = f[0];
-    row.appendChild(label);
-    var val = document.createElement('span');
-    val.className = 'span-dur';
-    val.textContent = String(f[1]);
-    row.appendChild(val);
-    container.appendChild(row);
+  govList.forEach(function(gov) {
+    var callLabel = document.createElement('div');
+    callLabel.style.cssText = 'font-size:11px;color:#58a6ff;margin-top:8px;margin-bottom:4px;';
+    callLabel.textContent = 'Call ' + (gov.call_id || '?');
+    container.appendChild(callLabel);
+    var fields = [
+      ['Entity', gov.entity],
+      ['Classification', gov.classification],
+      ['Consent', gov.consent ? Object.keys(gov.consent).map(function(k){ return k + '=' + gov.consent[k]; }).join(', ') : null],
+      ['Budget', gov.budget],
+      ['Sources', gov.sources && gov.sources.length ? gov.sources.join(', ') : null],
+      ['Trace ID', gov.trace_id]
+    ];
+    fields.forEach(function(f) {
+      if (!f[1]) return;
+      var row = document.createElement('div');
+      row.className = 'span-item';
+      var label = document.createElement('span');
+      label.className = 'span-model';
+      label.textContent = f[0];
+      row.appendChild(label);
+      var val = document.createElement('span');
+      val.className = 'span-dur';
+      val.textContent = String(f[1]);
+      row.appendChild(val);
+      container.appendChild(row);
+    });
   });
 }
 
