@@ -61,6 +61,11 @@
   <div id="signals"></div>
 </div>
 
+<div class="section" id="governance-section" style="display:none;">
+  <h2>Governance Context</h2>
+  <div id="governance"></div>
+</div>
+
 <div class="section">
   <h2>Call Timeline</h2>
   <div id="spans"></div>
@@ -113,6 +118,35 @@ function renderSignals(container, signals) {
   });
 }
 
+function renderGovernance(container, gov) {
+  var section = document.getElementById('governance-section');
+  if (!gov) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  container.textContent = '';
+  var fields = [
+    ['Entity', gov.entity],
+    ['Classification', gov.classification],
+    ['Consent', gov.consent ? Object.keys(gov.consent).map(function(k){ return k + '=' + gov.consent[k]; }).join(', ') : null],
+    ['Budget', gov.budget],
+    ['Sources', gov.sources && gov.sources.length ? gov.sources.join(', ') : null],
+    ['Trace ID', gov.trace_id]
+  ];
+  fields.forEach(function(f) {
+    if (!f[1]) return;
+    var row = document.createElement('div');
+    row.className = 'span-item';
+    var label = document.createElement('span');
+    label.className = 'span-model';
+    label.textContent = f[0];
+    row.appendChild(label);
+    var val = document.createElement('span');
+    val.className = 'span-dur';
+    val.textContent = String(f[1]);
+    row.appendChild(val);
+    container.appendChild(row);
+  });
+}
+
 function renderSpans(container, spans) {
   container.textContent = '';
   if (spans.length === 0) {
@@ -142,12 +176,13 @@ function renderSpans(container, spans) {
 
 async function refresh() {
   try {
-    var res = await fetch('/api/state');
+    var res = await fetch('api/state');
     var data = await res.json();
     document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
     document.getElementById('calls').textContent = String(data.calls);
     setBadge(document.getElementById('status'), data.action);
     renderSignals(document.getElementById('signals'), data.signals);
+    renderGovernance(document.getElementById('governance'), data.governance);
     renderSpans(document.getElementById('spans'), data.spans);
   } catch (e) {}
 }

@@ -89,7 +89,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
         f"\n"
     )
 
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
 def _run_wrap(args: argparse.Namespace) -> None:
@@ -113,7 +113,8 @@ def _run_wrap(args: argparse.Namespace) -> None:
     )
 
     # Start proxy in a background thread
-    server_config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    host = args.host
+    server_config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(server_config)
     proxy_thread = threading.Thread(target=server.run, daemon=True)
     proxy_thread.start()
@@ -227,6 +228,9 @@ def main() -> None:
         "--port", type=int, default=8899, help="Port to listen on (default: 8899)"
     )
     proxy_parser.add_argument(
+        "--host", type=str, default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+    )
+    proxy_parser.add_argument(
         "--target",
         type=str,
         default="https://api.openai.com",
@@ -253,6 +257,9 @@ def main() -> None:
         epilog="Example: aceteam-aep wrap -- python my_agent.py",
     )
     wrap_parser.add_argument("--port", type=int, default=None, help="Proxy port (default: auto)")
+    wrap_parser.add_argument(
+        "--host", type=str, default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+    )
     wrap_parser.add_argument(
         "--target",
         type=str,
