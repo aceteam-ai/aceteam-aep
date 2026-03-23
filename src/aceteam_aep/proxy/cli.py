@@ -9,13 +9,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
-import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
+
+log = logging.getLogger(__name__)
 
 
 def _find_free_port() -> int:
@@ -86,14 +88,6 @@ def _run_wrap(args: argparse.Namespace) -> None:
         dashboard=not args.no_dashboard,
     )
 
-    # Get proxy state for summary later
-    proxy_state = None
-    for route in app.routes:
-        if hasattr(route, "app") and hasattr(route, "path"):
-            pass
-    # Access state through the app's state_getter
-    # The proxy app stores state in a closure — we access it via the /aep/api/state endpoint
-
     # Start proxy in a background thread
     server_config = uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning"
@@ -149,7 +143,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
             state = resp.json()
             _print_wrap_summary(state)
     except Exception:
-        pass  # Proxy may already be shutting down
+        log.debug("Could not fetch summary (proxy may be shutting down)", exc_info=True)
 
     # Shutdown proxy
     server.should_exit = True
