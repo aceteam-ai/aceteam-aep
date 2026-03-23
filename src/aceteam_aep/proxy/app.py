@@ -73,13 +73,13 @@ class ProxyState:
         self,
         target_base_url: str = "https://api.openai.com",
         detectors: list[Any] | None = None,
-        policy: EnforcementPolicy | None = None,
+        policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
         self.cost_tracker = CostTracker()
         self.span_tracker = SpanTracker()
         self.registry = DetectorRegistry()
-        self.policy = policy or EnforcementPolicy()
+        self.policy = EnforcementPolicy.from_config(policy)
         self.signals: list[SafetySignal] = []
         self.call_count = 0
         self.decisions: list[EnforcementDecision] = []
@@ -122,6 +122,7 @@ class ProxyState:
             "spans": [
                 {
                     "id": s.span_id,
+                    "call_id": s.metadata.get("call_id"),
                     "executor": s.executor_id,
                     "status": s.status,
                     "duration_ms": s.duration_ms,
@@ -129,7 +130,7 @@ class ProxyState:
                 }
                 for s in self.span_tracker.get_spans()
             ],
-            "governance": self.governance_contexts[-1] if self.governance_contexts else None,
+            "governance": self.governance_contexts,
         }
 
 
@@ -156,7 +157,7 @@ def _default_proxy_detectors() -> list[Any]:
 def create_proxy_app(
     target_base_url: str = "https://api.openai.com",
     detectors: list[Any] | None = None,
-    policy: EnforcementPolicy | None = None,
+    policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     dashboard: bool = True,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
@@ -181,17 +182,18 @@ def create_proxy_app(
 
         # --- PARSE AEP GOVERNANCE HEADERS ---
         aep_ctx = parse_aep_headers(request.headers)
+        gov_context: dict[str, Any] | None = None
         if aep_ctx.entity != "default" or aep_ctx.classification != "public" or aep_ctx.consent:
-            state.governance_contexts.append(
-                {
-                    "entity": aep_ctx.entity,
-                    "classification": aep_ctx.classification,
-                    "consent": aep_ctx.consent,
-                    "budget": str(aep_ctx.budget) if aep_ctx.budget is not None else None,
-                    "sources": aep_ctx.sources,
-                    "trace_id": aep_ctx.trace_id,
-                }
-            )
+            gov_context = {
+                "call_id": call_id,
+                "entity": aep_ctx.entity,
+                "classification": aep_ctx.classification,
+                "consent": aep_ctx.consent,
+                "budget": str(aep_ctx.budget) if aep_ctx.budget is not None else None,
+                "sources": aep_ctx.sources,
+                "trace_id": aep_ctx.trace_id,
+            }
+            state.governance_contexts.append(gov_context)
 
         # --- INPUT SAFETY CHECK ---
         input_text = ""
@@ -242,6 +244,13 @@ def create_proxy_app(
         if body.get("stream"):
             from .streaming import handle_streaming_request
 
+            # Start span BEFORE the stream begins to measure actual latency
+            stream_span = state.span_tracker.start_span(
+                executor_type="llm",
+                executor_id="pending",
+                metadata={"call_id": call_id, "streaming": True},
+            )
+
             def on_stream_complete(**kwargs: Any) -> None:
                 model = kwargs.get("model", "unknown")
                 inp = kwargs.get("input_tokens", 0)
@@ -249,22 +258,19 @@ def create_proxy_app(
                 signals = kwargs.get("signals", [])
                 decision = kwargs.get("decision")
 
-                span = state.span_tracker.start_span(
-                    executor_type="llm",
-                    executor_id=model,
-                    metadata={"call_id": call_id, "streaming": True},
-                )
+                # Update span with actual model info
+                stream_span.executor_id = model
                 usage = Usage(
                     prompt_tokens=inp,
                     completion_tokens=out,
                     total_tokens=inp + out,
                 )
                 state.cost_tracker.record_llm_cost(
-                    span_id=span.span_id,
+                    span_id=stream_span.span_id,
                     model=model,
                     usage=usage,
                 )
-                state.span_tracker.end_span(span.span_id)
+                state.span_tracker.end_span(stream_span.span_id)
                 state.call_count += 1
                 state.signals.extend(signals)
                 if decision:
@@ -282,6 +288,13 @@ def create_proxy_app(
             )
 
         # --- NON-STREAMING BRANCH ---
+        # Start span BEFORE the upstream call to measure actual latency
+        span = state.span_tracker.start_span(
+            executor_type="llm",
+            executor_id="pending",
+            metadata={"call_id": call_id},
+        )
+
         async with httpx.AsyncClient(timeout=120.0) as client:
             upstream_resp = await client.request(
                 method=request.method,
@@ -292,6 +305,7 @@ def create_proxy_app(
 
         # If upstream errored, pass through
         if upstream_resp.status_code >= 400:
+            state.span_tracker.end_span(span.span_id, status="ERROR")
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -302,6 +316,7 @@ def create_proxy_app(
         try:
             resp_data = upstream_resp.json()
         except json.JSONDecodeError:
+            state.span_tracker.end_span(span.span_id, status="ERROR")
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -311,11 +326,8 @@ def create_proxy_app(
         model, input_tokens, output_tokens = _extract_usage(resp_data)
         output_text = _extract_output_text(resp_data)
 
-        span = state.span_tracker.start_span(
-            executor_type="llm",
-            executor_id=model,
-            metadata={"call_id": call_id},
-        )
+        # Update span with actual model info now that we have the response
+        span.executor_id = model
         usage = Usage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,

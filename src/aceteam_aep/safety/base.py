@@ -20,6 +20,7 @@ class SafetySignal:
     detail: str
     detector: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    score: float | None = None  # numeric confidence (0–1); None = always above threshold
 
 
 @runtime_checkable

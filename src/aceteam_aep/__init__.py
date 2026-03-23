@@ -5,6 +5,7 @@ from .budget import BudgetEnforcer, BudgetExceededError, BudgetState, Reservatio
 from .client import ChatClient
 from .costs import CostNode, CostTracker
 from .embeddings import CohereEmbeddings, EmbeddingClient, OllamaEmbeddings, OpenAIEmbeddings
+from .enforcement import DetectorPolicy, EnforcementDecision, EnforcementPolicy
 from .envelope import Citation, ExecutionEnvelope, ExecutionError
 from .envelope_builder import EnvelopeBuilder, NodeRecord
 from .envelope_helpers import compute_duration, extract_primary_model, sum_cost_tree
@@ -108,6 +109,10 @@ __all__ = [
     # Tools
     "Tool",
     "tool",
+    # Enforcement
+    "DetectorPolicy",
+    "EnforcementDecision",
+    "EnforcementPolicy",
     # Wrapper
     "wrap",
     "AepSession",

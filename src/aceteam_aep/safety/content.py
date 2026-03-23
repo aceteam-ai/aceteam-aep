@@ -71,6 +71,7 @@ class ContentSafetyDetector:
                                 severity="high" if score > 0.9 else "medium",
                                 call_id=call_id,
                                 detail=f"Unsafe content in {source} (score={score:.2f})",
+                                score=float(score),
                             )
                         )
             except Exception:
