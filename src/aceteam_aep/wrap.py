@@ -28,6 +28,8 @@ Supports:
 
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -40,10 +42,14 @@ from .safety.cost_anomaly import CostAnomalyDetector
 from .spans import Span, SpanTracker
 from .types import Usage
 
+log = logging.getLogger(__name__)
+
 
 def _default_detectors() -> list[Any]:
     """Build the default detector list. Model-based detectors only if available."""
-    detectors: list[Any] = [CostAnomalyDetector()]
+    from .safety.agent_threat import AgentThreatDetector
+
+    detectors: list[Any] = [CostAnomalyDetector(), AgentThreatDetector()]
     try:
         from .safety.pii import PiiDetector
 
@@ -57,6 +63,25 @@ def _default_detectors() -> list[Any]:
     except Exception:
         pass
     return detectors
+
+
+class AepPreflightBlock(Exception):
+    """Raised when pre-flight safety checks block a request."""
+
+    def __init__(self, decision: EnforcementDecision, signals: list[SafetySignal]) -> None:
+        self.decision = decision
+        self.signals = signals
+        super().__init__(f"AEP pre-flight blocked: {decision.reason}")
+
+
+def _snippet(text: str, n: int = 5) -> str:
+    """First and last *n* lines, with a separator if truncated."""
+    lines = text.strip().splitlines()
+    if len(lines) <= n * 2:
+        return text.strip()
+    head = "\n".join(lines[:n])
+    tail = "\n".join(lines[-n:])
+    return f"{head}\n  ... ({len(lines) - n * 2} lines omitted) ...\n{tail}"
 
 
 @dataclass
@@ -74,6 +99,7 @@ class AepSession:
         default_factory=lambda: EnforcementDecision(action="pass")
     )
     _call_count: int = 0
+    _verbose: bool = False
 
     @property
     def cost_usd(self) -> Decimal:
@@ -123,6 +149,57 @@ class AepSession:
 
         serve(self, port=port)
 
+    def preflight_check(self, *, input_text: str, call_id: str) -> None:
+        """Run detectors on input text before the API call.
+
+        Raises ``AepPreflightBlock`` if any detector returns a HIGH severity
+        signal that the enforcement policy would block.
+        """
+        if not input_text:
+            return
+
+        signals = self._registry.run_all(
+            input_text=input_text,
+            output_text="",
+            call_id=call_id,
+        )
+        if signals:
+            decision = evaluate(signals, self._policy)
+            if decision.action == "block":
+                self._safety_signals.extend(signals)
+                self._last_enforcement = decision
+                self._call_count += 1
+                raise AepPreflightBlock(decision, signals)
+
+    def _log_verbose(
+        self,
+        *,
+        call_id: str,
+        input_text: str,
+        output_text: str,
+        signals: list[SafetySignal],
+        enforcement: EnforcementDecision,
+    ) -> None:
+        """Print input/output snippets and detector results when verbose."""
+        _DIM = "\033[2m"
+        _CYAN = "\033[36m"
+        _RESET = "\033[0m"
+        print(f"\n{_DIM}{'─' * 60}{_RESET}")
+        print(f"{_CYAN}[AEP] call_id={call_id}{_RESET}")
+        print(f"{_DIM}INPUT  >{_RESET}")
+        for line in _snippet(input_text).splitlines():
+            print(f"  {_DIM}{line}{_RESET}")
+        print(f"{_DIM}OUTPUT >{_RESET}")
+        for line in _snippet(output_text).splitlines():
+            print(f"  {_DIM}{line}{_RESET}")
+        print(f"{_DIM}ENFORCEMENT > {enforcement.action.upper()}{_RESET}")
+        if signals:
+            for s in signals:
+                print(f"  {_DIM}[{s.severity.upper()}] {s.signal_type}: {s.detail}{_RESET}")
+        else:
+            print(f"  {_DIM}(no signals){_RESET}")
+        print(f"{_DIM}{'─' * 60}{_RESET}")
+
     def _record_call(
         self,
         model: str,
@@ -170,6 +247,15 @@ class AepSession:
         # Evaluate enforcement on the new signals
         self._last_enforcement = evaluate(signals, self._policy)
 
+        if self._verbose:
+            self._log_verbose(
+                call_id=call_id,
+                input_text=input_text,
+                output_text=output_text,
+                signals=signals,
+                enforcement=self._last_enforcement,
+            )
+
 
 # ---------------------------------------------------------------------------
 # OpenAI wrapper
@@ -182,6 +268,11 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
 
     def patched_create(*args: Any, **kwargs: Any) -> Any:
         call_id = uuid.uuid4().hex[:8]
+
+        # Pre-flight: check input before sending to LLM
+        input_text = _extract_input_text(kwargs.get("messages", []))
+        session.preflight_check(input_text=input_text, call_id=call_id)
+
         result = original_create(*args, **kwargs)
 
         try:
@@ -219,6 +310,11 @@ def _wrap_openai_async(client: Any, session: AepSession) -> Any:
 
     async def patched_create(*args: Any, **kwargs: Any) -> Any:
         call_id = uuid.uuid4().hex[:8]
+
+        # Pre-flight: check input before sending to LLM
+        input_text = _extract_input_text(kwargs.get("messages", []))
+        session.preflight_check(input_text=input_text, call_id=call_id)
+
         result = await original_create(*args, **kwargs)
 
         try:
@@ -261,6 +357,11 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
 
     def patched_create(*args: Any, **kwargs: Any) -> Any:
         call_id = uuid.uuid4().hex[:8]
+
+        # Pre-flight: check input before sending to LLM
+        input_text = _extract_input_text(kwargs.get("messages", []))
+        session.preflight_check(input_text=input_text, call_id=call_id)
+
         result = original_create(*args, **kwargs)
 
         try:
@@ -297,6 +398,11 @@ def _wrap_anthropic_async(client: Any, session: AepSession) -> Any:
 
     async def patched_create(*args: Any, **kwargs: Any) -> Any:
         call_id = uuid.uuid4().hex[:8]
+
+        # Pre-flight: check input before sending to LLM
+        input_text = _extract_input_text(kwargs.get("messages", []))
+        session.preflight_check(input_text=input_text, call_id=call_id)
+
         result = await original_create(*args, **kwargs)
 
         try:
@@ -349,6 +455,7 @@ def wrap(
     entity: str = "default",
     detectors: list[Any] | None = None,
     policy: EnforcementPolicy | None = None,
+    verbose: bool = False,
 ) -> Any:
     """Wrap any OpenAI or Anthropic client with AEP accountability + T&S.
 
@@ -360,6 +467,8 @@ def wrap(
                    (PII, content safety, cost anomaly).
         policy: Custom EnforcementPolicy. If None, uses default (block on high,
                 flag on medium).
+        verbose: Print input/output snippets and detector results for each call.
+                 Also enabled by setting the ``AEP_LOG=1`` environment variable.
 
     Returns:
         The same client object, mutated in-place with AEP instrumentation.
@@ -381,6 +490,7 @@ def wrap(
     session = AepSession(
         entity=entity,
         _policy=policy or EnforcementPolicy(),
+        _verbose=verbose or os.environ.get("AEP_LOG", "") in ("1", "true", "yes"),
     )
 
     # Register detectors
@@ -420,4 +530,4 @@ def _extract_input_text(messages: list[Any]) -> str:
     return " ".join(parts)
 
 
-__all__ = ["AepSession", "SafetySignal", "wrap"]
+__all__ = ["AepPreflightBlock", "AepSession", "SafetySignal", "wrap"]

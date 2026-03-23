@@ -61,9 +61,7 @@ def _extract_usage(data: dict[str, Any]) -> tuple[str, int, int]:
     model = data.get("model", "unknown")
     usage = data.get("usage", {})
     input_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
-    output_tokens = (
-        usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
-    )
+    output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
     return model, input_tokens, output_tokens
 
 
@@ -134,7 +132,9 @@ class ProxyState:
 
 def _default_proxy_detectors() -> list[Any]:
     """Default detectors for the proxy."""
-    detectors: list[Any] = [CostAnomalyDetector()]
+    from ..safety.agent_threat import AgentThreatDetector
+
+    detectors: list[Any] = [CostAnomalyDetector(), AgentThreatDetector()]
     try:
         from ..safety.pii import PiiDetector
 
@@ -193,17 +193,12 @@ def create_proxy_app(
                 state.signals.extend(input_signals)
                 state.decisions.append(input_decision)
                 state.call_count += 1
-                log.warning(
-                    "BLOCKED request %s: %s", call_id, input_decision.reason
-                )
+                log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
                 return JSONResponse(
                     status_code=400,
                     content={
                         "error": {
-                            "message": (
-                                f"AEP safety: request blocked — "
-                                f"{input_decision.reason}"
-                            ),
+                            "message": (f"AEP safety: request blocked — {input_decision.reason}"),
                             "type": "aep_safety_block",
                             "code": "safety_block",
                         }
@@ -246,7 +241,9 @@ def create_proxy_app(
                     total_tokens=inp + out,
                 )
                 state.cost_tracker.record_llm_cost(
-                    span_id=span.span_id, model=model, usage=usage,
+                    span_id=span.span_id,
+                    model=model,
+                    usage=usage,
                 )
                 state.span_tracker.end_span(span.span_id)
                 state.call_count += 1
@@ -328,17 +325,12 @@ def create_proxy_app(
         state.decisions.append(decision)
 
         if decision.action == "block":
-            log.warning(
-                "BLOCKED response %s: %s", call_id, decision.reason
-            )
+            log.warning("BLOCKED response %s: %s", call_id, decision.reason)
             return JSONResponse(
                 status_code=400,
                 content={
                     "error": {
-                        "message": (
-                            f"AEP safety: response blocked — "
-                            f"{decision.reason}"
-                        ),
+                        "message": (f"AEP safety: response blocked — {decision.reason}"),
                         "type": "aep_safety_block",
                         "code": "safety_block",
                     }
@@ -372,10 +364,12 @@ def create_proxy_app(
         from ..dashboard.app import create_app as create_dashboard
 
         dashboard_app = create_dashboard(get_state=state.to_dict)
-        routes.extend([
-            Route("/aep/", dashboard_app.routes[0].endpoint),  # type: ignore[union-attr]
-            Route("/aep/api/state", dashboard_app.routes[1].endpoint),  # type: ignore[union-attr]
-        ])
+        routes.extend(
+            [
+                Route("/aep/", dashboard_app.routes[0].endpoint),  # type: ignore[union-attr]
+                Route("/aep/api/state", dashboard_app.routes[1].endpoint),  # type: ignore[union-attr]
+            ]
+        )
 
     return Starlette(routes=routes)
 

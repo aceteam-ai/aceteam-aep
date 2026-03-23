@@ -62,9 +62,15 @@ class PiiDetector:
         if not self._load_attempted:
             self._load()
 
-        if self._fallback:
-            return self._check_regex(output_text, call_id)
-        return self._check_model(output_text, call_id)
+        signals: list[SafetySignal] = []
+        check_fn = self._check_regex if self._fallback else self._check_model
+        for text, source in [(input_text, "input"), (output_text, "output")]:
+            if not text:
+                continue
+            for signal in check_fn(text, call_id):
+                signal.detail = f"{signal.detail} (in {source})"
+                signals.append(signal)
+        return signals
 
     def _check_model(self, text: str, call_id: str) -> list[SafetySignal]:
         assert self._pipeline is not None

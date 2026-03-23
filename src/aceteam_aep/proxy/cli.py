@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import os
 import socket
@@ -20,6 +21,16 @@ import time
 log = logging.getLogger(__name__)
 
 
+def _load_detector(path: str) -> object:
+    """Load a detector from a ``module:class`` path string."""
+    if ":" not in path:
+        raise ValueError(f"Invalid detector path '{path}'. Expected format: 'module:ClassName'")
+    module_path, class_name = path.rsplit(":", 1)
+    mod = importlib.import_module(module_path)
+    cls = getattr(mod, class_name)
+    return cls()
+
+
 def _find_free_port() -> int:
     """Find a free TCP port on localhost."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -27,16 +38,32 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _build_detectors(args: argparse.Namespace) -> list[object] | None:
+    """Build detector list from CLI args."""
+    from ..safety.cost_anomaly import CostAnomalyDetector
+
+    if args.no_safety:
+        return [CostAnomalyDetector()]
+
+    custom = getattr(args, "detector", None)
+    if custom:
+        from .app import _default_proxy_detectors
+
+        detectors = _default_proxy_detectors()
+        for path in custom:
+            detectors.append(_load_detector(path))
+        return detectors
+
+    return None
+
+
 def _run_proxy(args: argparse.Namespace) -> None:
     """Start the AEP reverse proxy."""
     import uvicorn
 
-    from ..safety.cost_anomaly import CostAnomalyDetector
     from .app import create_proxy_app
 
-    detectors = None
-    if args.no_safety:
-        detectors = [CostAnomalyDetector()]
+    detectors = _build_detectors(args)
 
     app = create_proxy_app(
         target_base_url=args.target,
@@ -69,7 +96,6 @@ def _run_wrap(args: argparse.Namespace) -> None:
     """Start proxy, set env vars, run command, print summary on exit."""
     import uvicorn
 
-    from ..safety.cost_anomaly import CostAnomalyDetector
     from .app import create_proxy_app
 
     if not args.cmd:
@@ -78,9 +104,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
 
     port = args.port or _find_free_port()
 
-    detectors = None
-    if args.no_safety:
-        detectors = [CostAnomalyDetector()]
+    detectors = _build_detectors(args)
 
     app = create_proxy_app(
         target_base_url=args.target,
@@ -89,9 +113,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
     )
 
     # Start proxy in a background thread
-    server_config = uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="warning"
-    )
+    server_config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(server_config)
     proxy_thread = threading.Thread(target=server.run, daemon=True)
     proxy_thread.start()
@@ -217,6 +239,12 @@ def main() -> None:
     proxy_parser.add_argument(
         "--no-safety", action="store_true", help="Disable safety detectors (cost tracking only)"
     )
+    proxy_parser.add_argument(
+        "--detector",
+        action="append",
+        metavar="MODULE:CLASS",
+        help="Add a custom detector (module:Class). Repeatable.",
+    )
 
     # --- wrap subcommand ---
     wrap_parser = sub.add_parser(
@@ -224,9 +252,7 @@ def main() -> None:
         help="Wrap a command with AEP — intercept all LLM calls",
         epilog="Example: aceteam-aep wrap -- python my_agent.py",
     )
-    wrap_parser.add_argument(
-        "--port", type=int, default=None, help="Proxy port (default: auto)"
-    )
+    wrap_parser.add_argument("--port", type=int, default=None, help="Proxy port (default: auto)")
     wrap_parser.add_argument(
         "--target",
         type=str,
@@ -238,8 +264,12 @@ def main() -> None:
         "--no-safety", action="store_true", help="Disable safety detectors (cost tracking only)"
     )
     wrap_parser.add_argument(
-        "cmd", nargs=argparse.REMAINDER, help="Command to run (after --)"
+        "--detector",
+        action="append",
+        metavar="MODULE:CLASS",
+        help="Add a custom detector (module:Class). Repeatable.",
     )
+    wrap_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command to run (after --)")
 
     args = parser.parse_args()
 
