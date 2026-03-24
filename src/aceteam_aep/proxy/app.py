@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -85,6 +86,7 @@ class ProxyState:
         self.decisions: list[EnforcementDecision] = []
         self._call_costs: list[Decimal] = []
         self.governance_contexts: list[dict[str, Any]] = []
+        self._started_at = datetime.now(UTC)
 
         # Register detectors
         for det in detectors or _default_proxy_detectors():
@@ -100,14 +102,25 @@ class ProxyState:
             return self.decisions[-1]
         return EnforcementDecision(action="pass")
 
+    def _cost_by_span_id(self) -> dict[str, float]:
+        """Build a lookup of span_id → cost in USD."""
+        lookup: dict[str, float] = {}
+        for node in self.cost_tracker.get_cost_tree():
+            sid = node.metadata.get("span_id")
+            if sid:
+                lookup[sid] = lookup.get(sid, 0.0) + float(node.compute_cost)
+        return lookup
+
     def to_dict(self) -> dict[str, Any]:
         """State as JSON-serializable dict for the dashboard."""
         decision = self.latest_enforcement
+        cost_lookup = self._cost_by_span_id()
         return {
             "cost": float(self.cost_usd),
             "calls": self.call_count,
             "action": decision.action,
             "reason": decision.reason,
+            "session_started": self._started_at.isoformat(),
             "signals": [
                 {
                     "type": s.signal_type,
@@ -116,6 +129,7 @@ class ProxyState:
                     "call_id": s.call_id,
                     "detector": s.detector,
                     "timestamp": s.timestamp,
+                    "score": s.score,
                 }
                 for s in self.signals
             ],
@@ -127,6 +141,7 @@ class ProxyState:
                     "status": s.status,
                     "duration_ms": s.duration_ms,
                     "started_at": s.started_at,
+                    "cost": cost_lookup.get(s.span_id, 0.0),
                 }
                 for s in self.span_tracker.get_spans()
             ],
