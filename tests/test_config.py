@@ -99,6 +99,11 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match="Expected YAML dict"):
             load_config(bad)
 
+    def test_invalid_port_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AEP_PORT", "not-a-number")
+        with pytest.raises(ValueError, match="AEP_PORT must be a number"):
+            load_config(None)
+
     def test_partial_yaml(self, tmp_path: Path) -> None:
         """A YAML with only some sections should use defaults for the rest."""
         partial = tmp_path / "partial.yaml"

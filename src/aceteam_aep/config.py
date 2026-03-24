@@ -97,7 +97,12 @@ def load_config(
 
     # Layer 2: env var overrides
     if os.environ.get("AEP_PORT"):
-        config.port = int(os.environ["AEP_PORT"])
+        try:
+            config.port = int(os.environ["AEP_PORT"])
+        except ValueError:
+            raise ValueError(
+                f"AEP_PORT must be a number, got '{os.environ['AEP_PORT']}'"
+            ) from None
     if os.environ.get("AEP_HOST"):
         config.host = os.environ["AEP_HOST"]
     if os.environ.get("AEP_TARGET"):
