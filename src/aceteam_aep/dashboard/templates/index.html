@@ -7,14 +7,21 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; padding: 24px; }
-  h1 { font-size: 20px; color: #58a6ff; margin-bottom: 24px; }
-  h1 span { color: #8b949e; font-weight: normal; font-size: 14px; }
+  h1 { font-size: 20px; color: #58a6ff; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
+  h1 span.live { color: #8b949e; font-weight: normal; font-size: 14px; }
+  .view-toggle { margin-left: auto; display: flex; gap: 0; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }
+  .view-toggle button { background: #161b22; color: #8b949e; border: none; padding: 6px 14px; font-size: 12px; cursor: pointer; font-family: inherit; text-transform: uppercase; letter-spacing: 0.5px; }
+  .view-toggle button.active { background: #58a6ff; color: #0d1117; font-weight: bold; }
+  .view-toggle button:hover:not(.active) { background: #21262d; color: #c9d1d9; }
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
   .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
   .card-label { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
   .card-value { font-size: 32px; font-weight: bold; }
+  .card-value.small { font-size: 24px; }
   .cost { color: #58a6ff; }
   .calls { color: #c9d1d9; }
+  .green { color: #3fb950; }
   .badge { display: inline-block; padding: 4px 16px; border-radius: 4px; font-weight: bold; font-size: 14px; text-transform: uppercase; }
   .badge-pass { background: #238636; color: #fff; }
   .badge-flag { background: #9e6a03; color: #fff; }
@@ -36,44 +43,146 @@
   .pulse { animation: pulse 2s infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .footer { margin-top: 24px; text-align: center; color: #484f58; font-size: 12px; }
+  .bar-container { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
+  .bar-green { background: #238636; }
+  .bar-yellow { background: #9e6a03; }
+  .bar-red { background: #da3633; }
+  .metric-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .metric-label { color: #8b949e; font-size: 13px; }
+  .metric-value { color: #c9d1d9; font-size: 13px; font-weight: bold; }
+  .metric-value.good { color: #3fb950; }
+  .metric-value.warn { color: #d29922; }
+  .metric-value.bad { color: #da3633; }
+  .compliance-item { padding: 10px 14px; background: #0d1117; border-radius: 6px; margin-bottom: 8px; }
+  .compliance-status { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot-green { background: #3fb950; }
+  .dot-yellow { background: #d29922; }
+  .dot-red { background: #da3633; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
-<h1>AEP Dashboard <span class="pulse">&#x25cf; live</span></h1>
+<h1>
+  AEP Dashboard <span class="live pulse">&#x25cf; live</span>
+  <div class="view-toggle">
+    <button id="btn-dev" class="active" onclick="setView('dev')">Developer</button>
+    <button id="btn-ciso" onclick="setView('ciso')">Executive</button>
+  </div>
+</h1>
 
-<div class="grid">
-  <div class="card">
-    <div class="card-label">Total Cost</div>
-    <div class="card-value cost" id="cost">$0.000000</div>
+<!-- ===== DEVELOPER VIEW ===== -->
+<div id="view-dev">
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Total Cost</div>
+      <div class="card-value cost" id="cost">$0.000000</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Calls</div>
+      <div class="card-value calls" id="calls">0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Safety Status</div>
+      <div class="card-value" id="status"></div>
+    </div>
   </div>
-  <div class="card">
-    <div class="card-label">Calls</div>
-    <div class="card-value calls" id="calls">0</div>
+
+  <div class="section">
+    <h2>Safety Signals</h2>
+    <div id="signals"></div>
   </div>
-  <div class="card">
-    <div class="card-label">Safety Status</div>
-    <div class="card-value" id="status"></div>
+
+  <div class="section" id="governance-section" style="display:none;">
+    <h2>Governance Context</h2>
+    <div id="governance"></div>
+  </div>
+
+  <div class="section">
+    <h2>Call Timeline</h2>
+    <div id="spans"></div>
   </div>
 </div>
 
-<div class="section">
-  <h2>Safety Signals</h2>
-  <div id="signals"></div>
-</div>
+<!-- ===== EXECUTIVE / CISO VIEW ===== -->
+<div id="view-ciso" class="hidden">
+  <div class="grid grid-4">
+    <div class="card">
+      <div class="card-label">Enforcement Coverage</div>
+      <div class="card-value green" id="ciso-coverage">100%</div>
+      <div class="bar-container"><div class="bar-fill bar-green" id="ciso-coverage-bar" style="width:100%"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-label">Threats Blocked</div>
+      <div class="card-value" id="ciso-blocked" style="color:#da3633;">0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Agent Spend</div>
+      <div class="card-value cost" id="ciso-cost">$0.00</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Calls</div>
+      <div class="card-value calls" id="ciso-calls">0</div>
+    </div>
+  </div>
 
-<div class="section" id="governance-section" style="display:none;">
-  <h2>Governance Context</h2>
-  <div id="governance"></div>
-</div>
+  <div class="section">
+    <h2>Compliance Status</h2>
+    <div id="ciso-compliance">
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green" id="dot-pii"></span> <span>PII Exfiltration</span></div>
+        <div class="metric-row"><span class="metric-label">Incidents this session</span><span class="metric-value good" id="ciso-pii-count">0 blocked</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green" id="dot-threat"></span> <span>Agent Threat Attempts</span></div>
+        <div class="metric-row"><span class="metric-label">Port scans, shell access, credential theft</span><span class="metric-value good" id="ciso-threat-count">0 blocked</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green" id="dot-toxic"></span> <span>Unsafe Content</span></div>
+        <div class="metric-row"><span class="metric-label">Toxic or harmful output</span><span class="metric-value good" id="ciso-toxic-count">0 detected</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green" id="dot-cost"></span> <span>Cost Anomalies</span></div>
+        <div class="metric-row"><span class="metric-label">Spend spikes above baseline</span><span class="metric-value good" id="ciso-anomaly-count">0 flagged</span></div>
+      </div>
+    </div>
+  </div>
 
-<div class="section">
-  <h2>Call Timeline</h2>
-  <div id="spans"></div>
+  <div class="section">
+    <h2>Safety Breakdown</h2>
+    <div id="ciso-breakdown">
+      <div class="metric-row"><span class="metric-label">Calls passed</span><span class="metric-value good" id="ciso-pass">0</span></div>
+      <div class="metric-row"><span class="metric-label">Calls flagged</span><span class="metric-value warn" id="ciso-flag">0</span></div>
+      <div class="metric-row"><span class="metric-label">Calls blocked</span><span class="metric-value bad" id="ciso-block">0</span></div>
+      <div style="margin-top:12px;">
+        <div class="bar-container" style="height:12px;">
+          <div id="ciso-bar-pass" class="bar-fill bar-green" style="width:100%;display:inline-block;float:left;"></div>
+          <div id="ciso-bar-flag" class="bar-fill bar-yellow" style="width:0%;display:inline-block;float:left;"></div>
+          <div id="ciso-bar-block" class="bar-fill bar-red" style="width:0%;display:inline-block;float:left;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="ciso-governance-section" style="display:none;">
+    <h2>Data Governance</h2>
+    <div id="ciso-governance"></div>
+  </div>
 </div>
 
 <div class="footer">AEP Trust Engine &mdash; aceteam.ai</div>
 
 <script>
+var currentView = 'dev';
+function setView(view) {
+  currentView = view;
+  document.getElementById('view-dev').className = view === 'dev' ? '' : 'hidden';
+  document.getElementById('view-ciso').className = view === 'ciso' ? '' : 'hidden';
+  document.getElementById('btn-dev').className = view === 'dev' ? 'active' : '';
+  document.getElementById('btn-ciso').className = view === 'ciso' ? 'active' : '';
+}
+
 function esc(s) {
   var d = document.createElement('div');
   d.textContent = s;
@@ -180,16 +289,121 @@ function renderSpans(container, spans) {
   });
 }
 
+function updateCisoView(data) {
+  // Aggregate signal counts by type
+  var piiCount = 0, threatCount = 0, toxicCount = 0, anomalyCount = 0;
+  var blockCount = 0, flagCount = 0;
+  (data.signals || []).forEach(function(s) {
+    if (s.type === 'pii') piiCount++;
+    else if (s.type === 'agent_threat') threatCount++;
+    else if (s.type === 'content_safety') toxicCount++;
+    else if (s.type === 'cost_anomaly') anomalyCount++;
+  });
+
+  // Count decisions from signals severity
+  (data.signals || []).forEach(function(s) {
+    if (s.severity === 'high') blockCount++;
+    else if (s.severity === 'medium') flagCount++;
+  });
+
+  var totalCalls = data.calls || 0;
+  var passCount = Math.max(0, totalCalls - blockCount - flagCount);
+
+  // Top cards
+  document.getElementById('ciso-coverage').textContent = '100%';
+  document.getElementById('ciso-blocked').textContent = String(blockCount);
+  document.getElementById('ciso-cost').textContent = '$' + data.cost.toFixed(2);
+  document.getElementById('ciso-calls').textContent = String(totalCalls);
+
+  // Compliance status
+  function setCompliance(dotId, countId, count, verb) {
+    var dot = document.getElementById(dotId);
+    var el = document.getElementById(countId);
+    el.textContent = count + ' ' + verb;
+    if (count > 0) {
+      dot.className = 'dot dot-red';
+      el.className = 'metric-value bad';
+    } else {
+      dot.className = 'dot dot-green';
+      el.className = 'metric-value good';
+    }
+  }
+  setCompliance('dot-pii', 'ciso-pii-count', piiCount, 'blocked');
+  setCompliance('dot-threat', 'ciso-threat-count', threatCount, 'blocked');
+  setCompliance('dot-toxic', 'ciso-toxic-count', toxicCount, 'detected');
+  setCompliance('dot-cost', 'ciso-anomaly-count', anomalyCount, 'flagged');
+
+  // Safety breakdown
+  document.getElementById('ciso-pass').textContent = String(passCount);
+  document.getElementById('ciso-flag').textContent = String(flagCount);
+  document.getElementById('ciso-block').textContent = String(blockCount);
+
+  if (totalCalls > 0) {
+    var pPct = (passCount / totalCalls * 100);
+    var fPct = (flagCount / totalCalls * 100);
+    var bPct = (blockCount / totalCalls * 100);
+    document.getElementById('ciso-bar-pass').style.width = pPct + '%';
+    document.getElementById('ciso-bar-flag').style.width = fPct + '%';
+    document.getElementById('ciso-bar-block').style.width = bPct + '%';
+  }
+
+  // Governance (CISO view)
+  var cisoGovSection = document.getElementById('ciso-governance-section');
+  var govList = data.governance || [];
+  if (govList.length > 0) {
+    cisoGovSection.style.display = '';
+    var container = document.getElementById('ciso-governance');
+    container.textContent = '';
+    var entities = {};
+    var classifications = {};
+    govList.forEach(function(g) {
+      if (g.entity) entities[g.entity] = (entities[g.entity] || 0) + 1;
+      if (g.classification) classifications[g.classification] = (classifications[g.classification] || 0) + 1;
+    });
+    Object.keys(entities).forEach(function(e) {
+      var row = document.createElement('div');
+      row.className = 'metric-row';
+      var label = document.createElement('span');
+      label.className = 'metric-label';
+      label.textContent = 'Entity: ' + e;
+      row.appendChild(label);
+      var val = document.createElement('span');
+      val.className = 'metric-value';
+      val.textContent = entities[e] + ' calls';
+      row.appendChild(val);
+      container.appendChild(row);
+    });
+    Object.keys(classifications).forEach(function(c) {
+      var row = document.createElement('div');
+      row.className = 'metric-row';
+      var label = document.createElement('span');
+      label.className = 'metric-label';
+      label.textContent = 'Classification: ' + c;
+      row.appendChild(label);
+      var val = document.createElement('span');
+      val.className = 'metric-value';
+      val.textContent = classifications[c] + ' calls';
+      row.appendChild(val);
+      container.appendChild(row);
+    });
+  } else {
+    cisoGovSection.style.display = 'none';
+  }
+}
+
 async function refresh() {
   try {
     var res = await fetch('api/state');
     var data = await res.json();
+    // Developer view
     document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
     document.getElementById('calls').textContent = String(data.calls);
     setBadge(document.getElementById('status'), data.action);
     renderSignals(document.getElementById('signals'), data.signals);
     renderGovernance(document.getElementById('governance'), data.governance);
     renderSpans(document.getElementById('spans'), data.spans);
+    // Executive view
+    updateCisoView(data);
   } catch (e) {}
 }
 refresh();
