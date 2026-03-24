@@ -38,6 +38,28 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _resolve_config(args: argparse.Namespace) -> object:
+    """Resolve full config from --config file, env vars, and CLI args."""
+    from ..config import load_config
+
+    config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
+
+    cli_overrides: dict[str, object] = {}
+    # Only override if explicitly set (not default values)
+    if getattr(args, "port", None) is not None:
+        cli_overrides["port"] = args.port
+    if getattr(args, "host", None) is not None:
+        cli_overrides["host"] = args.host
+    if getattr(args, "target", None) is not None:
+        cli_overrides["target"] = args.target
+    if getattr(args, "no_dashboard", False):
+        cli_overrides["no_dashboard"] = True
+    if getattr(args, "policy", None):
+        cli_overrides["policy"] = args.policy
+
+    return load_config(config_path, cli_overrides=cli_overrides)
+
+
 def _resolve_policy(args: argparse.Namespace) -> object | None:
     """Resolve enforcement policy from --policy flag or AEP_POLICY env var."""
     from ..enforcement import EnforcementPolicy
@@ -79,35 +101,54 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     from .app import create_proxy_app
 
-    policy = _resolve_policy(args)
-    detectors = _build_detectors(args, policy)
-
-    app = create_proxy_app(
-        target_base_url=args.target,
-        detectors=detectors,
-        policy=policy,
-        dashboard=not args.no_dashboard,
-    )
+    # Use unified config if --config provided, otherwise legacy args
+    config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
+    if config_path:
+        cfg = _resolve_config(args)
+        detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
+        app = create_proxy_app(
+            target_base_url=cfg.target,  # type: ignore[attr-defined]
+            detectors=detectors,
+            policy=cfg.policy,  # type: ignore[attr-defined]
+            dashboard=cfg.dashboard,  # type: ignore[attr-defined]
+        )
+        port = cfg.port  # type: ignore[attr-defined]
+        host = cfg.host  # type: ignore[attr-defined]
+        dashboard = cfg.dashboard  # type: ignore[attr-defined]
+        target = cfg.target  # type: ignore[attr-defined]
+    else:
+        policy = _resolve_policy(args)
+        detectors = _build_detectors(args, policy)
+        app = create_proxy_app(
+            target_base_url=args.target,
+            detectors=detectors,
+            policy=policy,
+            dashboard=not args.no_dashboard,
+        )
+        port = args.port
+        host = args.host
+        dashboard = not args.no_dashboard
+        target = args.target
 
     dashboard_msg = ""
-    if not args.no_dashboard:
-        dashboard_msg = f"  Dashboard:  http://localhost:{args.port}/aep/\n"
+    if dashboard:
+        dashboard_msg = f"  Dashboard:  http://localhost:{port}/aep/\n"
 
     print(
         f"\n"
         f"  AEP Proxy\n"
         f"  {'─' * 35}\n"
-        f"  Listening:  http://localhost:{args.port}\n"
-        f"  Target:     {args.target}\n"
+        f"  Listening:  http://localhost:{port}\n"
+        f"  Target:     {target}\n"
         f"{dashboard_msg}"
         f"\n"
         f"  Usage:\n"
-        f"    export OPENAI_BASE_URL=http://localhost:{args.port}/v1\n"
+        f"    export OPENAI_BASE_URL=http://localhost:{port}/v1\n"
         f"    python my_agent.py\n"
         f"\n"
     )
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def _run_wrap(args: argparse.Namespace) -> None:
@@ -245,6 +286,12 @@ def main() -> None:
     # --- proxy subcommand ---
     proxy_parser = sub.add_parser("proxy", help="Start the AEP reverse proxy")
     proxy_parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to aep.yaml config file (or set AEP_CONFIG env var)",
+    )
+    proxy_parser.add_argument(
         "--port", type=int, default=8899, help="Port to listen on (default: 8899)"
     )
     proxy_parser.add_argument(
@@ -281,6 +328,12 @@ def main() -> None:
         "wrap",
         help="Wrap a command with AEP — intercept all LLM calls",
         epilog="Example: aceteam-aep wrap -- python my_agent.py",
+    )
+    wrap_parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to aep.yaml config file (or set AEP_CONFIG env var)",
     )
     wrap_parser.add_argument("--port", type=int, default=None, help="Proxy port (default: auto)")
     wrap_parser.add_argument(
