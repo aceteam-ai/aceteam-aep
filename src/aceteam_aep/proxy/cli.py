@@ -38,6 +38,28 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _resolve_config(args: argparse.Namespace) -> object:
+    """Resolve full config from --config file, env vars, and CLI args."""
+    from ..config import load_config
+
+    config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
+
+    cli_overrides: dict[str, object] = {}
+    # Only override if explicitly set (not default values)
+    if getattr(args, "port", None) is not None:
+        cli_overrides["port"] = args.port
+    if getattr(args, "host", None) is not None:
+        cli_overrides["host"] = args.host
+    if getattr(args, "target", None) is not None:
+        cli_overrides["target"] = args.target
+    if getattr(args, "no_dashboard", False):
+        cli_overrides["no_dashboard"] = True
+    if getattr(args, "policy", None):
+        cli_overrides["policy"] = args.policy
+
+    return load_config(config_path, cli_overrides=cli_overrides)
+
+
 def _resolve_policy(args: argparse.Namespace) -> object | None:
     """Resolve enforcement policy from --policy flag or AEP_POLICY env var."""
     from ..enforcement import EnforcementPolicy
@@ -79,35 +101,54 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     from .app import create_proxy_app
 
-    policy = _resolve_policy(args)
-    detectors = _build_detectors(args, policy)
-
-    app = create_proxy_app(
-        target_base_url=args.target,
-        detectors=detectors,
-        policy=policy,
-        dashboard=not args.no_dashboard,
-    )
+    # Use unified config if --config provided, otherwise legacy args
+    config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
+    if config_path:
+        cfg = _resolve_config(args)
+        detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
+        app = create_proxy_app(
+            target_base_url=cfg.target,  # type: ignore[attr-defined]
+            detectors=detectors,
+            policy=cfg.policy,  # type: ignore[attr-defined]
+            dashboard=cfg.dashboard,  # type: ignore[attr-defined]
+        )
+        port = cfg.port  # type: ignore[attr-defined]
+        host = cfg.host  # type: ignore[attr-defined]
+        dashboard = cfg.dashboard  # type: ignore[attr-defined]
+        target = cfg.target  # type: ignore[attr-defined]
+    else:
+        policy = _resolve_policy(args)
+        detectors = _build_detectors(args, policy)
+        target = args.target or "https://api.openai.com"
+        app = create_proxy_app(
+            target_base_url=target,
+            detectors=detectors,
+            policy=policy,
+            dashboard=not args.no_dashboard,
+        )
+        port = args.port or 8899
+        host = args.host or "127.0.0.1"
+        dashboard = not args.no_dashboard
 
     dashboard_msg = ""
-    if not args.no_dashboard:
-        dashboard_msg = f"  Dashboard:  http://localhost:{args.port}/aep/\n"
+    if dashboard:
+        dashboard_msg = f"  Dashboard:  http://localhost:{port}/aep/\n"
 
     print(
         f"\n"
         f"  AEP Proxy\n"
         f"  {'─' * 35}\n"
-        f"  Listening:  http://localhost:{args.port}\n"
-        f"  Target:     {args.target}\n"
+        f"  Listening:  http://localhost:{port}\n"
+        f"  Target:     {target}\n"
         f"{dashboard_msg}"
         f"\n"
         f"  Usage:\n"
-        f"    export OPENAI_BASE_URL=http://localhost:{args.port}/v1\n"
+        f"    export OPENAI_BASE_URL=http://localhost:{port}/v1\n"
         f"    python my_agent.py\n"
         f"\n"
     )
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def _run_wrap(args: argparse.Namespace) -> None:
@@ -120,20 +161,38 @@ def _run_wrap(args: argparse.Namespace) -> None:
         print("Error: no command specified. Usage: aceteam-aep wrap -- python my_agent.py")
         sys.exit(1)
 
-    port = args.port or _find_free_port()
-
-    policy = _resolve_policy(args)
-    detectors = _build_detectors(args, policy)
-
-    app = create_proxy_app(
-        target_base_url=args.target,
-        detectors=detectors,
-        policy=policy,
-        dashboard=not args.no_dashboard,
-    )
+    # Use unified config if --config provided, otherwise legacy args
+    config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
+    if config_path:
+        cfg = _resolve_config(args)
+        port = args.port or cfg.port or _find_free_port()  # type: ignore[attr-defined]
+        host = args.host or cfg.host or "127.0.0.1"  # type: ignore[attr-defined]
+        target = args.target or cfg.target or "https://api.openai.com"  # type: ignore[attr-defined]
+        detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
+        dashboard = cfg.dashboard  # type: ignore[attr-defined]
+        if args.no_dashboard:
+            dashboard = False
+        app = create_proxy_app(
+            target_base_url=target,
+            detectors=detectors,
+            policy=cfg.policy,  # type: ignore[attr-defined]
+            dashboard=dashboard,
+        )
+    else:
+        port = args.port or _find_free_port()
+        host = args.host or "127.0.0.1"
+        target = args.target or "https://api.openai.com"
+        policy = _resolve_policy(args)
+        detectors = _build_detectors(args, policy)
+        dashboard = not args.no_dashboard
+        app = create_proxy_app(
+            target_base_url=target,
+            detectors=detectors,
+            policy=policy,
+            dashboard=dashboard,
+        )
 
     # Start proxy in a background thread
-    host = args.host
     server_config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(server_config)
     proxy_thread = threading.Thread(target=server.run, daemon=True)
@@ -157,7 +216,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
         f"  \033[36m\033[1mAEP Wrap\033[0m\n"
         f"  \033[2m{'─' * 45}\033[0m\n"
         f"  Proxy:    http://localhost:{port}\n"
-        f"  Target:   {args.target}\n"
+        f"  Target:   {target}\n"
         f"  Command:  {' '.join(args.cmd)}\n"
         f"  \033[2m{'─' * 45}\033[0m\n"
     )
@@ -245,15 +304,21 @@ def main() -> None:
     # --- proxy subcommand ---
     proxy_parser = sub.add_parser("proxy", help="Start the AEP reverse proxy")
     proxy_parser.add_argument(
-        "--port", type=int, default=8899, help="Port to listen on (default: 8899)"
+        "--config",
+        type=str,
+        default=None,
+        help="Path to aep.yaml config file (or set AEP_CONFIG env var)",
     )
     proxy_parser.add_argument(
-        "--host", type=str, default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+        "--port", type=int, default=None, help="Port to listen on (default: 8899)"
+    )
+    proxy_parser.add_argument(
+        "--host", type=str, default=None, help="Host to bind to (default: 127.0.0.1)"
     )
     proxy_parser.add_argument(
         "--target",
         type=str,
-        default="https://api.openai.com",
+        default=None,
         help="Target API base URL (default: https://api.openai.com)",
     )
     proxy_parser.add_argument(
@@ -282,14 +347,20 @@ def main() -> None:
         help="Wrap a command with AEP — intercept all LLM calls",
         epilog="Example: aceteam-aep wrap -- python my_agent.py",
     )
+    wrap_parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to aep.yaml config file (or set AEP_CONFIG env var)",
+    )
     wrap_parser.add_argument("--port", type=int, default=None, help="Proxy port (default: auto)")
     wrap_parser.add_argument(
-        "--host", type=str, default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+        "--host", type=str, default=None, help="Host to bind to (default: 127.0.0.1)"
     )
     wrap_parser.add_argument(
         "--target",
         type=str,
-        default="https://api.openai.com",
+        default=None,
         help="Target API base URL (default: https://api.openai.com)",
     )
     wrap_parser.add_argument("--no-dashboard", action="store_true", help="Disable the dashboard")
