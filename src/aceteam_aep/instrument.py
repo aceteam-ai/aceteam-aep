@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .enforcement import EnforcementPolicy
+from .enforcement import EnforcementPolicy, build_detectors_from_policy
 from .wrap import AepSession, _default_detectors, _wrap_anthropic, _wrap_openai
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,8 @@ def instrument(
     *,
     entity: str = "default",
     detectors: list[Any] | None = None,
-    policy: EnforcementPolicy | None = None,
+    policy: EnforcementPolicy | dict[str, Any] | str | None = None,
+    verbose: bool = False,
 ) -> None:
     """Patch openai and anthropic SDK classes globally.
 
@@ -47,18 +48,32 @@ def instrument(
     Args:
         entity: Default entity for cost attribution.
         detectors: Custom detectors. If None, uses defaults.
-        policy: Custom enforcement policy. If None, uses defaults.
+        policy: Enforcement policy. Accepts ``EnforcementPolicy``, a dict,
+                a YAML file path, or None for defaults.
+        verbose: Print input/output snippets and detector results for each call.
     """
     global _instrumented
     if _instrumented:
         log.warning("AEP already instrumented, skipping")
         return
 
+    import os
+
+    resolved_policy = EnforcementPolicy.from_config(policy)
+
     session = AepSession(
         entity=entity,
-        _policy=policy or EnforcementPolicy(),
+        _policy=resolved_policy,
+        _verbose=verbose or os.environ.get("AEP_LOG", "") in ("1", "true", "yes"),
     )
-    for det in detectors or _default_detectors():
+    # Register detectors: explicit > policy-derived > defaults
+    if detectors is not None:
+        resolved_detectors = detectors
+    elif resolved_policy.overrides:
+        resolved_detectors = build_detectors_from_policy(resolved_policy)
+    else:
+        resolved_detectors = _default_detectors()
+    for det in resolved_detectors:
         session._registry.add(det)
 
     _patch_openai(session)
