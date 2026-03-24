@@ -23,6 +23,7 @@
   .calls { color: #c9d1d9; }
   .green { color: #3fb950; }
   .badge { display: inline-block; padding: 4px 16px; border-radius: 4px; font-weight: bold; font-size: 14px; text-transform: uppercase; }
+  .badge-sm { padding: 2px 8px; font-size: 10px; border-radius: 3px; }
   .badge-pass { background: #238636; color: #fff; }
   .badge-flag { background: #9e6a03; color: #fff; }
   .badge-block { background: #da3633; color: #fff; }
@@ -36,9 +37,12 @@
   .sev-high { color: #da3633; }
   .sev-medium { color: #d29922; }
   .sev-low { color: #58a6ff; }
-  .span-item { padding: 6px 12px; border-radius: 4px; margin-bottom: 4px; font-size: 13px; background: #0d1117; display: flex; justify-content: space-between; }
+  .score-badge { font-size: 11px; color: #8b949e; font-weight: normal; }
+  .span-item { padding: 6px 12px; border-radius: 4px; margin-bottom: 4px; font-size: 13px; background: #0d1117; display: flex; justify-content: space-between; align-items: center; }
   .span-model { color: #58a6ff; }
   .span-dur { color: #8b949e; }
+  .span-cost { color: #58a6ff; font-size: 12px; margin-right: 8px; }
+  .span-right { display: flex; align-items: center; gap: 8px; }
   .empty { color: #484f58; font-style: italic; font-size: 13px; }
   .pulse { animation: pulse 2s infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
@@ -61,6 +65,26 @@
   .dot-yellow { background: #d29922; }
   .dot-red { background: #da3633; }
   .hidden { display: none; }
+  .filter-bar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filter-btn { background: #21262d; color: #8b949e; border: 1px solid #30363d; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; font-family: inherit; text-transform: uppercase; letter-spacing: 0.5px; }
+  .filter-btn.active { background: #58a6ff; color: #0d1117; border-color: #58a6ff; font-weight: bold; }
+  .filter-btn:hover:not(.active) { background: #30363d; color: #c9d1d9; }
+  .call-group { margin-bottom: 12px; }
+  .call-group-header { font-size: 11px; color: #58a6ff; padding: 4px 0; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .call-group-header:hover { color: #79c0ff; }
+  .call-group-arrow { font-size: 10px; transition: transform 0.2s; }
+  .call-group-arrow.collapsed { transform: rotate(-90deg); }
+  .call-group-body { margin-left: 4px; }
+  .zero-state { text-align: center; padding: 40px 20px; }
+  .zero-state-icon { font-size: 48px; margin-bottom: 12px; }
+  .zero-state-text { font-size: 16px; color: #3fb950; font-weight: bold; }
+  .zero-state-sub { font-size: 13px; color: #8b949e; margin-top: 4px; }
+  .compliance-big { font-size: 48px; font-weight: bold; text-align: center; padding: 8px 0; }
+  .entity-row { padding: 8px 12px; background: #0d1117; border-radius: 4px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+  .entity-name { color: #c9d1d9; font-size: 13px; }
+  .entity-detail { color: #8b949e; font-size: 12px; }
+  .entity-cost { color: #58a6ff; font-size: 13px; font-weight: bold; }
+  .session-info { font-size: 12px; color: #484f58; margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -91,6 +115,7 @@
 
   <div class="section">
     <h2>Safety Signals</h2>
+    <div class="filter-bar" id="signal-filters"></div>
     <div id="signals"></div>
   </div>
 
@@ -107,11 +132,12 @@
 
 <!-- ===== EXECUTIVE / CISO VIEW ===== -->
 <div id="view-ciso" class="hidden">
+  <div id="ciso-session-info" class="session-info"></div>
   <div class="grid grid-4">
     <div class="card">
-      <div class="card-label">Enforcement Coverage</div>
-      <div class="card-value green" id="ciso-coverage">100%</div>
-      <div class="bar-container"><div class="bar-fill bar-green" id="ciso-coverage-bar" style="width:100%"></div></div>
+      <div class="card-label">Policy Compliance</div>
+      <div class="card-value green" id="ciso-compliance-pct">100%</div>
+      <div class="bar-container"><div class="bar-fill bar-green" id="ciso-compliance-bar" style="width:100%"></div></div>
     </div>
     <div class="card">
       <div class="card-label">Threats Blocked</div>
@@ -129,24 +155,7 @@
 
   <div class="section">
     <h2>Compliance Status</h2>
-    <div id="ciso-compliance">
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green" id="dot-pii"></span> <span>PII Exfiltration</span></div>
-        <div class="metric-row"><span class="metric-label">Incidents this session</span><span class="metric-value good" id="ciso-pii-count">0 blocked</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green" id="dot-threat"></span> <span>Agent Threat Attempts</span></div>
-        <div class="metric-row"><span class="metric-label">Port scans, shell access, credential theft</span><span class="metric-value good" id="ciso-threat-count">0 blocked</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green" id="dot-toxic"></span> <span>Unsafe Content</span></div>
-        <div class="metric-row"><span class="metric-label">Toxic or harmful output</span><span class="metric-value good" id="ciso-toxic-count">0 detected</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green" id="dot-cost"></span> <span>Cost Anomalies</span></div>
-        <div class="metric-row"><span class="metric-label">Spend spikes above baseline</span><span class="metric-value good" id="ciso-anomaly-count">0 flagged</span></div>
-      </div>
-    </div>
+    <div id="ciso-compliance-body"></div>
   </div>
 
   <div class="section">
@@ -165,6 +174,11 @@
     </div>
   </div>
 
+  <div class="section" id="ciso-entity-section" style="display:none;">
+    <h2>Cost by Entity</h2>
+    <div id="ciso-entity-breakdown"></div>
+  </div>
+
   <div class="section" id="ciso-governance-section" style="display:none;">
     <h2>Data Governance</h2>
     <div id="ciso-governance"></div>
@@ -175,6 +189,10 @@
 
 <script>
 var currentView = 'dev';
+var activeFilter = 'all';
+var lastSignals = [];
+var collapsedGroups = {};
+
 function setView(view) {
   currentView = view;
   document.getElementById('view-dev').className = view === 'dev' ? '' : 'hidden';
@@ -199,15 +217,108 @@ function setBadge(el, action) {
   el.appendChild(span);
 }
 
+function makeSmallBadge(action) {
+  var span = document.createElement('span');
+  var validActions = ['pass', 'flag', 'block'];
+  var cls = validActions.indexOf(action) >= 0 ? action : 'pass';
+  span.className = 'badge badge-sm badge-' + cls;
+  span.textContent = action.toUpperCase();
+  return span;
+}
+
+// Determine per-call enforcement from signals
+function getCallAction(callId, signals) {
+  var callSignals = signals.filter(function(s) { return s.call_id === callId; });
+  if (callSignals.length === 0) return 'pass';
+  var hasHigh = callSignals.some(function(s) { return s.severity === 'high'; });
+  if (hasHigh) return 'block';
+  var hasMedium = callSignals.some(function(s) { return s.severity === 'medium'; });
+  if (hasMedium) return 'flag';
+  return 'pass';
+}
+
+function renderFilterBar(container, signals) {
+  container.textContent = '';
+  var types = {};
+  signals.forEach(function(s) { types[s.type] = (types[s.type] || 0) + 1; });
+  var typeKeys = Object.keys(types);
+  if (typeKeys.length <= 1) return; // No filter needed for 0 or 1 type
+
+  var allBtn = document.createElement('button');
+  allBtn.className = 'filter-btn' + (activeFilter === 'all' ? ' active' : '');
+  allBtn.textContent = 'ALL (' + signals.length + ')';
+  allBtn.onclick = function() { activeFilter = 'all'; renderSignals(document.getElementById('signals'), lastSignals); renderFilterBar(container, lastSignals); };
+  container.appendChild(allBtn);
+
+  typeKeys.forEach(function(t) {
+    var btn = document.createElement('button');
+    btn.className = 'filter-btn' + (activeFilter === t ? ' active' : '');
+    btn.textContent = t.toUpperCase() + ' (' + types[t] + ')';
+    btn.onclick = function() { activeFilter = t; renderSignals(document.getElementById('signals'), lastSignals); renderFilterBar(container, lastSignals); };
+    container.appendChild(btn);
+  });
+}
+
 function renderSignals(container, signals) {
   container.textContent = '';
-  if (signals.length === 0) {
+  // Apply filter
+  var filtered = activeFilter === 'all' ? signals : signals.filter(function(s) { return s.type === activeFilter; });
+  if (filtered.length === 0) {
     var empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = 'No signals detected';
+    empty.textContent = signals.length === 0 ? 'No signals detected' : 'No ' + activeFilter + ' signals';
     container.appendChild(empty);
     return;
   }
+
+  // Group by call_id
+  var groups = {};
+  var groupOrder = [];
+  filtered.forEach(function(s) {
+    var key = s.call_id || 'unknown';
+    if (!groups[key]) { groups[key] = []; groupOrder.push(key); }
+    groups[key].push(s);
+  });
+
+  // If only one group, render flat
+  if (groupOrder.length === 1) {
+    renderSignalList(container, filtered);
+    return;
+  }
+
+  groupOrder.forEach(function(callId) {
+    var group = groups[callId];
+    var div = document.createElement('div');
+    div.className = 'call-group';
+
+    var isCollapsed = collapsedGroups[callId] === true;
+    var header = document.createElement('div');
+    header.className = 'call-group-header';
+    var arrow = document.createElement('span');
+    arrow.className = 'call-group-arrow' + (isCollapsed ? ' collapsed' : '');
+    arrow.textContent = '\u25BC';
+    header.appendChild(arrow);
+    var label = document.createElement('span');
+    label.textContent = 'Call ' + callId + ': ' + group.length + ' signal' + (group.length > 1 ? 's' : '');
+    header.appendChild(label);
+    header.onclick = function() {
+      collapsedGroups[callId] = !collapsedGroups[callId];
+      renderSignals(container, signals);
+    };
+    div.appendChild(header);
+
+    if (!isCollapsed) {
+      var body = document.createElement('div');
+      body.className = 'call-group-body';
+      renderSignalList(body, group);
+      div.appendChild(body);
+    }
+
+    container.appendChild(div);
+  });
+}
+
+function renderSignalList(container, signals) {
   signals.forEach(function(s) {
     var row = document.createElement('div');
     var validSev = ['high', 'medium', 'low'];
@@ -222,6 +333,14 @@ function renderSignals(container, signals) {
     var detail = document.createElement('span');
     detail.textContent = esc(s.type) + ': ' + esc(s.detail);
     row.appendChild(detail);
+
+    // Score badge
+    if (s.score !== null && s.score !== undefined) {
+      var scoreBadge = document.createElement('span');
+      scoreBadge.className = 'score-badge';
+      scoreBadge.textContent = '(' + (s.score <= 1 ? s.score.toFixed(2) : s.score.toFixed(1) + 'x') + ')';
+      row.appendChild(scoreBadge);
+    }
 
     container.appendChild(row);
   });
@@ -262,7 +381,7 @@ function renderGovernance(container, govList) {
   });
 }
 
-function renderSpans(container, spans) {
+function renderSpans(container, spans, signals) {
   container.textContent = '';
   if (spans.length === 0) {
     var empty = document.createElement('div');
@@ -280,16 +399,49 @@ function renderSpans(container, spans) {
     model.textContent = esc(s.executor);
     row.appendChild(model);
 
+    var right = document.createElement('span');
+    right.className = 'span-right';
+
+    // Per-call enforcement badge
+    var callAction = getCallAction(s.call_id, signals);
+    right.appendChild(makeSmallBadge(callAction));
+
+    // Cost per call
+    if (s.cost > 0) {
+      var costEl = document.createElement('span');
+      costEl.className = 'span-cost';
+      costEl.textContent = '$' + s.cost.toFixed(6);
+      right.appendChild(costEl);
+    }
+
     var dur = document.createElement('span');
     dur.className = 'span-dur';
     dur.textContent = s.duration_ms ? Math.round(s.duration_ms) + 'ms' : '...';
-    row.appendChild(dur);
+    right.appendChild(dur);
 
+    row.appendChild(right);
     container.appendChild(row);
   });
 }
 
+function formatDuration(ms) {
+  if (ms < 60000) return Math.round(ms / 1000) + ' sec';
+  if (ms < 3600000) return Math.round(ms / 60000) + ' min';
+  var h = Math.floor(ms / 3600000);
+  var m = Math.round((ms % 3600000) / 60000);
+  return h + 'h ' + m + 'm';
+}
+
 function updateCisoView(data) {
+  // Session info
+  var sessionEl = document.getElementById('ciso-session-info');
+  if (data.session_started) {
+    var started = new Date(data.session_started);
+    var elapsed = Date.now() - started.getTime();
+    var startTime = started.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    sessionEl.textContent = 'Session started: ' + startTime + ' (' + formatDuration(elapsed) + ')';
+  }
+
   // Aggregate signal counts by type
   var piiCount = 0, threatCount = 0, toxicCount = 0, anomalyCount = 0;
   var blockCount = 0, flagCount = 0;
@@ -309,29 +461,66 @@ function updateCisoView(data) {
   var totalCalls = data.calls || 0;
   var passCount = Math.max(0, totalCalls - blockCount - flagCount);
 
-  // Top cards
-  document.getElementById('ciso-coverage').textContent = '100%';
+  // Policy compliance percentage
+  var compliancePct = totalCalls > 0 ? ((totalCalls - blockCount) / totalCalls * 100) : 100;
+  var complianceEl = document.getElementById('ciso-compliance-pct');
+  complianceEl.textContent = compliancePct.toFixed(1) + '%';
+  var complianceBar = document.getElementById('ciso-compliance-bar');
+  complianceBar.style.width = compliancePct + '%';
+  if (compliancePct > 99) {
+    complianceEl.className = 'card-value green';
+    complianceBar.className = 'bar-fill bar-green';
+  } else if (compliancePct > 95) {
+    complianceEl.className = 'card-value';
+    complianceEl.style.color = '#d29922';
+    complianceBar.className = 'bar-fill bar-yellow';
+  } else {
+    complianceEl.className = 'card-value';
+    complianceEl.style.color = '#da3633';
+    complianceBar.className = 'bar-fill bar-red';
+  }
+
   document.getElementById('ciso-blocked').textContent = String(blockCount);
   document.getElementById('ciso-cost').textContent = '$' + data.cost.toFixed(2);
   document.getElementById('ciso-calls').textContent = String(totalCalls);
 
-  // Compliance status
-  function setCompliance(dotId, countId, count, verb) {
-    var dot = document.getElementById(dotId);
-    var el = document.getElementById(countId);
-    el.textContent = count + ' ' + verb;
-    if (count > 0) {
-      dot.className = 'dot dot-red';
-      el.className = 'metric-value bad';
-    } else {
-      dot.className = 'dot dot-green';
-      el.className = 'metric-value good';
-    }
+  // Compliance status - zero-state vs incidents
+  var complianceBody = document.getElementById('ciso-compliance-body');
+  complianceBody.textContent = '';
+  var totalIncidents = piiCount + threatCount + toxicCount + anomalyCount;
+  if (totalIncidents === 0 && totalCalls > 0) {
+    // Zero-state: all clean
+    var zs = document.createElement('div');
+    zs.className = 'zero-state';
+    zs.innerHTML = '<div class="zero-state-icon" style="color:#3fb950;">&#x2714;</div>'
+      + '<div class="zero-state-text">All agents compliant</div>'
+      + '<div class="zero-state-sub">No safety incidents this session. ' + totalCalls + ' call' + (totalCalls > 1 ? 's' : '') + ' passed.</div>';
+    complianceBody.appendChild(zs);
+  } else if (totalCalls === 0) {
+    var zs2 = document.createElement('div');
+    zs2.className = 'zero-state';
+    zs2.innerHTML = '<div class="zero-state-icon" style="color:#484f58;">&#x2022;</div>'
+      + '<div class="zero-state-text" style="color:#8b949e;">Waiting for agent activity</div>'
+      + '<div class="zero-state-sub">No calls recorded yet.</div>';
+    complianceBody.appendChild(zs2);
+  } else {
+    // Show incident breakdown
+    var items = [
+      { dotId: 'pii', label: 'PII Exfiltration', sublabel: 'Incidents this session', count: piiCount, verb: 'blocked' },
+      { dotId: 'threat', label: 'Agent Threat Attempts', sublabel: 'Port scans, shell access, credential theft', count: threatCount, verb: 'blocked' },
+      { dotId: 'toxic', label: 'Unsafe Content', sublabel: 'Toxic or harmful output', count: toxicCount, verb: 'detected' },
+      { dotId: 'cost', label: 'Cost Anomalies', sublabel: 'Spend spikes above baseline', count: anomalyCount, verb: 'flagged' }
+    ];
+    items.forEach(function(item) {
+      var ci = document.createElement('div');
+      ci.className = 'compliance-item';
+      var dotCls = item.count > 0 ? 'dot dot-red' : 'dot dot-green';
+      var valCls = item.count > 0 ? 'metric-value bad' : 'metric-value good';
+      ci.innerHTML = '<div class="compliance-status"><span class="' + dotCls + '"></span> <span>' + esc(item.label) + '</span></div>'
+        + '<div class="metric-row"><span class="metric-label">' + esc(item.sublabel) + '</span><span class="' + valCls + '">' + item.count + ' ' + item.verb + '</span></div>';
+      complianceBody.appendChild(ci);
+    });
   }
-  setCompliance('dot-pii', 'ciso-pii-count', piiCount, 'blocked');
-  setCompliance('dot-threat', 'ciso-threat-count', threatCount, 'blocked');
-  setCompliance('dot-toxic', 'ciso-toxic-count', toxicCount, 'detected');
-  setCompliance('dot-cost', 'ciso-anomaly-count', anomalyCount, 'flagged');
 
   // Safety breakdown
   document.getElementById('ciso-pass').textContent = String(passCount);
@@ -347,31 +536,64 @@ function updateCisoView(data) {
     document.getElementById('ciso-bar-block').style.width = bPct + '%';
   }
 
+  // Cost per entity breakdown
+  var entitySection = document.getElementById('ciso-entity-section');
+  var entityContainer = document.getElementById('ciso-entity-breakdown');
+  var govList = data.governance || [];
+  var spans = data.spans || [];
+  if (govList.length > 0) {
+    // Build call_id → cost lookup from spans
+    var callCost = {};
+    spans.forEach(function(s) {
+      if (s.call_id) callCost[s.call_id] = (callCost[s.call_id] || 0) + (s.cost || 0);
+    });
+    // Build entity → { cost, calls } from governance
+    var entities = {};
+    govList.forEach(function(g) {
+      var e = g.entity || 'unknown';
+      if (!entities[e]) entities[e] = { cost: 0, calls: 0 };
+      entities[e].calls++;
+      entities[e].cost += callCost[g.call_id] || 0;
+    });
+    var entityKeys = Object.keys(entities);
+    if (entityKeys.length > 0) {
+      entitySection.style.display = '';
+      entityContainer.textContent = '';
+      entityKeys.forEach(function(e) {
+        var row = document.createElement('div');
+        row.className = 'entity-row';
+        var left = document.createElement('div');
+        var nameEl = document.createElement('span');
+        nameEl.className = 'entity-name';
+        nameEl.textContent = e;
+        left.appendChild(nameEl);
+        var detailEl = document.createElement('span');
+        detailEl.className = 'entity-detail';
+        detailEl.textContent = ' (' + entities[e].calls + ' call' + (entities[e].calls > 1 ? 's' : '') + ')';
+        left.appendChild(detailEl);
+        row.appendChild(left);
+        var costEl = document.createElement('span');
+        costEl.className = 'entity-cost';
+        costEl.textContent = '$' + entities[e].cost.toFixed(4);
+        row.appendChild(costEl);
+        entityContainer.appendChild(row);
+      });
+    } else {
+      entitySection.style.display = 'none';
+    }
+  } else {
+    entitySection.style.display = 'none';
+  }
+
   // Governance (CISO view)
   var cisoGovSection = document.getElementById('ciso-governance-section');
-  var govList = data.governance || [];
   if (govList.length > 0) {
     cisoGovSection.style.display = '';
-    var container = document.getElementById('ciso-governance');
-    container.textContent = '';
-    var entities = {};
+    var gContainer = document.getElementById('ciso-governance');
+    gContainer.textContent = '';
     var classifications = {};
     govList.forEach(function(g) {
-      if (g.entity) entities[g.entity] = (entities[g.entity] || 0) + 1;
       if (g.classification) classifications[g.classification] = (classifications[g.classification] || 0) + 1;
-    });
-    Object.keys(entities).forEach(function(e) {
-      var row = document.createElement('div');
-      row.className = 'metric-row';
-      var label = document.createElement('span');
-      label.className = 'metric-label';
-      label.textContent = 'Entity: ' + e;
-      row.appendChild(label);
-      var val = document.createElement('span');
-      val.className = 'metric-value';
-      val.textContent = entities[e] + ' calls';
-      row.appendChild(val);
-      container.appendChild(row);
     });
     Object.keys(classifications).forEach(function(c) {
       var row = document.createElement('div');
@@ -384,7 +606,7 @@ function updateCisoView(data) {
       val.className = 'metric-value';
       val.textContent = classifications[c] + ' calls';
       row.appendChild(val);
-      container.appendChild(row);
+      gContainer.appendChild(row);
     });
   } else {
     cisoGovSection.style.display = 'none';
@@ -395,13 +617,15 @@ async function refresh() {
   try {
     var res = await fetch('api/state');
     var data = await res.json();
+    lastSignals = data.signals || [];
     // Developer view
     document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
     document.getElementById('calls').textContent = String(data.calls);
     setBadge(document.getElementById('status'), data.action);
-    renderSignals(document.getElementById('signals'), data.signals);
+    renderFilterBar(document.getElementById('signal-filters'), lastSignals);
+    renderSignals(document.getElementById('signals'), lastSignals);
     renderGovernance(document.getElementById('governance'), data.governance);
-    renderSpans(document.getElementById('spans'), data.spans);
+    renderSpans(document.getElementById('spans'), data.spans, lastSignals);
     // Executive view
     updateCisoView(data);
   } catch (e) {}
