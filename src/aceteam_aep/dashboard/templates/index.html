@@ -79,7 +79,6 @@
   .zero-state-icon { font-size: 48px; margin-bottom: 12px; }
   .zero-state-text { font-size: 16px; color: #3fb950; font-weight: bold; }
   .zero-state-sub { font-size: 13px; color: #8b949e; margin-top: 4px; }
-  .compliance-big { font-size: 48px; font-weight: bold; text-align: center; padding: 8px 0; }
   .entity-row { padding: 8px 12px; background: #0d1117; border-radius: 4px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
   .entity-name { color: #c9d1d9; font-size: 13px; }
   .entity-detail { color: #8b949e; font-size: 12px; }
@@ -444,7 +443,6 @@ function updateCisoView(data) {
 
   // Aggregate signal counts by type
   var piiCount = 0, threatCount = 0, toxicCount = 0, anomalyCount = 0;
-  var blockCount = 0, flagCount = 0;
   (data.signals || []).forEach(function(s) {
     if (s.type === 'pii') piiCount++;
     else if (s.type === 'agent_threat') threatCount++;
@@ -452,11 +450,18 @@ function updateCisoView(data) {
     else if (s.type === 'cost_anomaly') anomalyCount++;
   });
 
-  // Count decisions from signals severity
+  // Count unique CALLS (not signals) that were blocked/flagged
+  var blockedCalls = {};
+  var flaggedCalls = {};
   (data.signals || []).forEach(function(s) {
-    if (s.severity === 'high') blockCount++;
-    else if (s.severity === 'medium') flagCount++;
+    var cid = s.call_id || 'unknown';
+    if (s.severity === 'high') blockedCalls[cid] = true;
+    else if (s.severity === 'medium') flaggedCalls[cid] = true;
   });
+  // A call with both high+medium counts as blocked, not both
+  Object.keys(blockedCalls).forEach(function(k) { delete flaggedCalls[k]; });
+  var blockCount = Object.keys(blockedCalls).length;
+  var flagCount = Object.keys(flaggedCalls).length;
 
   var totalCalls = data.calls || 0;
   var passCount = Math.max(0, totalCalls - blockCount - flagCount);

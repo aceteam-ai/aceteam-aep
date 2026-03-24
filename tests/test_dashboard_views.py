@@ -15,10 +15,8 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from aceteam_aep.enforcement import EnforcementPolicy
 from aceteam_aep.proxy.app import create_proxy_app
 from aceteam_aep.safety.base import SafetySignal
-
 
 # ---------------------------------------------------------------------------
 # Helpers
