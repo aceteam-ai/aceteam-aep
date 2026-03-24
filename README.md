@@ -127,11 +127,42 @@ Every LLM call is evaluated by pluggable safety detectors:
 
 | Detector | What It Catches | Model |
 |----------|----------------|-------|
-| **PII** | SSN, email, phone, credit cards in output | `iiiorg/piiranha-v1-detect-personal-information` (~110M) |
+| **PII** | SSN, email, phone, credit cards in input AND output | `iiiorg/piiranha-v1-detect-personal-information` (~110M) |
 | **Content Safety** | Toxic, harmful, or unsafe content | `s-nlp/roberta_toxicity_classifier` (~125M) |
+| **Agent Threat** | Port scans, subprocess execution, reverse shells, credential access, destructive commands | Regex patterns (11 patterns) |
 | **Cost Anomaly** | Spend spikes >5x session average | Statistical (no model) |
 
-Models lazy-load on first use, run on CPU. Falls back to regex if `transformers` not installed.
+Models lazy-load on first use, run on CPU. PII falls back to regex if `transformers` not installed.
+
+### Pre-flight Blocking
+
+`wrap()` runs detectors on the input **before** making the API call. If a detector returns a HIGH severity signal that the enforcement policy would block, the request never reaches the LLM. Cost: $0.
+
+```python
+from aceteam_aep import wrap, AepPreflightBlock
+
+client = wrap(openai.OpenAI())
+try:
+    response = client.chat.completions.create(...)
+except AepPreflightBlock as e:
+    print(f"Blocked before API call: {e}")
+    # e.decision.reason has the details
+```
+
+### Configurable Enforcement Policy
+
+```python
+client = wrap(openai.OpenAI(), policy={
+    "default_action": "flag",
+    "detectors": {
+        "pii": {"action": "block", "threshold": 0.8},
+        "agent_threat": {"action": "block"},
+        "cost_anomaly": {"action": "pass", "multiplier": 10},
+    },
+})
+```
+
+Or from a YAML file: `wrap(client, policy="aep-policy.yaml")`
 
 ### Enforcement: PASS / FLAG / BLOCK
 
@@ -176,13 +207,55 @@ class MyDetector:
 client = wrap(openai.OpenAI(), detectors=[MyDetector()])
 ```
 
+## Governance Headers
+
+Inject governance context via HTTP headers (any language, any framework):
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "X-AEP-Entity: org:acme-corp" \
+  -H "X-AEP-Classification: confidential" \
+  -H "X-AEP-Consent: gdpr=granted,training=no" \
+  -H "X-AEP-Budget: 5.00" \
+  -H "X-AEP-Trace-ID: trace-abc123"
+```
+
+The proxy parses these headers, strips them before forwarding to the LLM (governance context never leaks to the provider), and includes classification and trace ID in the response headers.
+
+## Docker Sidecar
+
+For containerized agents (NanoClaw, CrewAI, DeerFlow, OpenClaw, NemoClaw):
+
+```yaml
+services:
+  aep-proxy:
+    image: ghcr.io/aceteam-ai/aep-proxy:latest
+    ports: ["8899:8899"]
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+  agent:
+    image: your-agent:latest
+    environment:
+      OPENAI_BASE_URL: http://aep-proxy:8899/v1
+```
+
+One env var. Zero code changes. The agent doesn't know AEP exists.
+
+**Tested with NVIDIA NemoClaw/OpenShell:** Agent threats (port scanning, subprocess execution) blocked at the proxy before reaching the LLM. Normal calls pass through with receipts. See [aep-quickstart](https://github.com/aceteam-ai/aep-quickstart) for the full NemoClaw demo.
+
 ## Dashboard
+
+Two views — toggle between Developer and Executive:
+
+**Developer:** Individual calls, safety signals, cost per call, governance context, call timeline.
+
+**Executive:** Enforcement coverage %, threats blocked, compliance status (PII/threats/toxicity/anomalies), safety breakdown, cost attribution by entity.
 
 ```python
 client.aep.serve_dashboard()  # http://localhost:8899
 ```
 
-Dark-themed local web UI showing cost, safety status, signal timeline, and call history. Auto-refreshes every 2 seconds.
+Dark-themed local web UI. Auto-refreshes every 2 seconds.
 
 ## CLI Output
 
