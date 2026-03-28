@@ -1,0 +1,25 @@
+# AEP Enforcement Policy — Strict (healthcare, finance, government)
+#
+# Block on medium and high. Low cost anomaly threshold.
+# All detectors enabled with aggressive thresholds.
+
+default_action: block
+block_on: [high, medium]
+flag_on: [low]
+
+detectors:
+  pii:
+    enabled: true
+    action: block
+    threshold: 0.5
+  content_safety:
+    enabled: true
+    action: block
+    threshold: 0.5
+  agent_threat:
+    enabled: true
+    action: block
+  cost_anomaly:
+    enabled: true
+    action: block
+    multiplier: 3
