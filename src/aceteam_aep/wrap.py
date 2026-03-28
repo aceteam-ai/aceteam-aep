@@ -50,6 +50,15 @@ from .types import Usage
 log = logging.getLogger(__name__)
 
 
+def _count_by(items: list[Any], attr: str) -> dict[str, int]:
+    """Count items by attribute value."""
+    counts: dict[str, int] = {}
+    for item in items:
+        key = getattr(item, attr, "") or "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _default_detectors() -> list[Any]:
     """Build the default detector list. Model-based detectors only if available."""
     from .safety.agent_threat import AgentThreatDetector
@@ -90,6 +99,16 @@ def _snippet(text: str, n: int = 5) -> str:
 
 
 @dataclass
+class AepSource:
+    """A data source referenced during agent execution."""
+
+    uri: str  # e.g. "file:///data/report.pdf", "https://api.example.com/v1/data"
+    label: str = ""  # human-readable description
+    kind: str = ""  # "file", "api", "database", "web", "tool"
+    call_id: str = ""  # which LLM call used this source
+
+
+@dataclass
 class AepSession:
     """AEP session state attached to a wrapped client as ``client.aep``."""
 
@@ -105,6 +124,7 @@ class AepSession:
     )
     _call_count: int = 0
     _verbose: bool = False
+    _sources: list[AepSource] = field(default_factory=list)
 
     @property
     def cost_usd(self) -> Decimal:
@@ -134,6 +154,52 @@ class AepSession:
     def call_count(self) -> int:
         """Number of LLM calls recorded."""
         return self._call_count
+
+    # --- Provenance ---
+
+    def add_source(
+        self,
+        uri: str,
+        *,
+        label: str = "",
+        kind: str = "",
+        call_id: str = "",
+    ) -> None:
+        """Record a data source used during agent execution.
+
+        Call this whenever your agent reads a file, queries an API,
+        accesses a database, or uses any external data source.
+
+        Args:
+            uri: Source identifier (file path, URL, database query, etc.)
+            label: Human-readable description
+            kind: Source type ("file", "api", "database", "web", "tool")
+            call_id: Associate with a specific LLM call (optional)
+        """
+        self._sources.append(AepSource(uri=uri, label=label, kind=kind, call_id=call_id))
+
+    @property
+    def sources(self) -> list[AepSource]:
+        """All data sources recorded this session."""
+        return list(self._sources)
+
+    def get_citations(self, call_id: str = "") -> list[AepSource]:
+        """Get sources associated with a specific call, or all if no call_id."""
+        if not call_id:
+            return list(self._sources)
+        return [s for s in self._sources if s.call_id == call_id]
+
+    @property
+    def provenance_summary(self) -> dict[str, Any]:
+        """Summary of provenance data for this session."""
+        return {
+            "total_sources": len(self._sources),
+            "sources_by_kind": _count_by(self._sources, "kind"),
+            "sources": [
+                {"uri": s.uri, "label": s.label, "kind": s.kind, "call_id": s.call_id}
+                for s in self._sources
+            ],
+        }
 
     def print_summary(self) -> None:
         """Print a colored CLI summary of this session."""
