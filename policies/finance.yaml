@@ -1,0 +1,41 @@
+# AEP Policy: Financial Services
+#
+# Designed for fintech, banking, insurance, and wealth management agents.
+# Prioritizes PII protection (account numbers, SSNs), strict cost controls,
+# and content safety for client-facing outputs.
+#
+# Usage:
+#   aceteam-aep proxy --config aep.yaml --policy policies/finance.yaml
+#   AEP_POLICY=policies/finance.yaml aceteam-aep proxy
+
+default_action: block
+block_on: [high]
+flag_on: [medium, low]
+
+detectors:
+  # PII: aggressive — financial PII (account numbers, SSNs, routing numbers)
+  # must never leak. Low threshold catches partial matches.
+  pii:
+    action: block
+    threshold: 0.5
+    enabled: true
+
+  # Content safety: flag for human review — client-facing comms must be
+  # professional but blocking would disrupt trading/advisory workflows.
+  content_safety:
+    action: flag
+    threshold: 0.6
+    enabled: true
+
+  # Agent threats: always block — no agent should be port scanning,
+  # accessing credentials, or executing shell commands in a financial env.
+  agent_threat:
+    action: block
+    enabled: true
+
+  # Cost anomaly: tight multiplier — financial agents should have
+  # predictable costs. A 3x spike is already suspicious.
+  cost_anomaly:
+    action: flag
+    multiplier: 3
+    enabled: true

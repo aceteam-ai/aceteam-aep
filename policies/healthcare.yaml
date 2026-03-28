@@ -1,0 +1,45 @@
+# AEP Policy: Healthcare & Life Sciences
+#
+# Designed for clinical decision support, patient-facing chatbots, medical
+# records processing, and pharma research agents. HIPAA-aligned defaults.
+#
+# Key concerns:
+# - PHI (Protected Health Information) must never leak
+# - Clinical content must not be toxic/harmful to patients
+# - Cost anomalies may indicate data exfiltration via embedding calls
+#
+# Usage:
+#   aceteam-aep proxy --policy policies/healthcare.yaml
+
+default_action: block
+block_on: [high, medium]
+flag_on: [low]
+
+detectors:
+  # PII: zero tolerance — PHI leakage is a HIPAA violation.
+  # Threshold 0.3 catches even low-confidence partial matches
+  # (e.g., partial MRNs, truncated names in clinical notes).
+  pii:
+    action: block
+    threshold: 0.3
+    enabled: true
+
+  # Content safety: block — patient-facing agents must never produce
+  # harmful, misleading, or toxic medical content.
+  content_safety:
+    action: block
+    threshold: 0.5
+    enabled: true
+
+  # Agent threats: block — clinical environments are high-value targets
+  # for lateral movement and data exfiltration.
+  agent_threat:
+    action: block
+    enabled: true
+
+  # Cost anomaly: flag — unusual cost spikes in healthcare may indicate
+  # bulk record processing or embedding-based exfiltration.
+  cost_anomaly:
+    action: flag
+    multiplier: 4
+    enabled: true

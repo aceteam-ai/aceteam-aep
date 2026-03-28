@@ -1,0 +1,40 @@
+# AEP Policy: Startup / Development
+#
+# Balanced defaults for early-stage teams that want safety guardrails
+# without blocking developer velocity. Flag liberally, block only
+# clear threats.
+#
+# Usage:
+#   aceteam-aep proxy --policy policies/startup.yaml
+
+default_action: flag
+block_on: [high]
+flag_on: [medium]
+
+detectors:
+  # PII: flag — catch leaks but don't block during development.
+  # Developers often use real-ish data in staging.
+  pii:
+    action: flag
+    threshold: 0.8
+    enabled: true
+
+  # Content safety: flag — startups iterate fast and may generate
+  # edgy content during testing. Don't block the flow.
+  content_safety:
+    action: flag
+    threshold: 0.8
+    enabled: true
+
+  # Agent threats: block — even in dev, agents shouldn't be
+  # port scanning or stealing credentials.
+  agent_threat:
+    action: block
+    enabled: true
+
+  # Cost anomaly: flag — generous multiplier so dev experimentation
+  # doesn't trigger constant alerts.
+  cost_anomaly:
+    action: flag
+    multiplier: 10
+    enabled: true

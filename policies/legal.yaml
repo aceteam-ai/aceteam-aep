@@ -1,0 +1,46 @@
+# AEP Policy: Legal & Compliance
+#
+# Designed for contract review agents, legal research assistants,
+# regulatory compliance tools, and e-discovery pipelines.
+#
+# Key concerns:
+# - Attorney-client privilege: PII and case details must not leak
+# - Accuracy: legal advice must not be toxic or misleading
+# - Auditability: flag liberally for human review, block sparingly
+#
+# Usage:
+#   aceteam-aep proxy --policy policies/legal.yaml
+
+default_action: flag
+block_on: [high]
+flag_on: [medium, low]
+
+detectors:
+  # PII: block — client names, case numbers, and privileged
+  # communications must never leak to upstream providers.
+  pii:
+    action: block
+    threshold: 0.6
+    enabled: true
+
+  # Content safety: flag — legal language is adversarial by nature
+  # (depositions, cross-examination). Flag for review rather than
+  # blocking to avoid disrupting legitimate legal analysis.
+  content_safety:
+    action: flag
+    threshold: 0.7
+    enabled: true
+
+  # Agent threats: block — legal agents with shell/network access
+  # could expose privileged systems.
+  agent_threat:
+    action: block
+    enabled: true
+
+  # Cost anomaly: flag — e-discovery and bulk doc processing
+  # can legitimately spike costs. Higher multiplier to avoid
+  # false positives on large document batches.
+  cost_anomaly:
+    action: flag
+    multiplier: 8
+    enabled: true
