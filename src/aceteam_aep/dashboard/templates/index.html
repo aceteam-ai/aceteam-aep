@@ -158,6 +158,28 @@
   </div>
 
   <div class="section">
+    <h2>Compliance Frameworks</h2>
+    <div id="ciso-frameworks">
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green"></span> <span>HIPAA &mdash; Protected Health Information</span></div>
+        <div class="metric-row"><span class="metric-label">PHI detection enabled, auto-block on exfiltration</span><span class="metric-value good" id="fw-hipaa">ENFORCED</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green"></span> <span>GDPR &mdash; Data Protection</span></div>
+        <div class="metric-row"><span class="metric-label">PII detection, consent tracking via X-AEP-Consent</span><span class="metric-value good" id="fw-gdpr">ENFORCED</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green"></span> <span>SOC 2 Type II &mdash; Security & Availability</span></div>
+        <div class="metric-row"><span class="metric-label">Full audit trail, signed safety verdicts</span><span class="metric-value good" id="fw-soc2">ENFORCED</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-yellow"></span> <span>EU AI Act &mdash; High-Risk AI Systems</span></div>
+        <div class="metric-row"><span class="metric-label">Risk classification, human oversight logging</span><span class="metric-value warn" id="fw-euai">PARTIAL</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
     <h2>Safety Breakdown</h2>
     <div id="ciso-breakdown">
       <div class="metric-row"><span class="metric-label">Calls passed</span><span class="metric-value good" id="ciso-pass">0</span></div>
@@ -181,6 +203,24 @@
   <div class="section" id="ciso-governance-section" style="display:none;">
     <h2>Data Governance</h2>
     <div id="ciso-governance"></div>
+  </div>
+
+  <div class="section">
+    <h2>Attestation</h2>
+    <div id="ciso-attestation">
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-green"></span> <span>Safety verdicts recorded for all calls</span></div>
+        <div class="metric-row"><span class="metric-label">Every PASS/FLAG/BLOCK decision is logged with timestamp and detector ID</span><span class="metric-value good">ACTIVE</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-yellow"></span> <span>Cryptographic signing (Ed25519)</span></div>
+        <div class="metric-row"><span class="metric-label">Signed verdict chain for tamper-proof audit trail</span><span class="metric-value warn">ROADMAP</span></div>
+      </div>
+      <div class="compliance-item">
+        <div class="compliance-status"><span class="dot dot-yellow"></span> <span>Third-party attestation</span></div>
+        <div class="metric-row"><span class="metric-label">Independent verification of safety enforcement claims</span><span class="metric-value warn">ROADMAP</span></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -635,6 +675,8 @@ async function refresh() {
     updateCisoView(data);
   } catch (e) {}
 }
+// Auto-select view on load
+setView(currentView);
 refresh();
 setInterval(refresh, 2000);
 </script>

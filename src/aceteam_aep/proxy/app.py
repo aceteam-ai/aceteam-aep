@@ -414,7 +414,8 @@ def create_proxy_app(
         routes.extend(
             [
                 Route("/aep/", dashboard_app.routes[0].endpoint),  # type: ignore[union-attr]
-                Route("/aep/api/state", dashboard_app.routes[1].endpoint),  # type: ignore[union-attr]
+                Route("/aep/ciso", dashboard_app.routes[1].endpoint),  # type: ignore[union-attr]
+                Route("/aep/api/state", dashboard_app.routes[2].endpoint),  # type: ignore[union-attr]
             ]
         )
 

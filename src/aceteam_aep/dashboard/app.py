@@ -81,6 +81,21 @@ def create_app(
 
     async def homepage(request: Request) -> HTMLResponse:
         template = (_TEMPLATE_DIR / "index.html").read_text()
+        # Auto-select CISO view if ?view=ciso query param
+        view = request.query_params.get("view", "")
+        if view == "ciso":
+            template = template.replace(
+                "var currentView = 'dev';",
+                "var currentView = 'ciso';",
+            )
+        return HTMLResponse(template)
+
+    async def ciso_page(request: Request) -> HTMLResponse:
+        template = (_TEMPLATE_DIR / "index.html").read_text()
+        template = template.replace(
+            "var currentView = 'dev';",
+            "var currentView = 'ciso';",
+        )
         return HTMLResponse(template)
 
     async def api_state(request: Request) -> JSONResponse:
@@ -92,6 +107,7 @@ def create_app(
     return Starlette(
         routes=[
             Route("/", homepage),
+            Route("/ciso", ciso_page),
             Route("/api/state", api_state),
         ],
     )
