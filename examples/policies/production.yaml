@@ -1,0 +1,26 @@
+# AEP Enforcement Policy — Production (recommended)
+#
+# Block high-severity signals. Flag medium. Pass low.
+# All detectors enabled with sensible defaults.
+#
+# Place as aep-policy.yaml in your project root, or set AEP_POLICY env var.
+
+default_action: flag
+block_on: [high]
+flag_on: [medium]
+
+detectors:
+  pii:
+    enabled: true
+    action: block
+  content_safety:
+    enabled: true
+    action: flag
+    threshold: 0.7
+  agent_threat:
+    enabled: true
+    action: block
+  cost_anomaly:
+    enabled: true
+    action: flag
+    multiplier: 5

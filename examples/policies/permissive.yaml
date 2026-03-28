@@ -1,0 +1,22 @@
+# AEP Enforcement Policy — Permissive (development, testing)
+#
+# Only block high-severity agent threats. Everything else passes.
+# Good for development where you want visibility without interruption.
+
+default_action: pass
+block_on: [high]
+flag_on: []
+
+detectors:
+  pii:
+    enabled: true
+    action: flag
+  content_safety:
+    enabled: false
+  agent_threat:
+    enabled: true
+    action: block
+  cost_anomaly:
+    enabled: true
+    action: pass
+    multiplier: 10

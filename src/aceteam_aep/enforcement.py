@@ -62,8 +62,9 @@ class EnforcementPolicy:
                     action=cfg.get("action", "block"),
                     threshold=cfg.get("threshold"),
                     enabled=cfg.get("enabled", True),
-                    extra={k: v for k, v in cfg.items()
-                           if k not in ("action", "threshold", "enabled")},
+                    extra={
+                        k: v for k, v in cfg.items() if k not in ("action", "threshold", "enabled")
+                    },
                 )
 
         return cls(
@@ -196,6 +197,7 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
     if not pii_cfg or pii_cfg.enabled:
         try:
             from .safety.pii import PiiDetector
+
             detectors.append(PiiDetector())
         except Exception:
             pass
@@ -205,6 +207,7 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
     if not content_cfg or content_cfg.enabled:
         try:
             from .safety.content import ContentSafetyDetector
+
             threshold = content_cfg.threshold if content_cfg and content_cfg.threshold else 0.7
             detectors.append(ContentSafetyDetector(threshold=threshold))
         except Exception:
@@ -213,10 +216,56 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
     return detectors
 
 
+DEFAULT_POLICY = EnforcementPolicy()
+
+
+def discover_policy(explicit: str | Path | None = None) -> EnforcementPolicy:
+    """Auto-discover enforcement policy using a priority chain.
+
+    Discovery order:
+    1. Explicit path argument (if provided)
+    2. AEP_POLICY environment variable
+    3. File discovery: aep-policy.yaml or .aep/policy.yaml walking up from CWD
+    4. Built-in default policy
+    """
+    import os
+
+    # 1. Explicit argument
+    if explicit is not None:
+        return EnforcementPolicy.from_yaml(explicit)
+
+    # 2. Environment variable
+    env_path = os.environ.get("AEP_POLICY")
+    if env_path:
+        p = Path(env_path)
+        if p.is_file():
+            return EnforcementPolicy.from_yaml(p)
+        raise FileNotFoundError(f"AEP_POLICY={env_path} does not exist")
+
+    # 3. File discovery — walk up from CWD
+    home = Path.home()
+    cwd = Path.cwd().resolve()
+    search = cwd
+    while True:
+        for candidate in ("aep-policy.yaml", ".aep/policy.yaml"):
+            policy_file = search / candidate
+            if policy_file.is_file():
+                return EnforcementPolicy.from_yaml(policy_file)
+        parent = search.parent
+        if parent == search or search == home:
+            break
+        search = parent
+
+    # 4. Built-in default
+    return DEFAULT_POLICY
+
+
 __all__ = [
+    "DEFAULT_POLICY",
     "DetectorPolicy",
     "EnforcementDecision",
     "EnforcementPolicy",
     "build_detectors_from_policy",
+    "discover_policy",
     "evaluate",
 ]
