@@ -418,6 +418,80 @@ def create_proxy_app(
             ]
         )
 
+    # Feedback API — POST /aep/api/feedback
+    async def feedback_handler(request: Request) -> Response:
+        """Record a signal verdict (confirmed/dismissed) from an operator."""
+        from ..feedback import FeedbackStore
+
+        try:
+            body = await request.json()
+        except Exception:
+            return Response('{"error": "invalid JSON"}', status_code=400)
+
+        signal_type = body.get("signal_type")
+        verdict = body.get("verdict")
+        if not signal_type or verdict not in ("confirmed", "dismissed"):
+            return Response(
+                '{"error": "signal_type and verdict (confirmed|dismissed) required"}',
+                status_code=400,
+            )
+
+        feedback_path = body.get("feedback_path", "aep-feedback.jsonl")
+        store = FeedbackStore(feedback_path)
+        v = store.record(
+            signal_type,
+            score=body.get("score"),
+            verdict=verdict,
+            detail=body.get("detail", ""),
+        )
+        return Response(
+            json.dumps({"ok": True, "verdict": v.to_dict()}),
+            media_type="application/json",
+        )
+
+    # Feedback summary API — GET /aep/api/feedback/summary
+    async def feedback_summary_handler(request: Request) -> Response:
+        """Return feedback analysis and threshold recommendations."""
+        from ..feedback import FeedbackStore, recommend_thresholds
+
+        feedback_path = request.query_params.get("feedback_path", "aep-feedback.jsonl")
+        store = FeedbackStore(feedback_path)
+
+        # Extract current thresholds from policy
+        current_thresholds: dict[str, float | None] = {}
+        for name, override in state.policy.overrides.items():
+            current_thresholds[name] = override.threshold
+
+        summary = recommend_thresholds(
+            store,
+            current_thresholds=current_thresholds,
+            min_verdicts=int(request.query_params.get("min_verdicts", "5")),
+        )
+
+        recs = {}
+        for sig_type, rec in summary.recommendations.items():
+            recs[sig_type] = {
+                "current_threshold": rec.current_threshold,
+                "suggested_threshold": rec.suggested_threshold,
+                "total_verdicts": rec.total_verdicts,
+                "confirmed": rec.confirmed,
+                "dismissed": rec.dismissed,
+                "false_positive_rate": round(rec.false_positive_rate, 3),
+                "reason": rec.reason,
+            }
+
+        return Response(
+            json.dumps({"total_verdicts": summary.total_verdicts, "recommendations": recs}),
+            media_type="application/json",
+        )
+
+    routes.extend(
+        [
+            Route("/aep/api/feedback", feedback_handler, methods=["POST"]),
+            Route("/aep/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
+        ]
+    )
+
     return Starlette(routes=routes)
 
 

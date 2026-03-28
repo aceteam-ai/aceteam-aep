@@ -10,6 +10,7 @@ from .envelope import Citation, ExecutionEnvelope, ExecutionError
 from .envelope_builder import EnvelopeBuilder, NodeRecord
 from .envelope_helpers import compute_duration, extract_primary_model, sum_cost_tree
 from .factory import create_client
+from .feedback import FeedbackStore, FeedbackSummary, ThresholdRecommendation
 from .governance import (
     BudgetLimit,
     CitationClassification,
@@ -113,6 +114,10 @@ __all__ = [
     "DetectorPolicy",
     "EnforcementDecision",
     "EnforcementPolicy",
+    # Feedback
+    "FeedbackStore",
+    "FeedbackSummary",
+    "ThresholdRecommendation",
     # Wrapper
     "wrap",
     "AepSession",
