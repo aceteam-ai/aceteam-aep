@@ -146,6 +146,7 @@ class ProxyState:
                 for s in self.span_tracker.get_spans()
             ],
             "governance": self.governance_contexts,
+            "attestation": None,  # populated by proxy when signing enabled
         }
 
 
@@ -191,6 +192,27 @@ def create_proxy_app(
         from ..attestation import AttestationEngine
 
         attestation_engine = AttestationEngine(_private_key=sign_key, signer_id=signer_id)
+
+    # Override state.to_dict to include attestation data
+    _orig_to_dict = state.to_dict
+
+    def _state_with_attestation() -> dict[str, Any]:
+        d = _orig_to_dict()
+        if attestation_engine is not None:
+            d["attestation"] = {
+                "enabled": True,
+                "signer_id": attestation_engine.signer_id,
+                "chain_height": attestation_engine.chain_height,
+                "latest_hash": (
+                    attestation_engine.chain[-1]["chain_hash"]
+                    if attestation_engine.chain
+                    else None
+                ),
+            }
+        return d
+
+    # Replace the get_state callable used by dashboard
+    _get_state = _state_with_attestation
 
     async def proxy_handler(request: Request) -> Response:
         """Forward request to target API with safety interception."""
@@ -412,7 +434,14 @@ def create_proxy_app(
                 call_id=call_id,
                 action=decision.action,
                 signals=signal_dicts,
-                confidence=None,  # Trust Engine not wired yet
+                confidence=next(
+                    (
+                        s.score
+                        for s in all_signals
+                        if s.signal_type == "trust_engine" and s.score is not None
+                    ),
+                    None,
+                ),
             )
             resp_headers.update(attest_headers)
 
@@ -433,7 +462,7 @@ def create_proxy_app(
     if dashboard:
         from ..dashboard.app import create_app as create_dashboard
 
-        dashboard_app = create_dashboard(get_state=state.to_dict)
+        dashboard_app = create_dashboard(get_state=_get_state)
         # Look up endpoints by path to avoid fragile positional indices
         dash_endpoints = {r.path: r.endpoint for r in dashboard_app.routes}  # type: ignore[union-attr]
         routes.extend(
