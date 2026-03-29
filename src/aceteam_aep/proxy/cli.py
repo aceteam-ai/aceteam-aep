@@ -120,11 +120,14 @@ def _run_proxy(args: argparse.Namespace) -> None:
         policy = _resolve_policy(args)
         detectors = _build_detectors(args, policy)
         target = args.target or "https://api.openai.com"
+        sign_key, signer_id = _load_sign_key(args)
         app = create_proxy_app(
             target_base_url=target,
             detectors=detectors,
             policy=policy,
             dashboard=not args.no_dashboard,
+            sign_key=sign_key,
+            signer_id=signer_id,
         )
         port = args.port or 8899
         host = args.host or "127.0.0.1"
@@ -252,6 +255,80 @@ def _run_wrap(args: argparse.Namespace) -> None:
     sys.exit(exit_code)
 
 
+def _load_sign_key(args: argparse.Namespace) -> tuple[object | None, str]:
+    """Load signing key from --sign-key arg. Returns (key, signer_id) or (None, "")."""
+    sign_key_path = getattr(args, "sign_key", None)
+    if not sign_key_path:
+        return None, ""
+    from ..attestation import AepPrivateKey
+
+    key = AepPrivateKey.load(sign_key_path)
+    signer_id = getattr(args, "signer_id", "proxy:default")
+    return key, signer_id
+
+
+def _run_keygen(args: argparse.Namespace) -> None:
+    """Generate Ed25519 keypair for verdict signing."""
+    from pathlib import Path
+
+    from ..attestation import generate_keypair
+
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    private, public = generate_keypair()
+    key_path = output_dir / "aep.key"
+    pub_path = output_dir / "aep.pub"
+
+    private.save(key_path)
+    public.save(pub_path)
+
+    print("  Generated Ed25519 keypair:")
+    print(f"  Private key: {key_path}")
+    print(f"  Public key:  {pub_path}")
+    print("")
+    print("  Start proxy with signing:")
+    print(f"    aceteam-aep proxy --sign-key {key_path}")
+    print("")
+    print("  Verify a chain:")
+    print(f"    aceteam-aep verify --pub-key {pub_path} --chain audit.jsonl")
+
+
+def _run_verify(args: argparse.Namespace) -> None:
+    """Verify a Merkle audit chain."""
+    import json
+    from pathlib import Path
+
+    from ..attestation import AepPublicKey, verify_chain
+
+    pub_key = AepPublicKey.load(args.pub_key)
+    chain_path = Path(args.chain)
+
+    if not chain_path.exists():
+        print(f"Error: chain file not found: {chain_path}")
+        sys.exit(1)
+
+    chain = []
+    for line in chain_path.read_text().strip().splitlines():
+        if line.strip():
+            chain.append(json.loads(line))
+
+    if not chain:
+        print("Empty chain — nothing to verify.")
+        sys.exit(0)
+
+    valid = verify_chain(chain, pub_key)
+
+    if valid:
+        print("  Chain VALID")
+        print(f"  Entries: {len(chain)}")
+        print(f"  Height:  0 → {len(chain) - 1}")
+        print(f"  Final hash: {chain[-1]['chain_hash']}")
+    else:
+        print("  Chain INVALID — tampering detected")
+        sys.exit(1)
+
+
 def _print_wrap_summary(state: dict) -> None:
     """Print colored summary from proxy state."""
     _GREEN = "\033[32m"
@@ -340,6 +417,42 @@ def main() -> None:
         default=None,
         help="Path to AEP policy YAML file (or set AEP_POLICY env var)",
     )
+    proxy_parser.add_argument(
+        "--sign-key",
+        type=str,
+        default=None,
+        help="Path to Ed25519 private key for verdict signing (enables attestation)",
+    )
+    proxy_parser.add_argument(
+        "--signer-id",
+        type=str,
+        default="proxy:default",
+        help="Signer identity for attestation headers (default: proxy:default)",
+    )
+
+    # --- keygen subcommand ---
+    keygen_parser = sub.add_parser("keygen", help="Generate Ed25519 keypair for verdict signing")
+    keygen_parser.add_argument(
+        "--output",
+        type=str,
+        default=".",
+        help="Output directory for aep.key and aep.pub (default: current dir)",
+    )
+
+    # --- verify subcommand ---
+    verify_parser = sub.add_parser("verify", help="Verify a Merkle audit chain")
+    verify_parser.add_argument(
+        "--pub-key",
+        type=str,
+        required=True,
+        help="Path to Ed25519 public key",
+    )
+    verify_parser.add_argument(
+        "--chain",
+        type=str,
+        required=True,
+        help="Path to audit chain JSONL file",
+    )
 
     # --- wrap subcommand ---
     wrap_parser = sub.add_parser(
@@ -391,6 +504,10 @@ def main() -> None:
         _run_proxy(args)
     elif args.command == "wrap":
         _run_wrap(args)
+    elif args.command == "keygen":
+        _run_keygen(args)
+    elif args.command == "verify":
+        _run_verify(args)
     else:
         parser.print_help()
         sys.exit(1)

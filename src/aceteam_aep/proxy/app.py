@@ -174,6 +174,8 @@ def create_proxy_app(
     detectors: list[Any] | None = None,
     policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     dashboard: bool = True,
+    sign_key: Any | None = None,
+    signer_id: str = "proxy:default",
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
@@ -182,6 +184,13 @@ def create_proxy_app(
         detectors=detectors,
         policy=policy,
     )
+
+    # Attestation engine (optional — enabled when sign_key is provided)
+    attestation_engine = None
+    if sign_key is not None:
+        from ..attestation import AttestationEngine
+
+        attestation_engine = AttestationEngine(_private_key=sign_key, signer_id=signer_id)
 
     async def proxy_handler(request: Request) -> Response:
         """Forward request to target API with safety interception."""
@@ -392,6 +401,20 @@ def create_proxy_app(
             flag_reason=decision.reason if decision.action == "flag" else "",
             trace_id=aep_ctx.trace_id,
         )
+
+        # Sign verdict and add attestation headers (if signing enabled)
+        if attestation_engine is not None:
+            signal_dicts = [
+                {"signal_type": s.signal_type, "severity": s.severity, "detail": s.detail}
+                for s in all_signals
+            ]
+            attest_headers = attestation_engine.sign_verdict(
+                call_id=call_id,
+                action=decision.action,
+                signals=signal_dicts,
+                confidence=None,  # Trust Engine not wired yet
+            )
+            resp_headers.update(attest_headers)
 
         return Response(
             content=upstream_resp.content,
