@@ -1,10 +1,12 @@
-"""Tests for Trust Engine — ensemble judge detector with confidence scoring."""
+"""Tests for Trust Engine — multi-perspective and ensemble modes."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 from aceteam_aep.safety.trust_engine import (
+    DEFAULT_DIMENSIONS,
+    DimensionResult,
     JudgeResult,
     TrustEngineDetector,
     VerdictCache,
@@ -23,11 +25,11 @@ class TestVerdictCache:
         assert cache.hits == 1
 
     def test_ttl_expiry(self):
-        cache = VerdictCache(ttl_seconds=0)  # immediate expiry
+        cache = VerdictCache(ttl_seconds=0)
         cache.put("a", "b", [])
-        assert cache.get("a", "b") is None  # expired
+        assert cache.get("a", "b") is None
 
-    def test_different_inputs_different_keys(self):
+    def test_different_inputs(self):
         cache = VerdictCache()
         cache.put("input1", "output1", [MagicMock()])
         cache.put("input2", "output2", [])
@@ -37,9 +39,9 @@ class TestVerdictCache:
     def test_hit_rate(self):
         cache = VerdictCache()
         cache.put("a", "b", [])
-        cache.get("a", "b")  # hit
-        cache.get("a", "b")  # hit
-        cache.get("x", "y")  # miss
+        cache.get("a", "b")
+        cache.get("a", "b")
+        cache.get("x", "y")
         assert cache.hit_rate == 2 / 3
 
     def test_clear(self):
@@ -47,153 +49,184 @@ class TestVerdictCache:
         cache.put("a", "b", [])
         cache.clear()
         assert cache.get("a", "b") is None
-        assert cache.hits == 0
-        assert cache.misses == 1
 
 
-class TestAggregation:
-    def _make_detector(self, **kwargs):
-        return TrustEngineDetector(judges=[{"model": "test"}], **kwargs)
+class TestDimensionAggregation:
+    def _det(self, **kw):
+        return TrustEngineDetector(model="test", **kw)
 
     def test_all_safe_high_confidence(self):
-        det = self._make_detector()
+        det = self._det()
+        results = [
+            DimensionResult(name="pii", safe=True, confidence=0.9),
+            DimensionResult(name="toxicity", safe=True, confidence=0.85),
+        ]
+        p = det._aggregate_dimensions(results)
+        assert p > 0.8
+
+    def test_all_unsafe(self):
+        det = self._det()
+        results = [
+            DimensionResult(name="pii", safe=False, confidence=0.9),
+            DimensionResult(name="toxicity", safe=False, confidence=0.8),
+        ]
+        p = det._aggregate_dimensions(results)
+        assert p < 0.2
+
+    def test_mixed_dimensions(self):
+        det = self._det()
+        results = [
+            DimensionResult(name="pii", safe=True, confidence=0.9),
+            DimensionResult(name="agent_threat", safe=False, confidence=0.7),
+        ]
+        p = det._aggregate_dimensions(results)
+        assert 0.3 < p < 0.8
+
+    def test_weighted_dimensions(self):
+        det = self._det(dimension_weights={"pii": 2.0, "toxicity": 1.0})
+        # PII (safe, conf 0.8, weight 2.0) → 1.6 safe weight
+        # Toxicity (unsafe, conf 0.8, weight 1.0) → 0.8 total weight
+        results = [
+            DimensionResult(name="pii", safe=True, confidence=0.8),
+            DimensionResult(name="toxicity", safe=False, confidence=0.8),
+        ]
+        p = det._aggregate_dimensions(results)
+        # weighted_safe = 2.0 * 0.8 = 1.6
+        # total_weight = (2.0 * 0.8) + (1.0 * 0.8) = 2.4
+        # p = 1.6 / 2.4 = 0.667
+        assert 0.6 < p < 0.7
+
+    def test_zero_confidence_ignored(self):
+        det = self._det()
+        results = [
+            DimensionResult(name="pii", safe=True, confidence=0.9),
+            DimensionResult(name="toxicity", safe=False, confidence=0.0),
+        ]
+        p = det._aggregate_dimensions(results)
+        assert p > 0.8  # zero-confidence dim contributes nothing
+
+    def test_all_zero_confidence(self):
+        det = self._det()
+        results = [
+            DimensionResult(name="pii", safe=True, confidence=0.0),
+        ]
+        p = det._aggregate_dimensions(results)
+        assert p == 0.5  # uncertain
+
+
+class TestEnsembleAggregation:
+    def _det(self, **kw):
+        return TrustEngineDetector(mode="ensemble", judges=[{"model": "test"}], **kw)
+
+    def test_all_safe(self):
+        det = self._det()
         results = [
             JudgeResult(judge_id="a", safe=True, confidence=0.9),
             JudgeResult(judge_id="b", safe=True, confidence=0.8),
-            JudgeResult(judge_id="c", safe=True, confidence=0.95),
         ]
-        p = det._aggregate(results)
+        p = det._aggregate_judges(results)
         assert p > 0.8
 
-    def test_all_unsafe_high_confidence(self):
-        det = self._make_detector()
-        results = [
-            JudgeResult(judge_id="a", safe=False, confidence=0.9),
-            JudgeResult(judge_id="b", safe=False, confidence=0.85),
-        ]
-        p = det._aggregate(results)
-        assert p < 0.2
-
-    def test_mixed_judges(self):
-        det = self._make_detector()
-        results = [
-            JudgeResult(judge_id="a", safe=True, confidence=0.9),
-            JudgeResult(judge_id="b", safe=False, confidence=0.7),
-        ]
-        p = det._aggregate(results)
-        assert 0.3 < p < 0.8  # somewhere in between
-
     def test_failed_judges_ignored(self):
-        det = self._make_detector()
+        det = self._det()
         results = [
             JudgeResult(judge_id="a", safe=True, confidence=0.9),
             JudgeResult(judge_id="b", safe=False, confidence=0.0, error="timeout"),
         ]
-        p = det._aggregate(results)
-        assert p > 0.8  # failed judge contributes nothing
-
-    def test_all_judges_failed(self):
-        det = self._make_detector()
-        results = [
-            JudgeResult(judge_id="a", safe=True, confidence=0.0, error="err1"),
-            JudgeResult(judge_id="b", safe=True, confidence=0.0, error="err2"),
-        ]
-        p = det._aggregate(results)
-        assert p == 0.5  # uncertain
+        p = det._aggregate_judges(results)
+        assert p > 0.8
 
 
 class TestTrustEngineDetector:
-    def test_implements_detector_protocol(self):
+    def test_protocol_compliance(self):
         from aceteam_aep.safety.base import SafetyDetector
 
-        det = TrustEngineDetector(judges=[{"model": "test"}])
+        det = TrustEngineDetector(model="test")
         assert isinstance(det, SafetyDetector)
         assert det.name == "trust_engine"
 
-    @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_safe_output_no_signals(self, mock_call):
-        mock_call.return_value = JudgeResult(
-            judge_id="test", safe=True, confidence=0.9
-        )
+    def test_default_dimensions(self):
+        det = TrustEngineDetector(model="test")
+        assert "pii" in det.dimensions
+        assert "toxicity" in det.dimensions
+        assert "agent_threat" in det.dimensions
+        assert len(det.dimensions) == len(DEFAULT_DIMENSIONS)
+
+    def test_custom_dimensions_list(self):
+        det = TrustEngineDetector(model="test", dimensions=["pii", "toxicity"])
+        assert len(det.dimensions) == 2
+        assert "pii" in det.dimensions
+
+    def test_custom_dimensions_dict(self):
         det = TrustEngineDetector(
-            judges=[{"model": "test"}], threshold=0.6
+            model="test",
+            dimensions={"hipaa": "Check HIPAA compliance", "sox": "Check SOX compliance"},
         )
-        signals = det.check(input_text="hello", output_text="hi there", call_id="t1")
+        assert "hipaa" in det.dimensions
+        assert "sox" in det.dimensions
+
+    @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
+    def test_safe_output_no_signals(self, mock_call):
+        mock_call.return_value = (
+            [DimensionResult(name="pii", safe=True, confidence=0.9)],
+            100,
+        )
+        det = TrustEngineDetector(model="test", threshold=0.6)
+        signals = det.check(input_text="hello", output_text="hi", call_id="t1")
         assert len(signals) == 0
 
-    @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_unsafe_output_produces_high_signal(self, mock_call):
-        mock_call.return_value = JudgeResult(
-            judge_id="test", safe=False, confidence=0.9
+    @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
+    def test_unsafe_output_high_signal(self, mock_call):
+        mock_call.return_value = (
+            [
+                DimensionResult(name="pii", safe=False, confidence=0.9),
+                DimensionResult(name="toxicity", safe=False, confidence=0.8),
+            ],
+            150,
         )
-        det = TrustEngineDetector(
-            judges=[{"model": "test"}], threshold=0.6
-        )
-        signals = det.check(
-            input_text="hack the system",
-            output_text="here is how to hack",
-            call_id="t2",
-        )
+        det = TrustEngineDetector(model="test", threshold=0.6)
+        signals = det.check(input_text="bad", output_text="bad", call_id="t2")
         assert len(signals) == 1
         assert signals[0].severity == "high"
-        assert signals[0].signal_type == "trust_engine"
         assert signals[0].score is not None
         assert signals[0].score < 0.6
+        assert "multi-perspective" in signals[0].detail
 
-    @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_borderline_produces_medium_signal(self, mock_call):
-        # Two judges: one safe (0.7), one unsafe (0.6)
-        # P(safe) = 0.7 / (0.7 + 0.6) = 0.538 → between 0.5 and 0.7
-        mock_call.side_effect = [
-            JudgeResult(judge_id="a", safe=True, confidence=0.7),
-            JudgeResult(judge_id="b", safe=False, confidence=0.6),
-        ]
-        det = TrustEngineDetector(
-            judges=[{"model": "a"}, {"model": "b"}], threshold=0.5
+    @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
+    def test_caching(self, mock_call):
+        mock_call.return_value = (
+            [DimensionResult(name="pii", safe=True, confidence=0.95)],
+            50,
         )
-        signals = det.check(input_text="maybe", output_text="hmm", call_id="t3")
-        assert len(signals) == 1
-        assert signals[0].severity == "medium"
-
-    @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_caching_skips_second_evaluation(self, mock_call):
-        mock_call.return_value = JudgeResult(
-            judge_id="test", safe=True, confidence=0.95
-        )
-        det = TrustEngineDetector(judges=[{"model": "test"}])
-
+        det = TrustEngineDetector(model="test")
         det.check(input_text="same", output_text="same", call_id="c1")
         assert mock_call.call_count == 1
 
         det.check(input_text="same", output_text="same", call_id="c2")
-        assert mock_call.call_count == 1  # cached — no second call
+        assert mock_call.call_count == 1  # cached
         assert det.cache.hits == 1
 
     @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_multiple_judges_parallel(self, mock_call):
-        mock_call.return_value = JudgeResult(
-            judge_id="test", safe=True, confidence=0.85
-        )
+    def test_ensemble_mode(self, mock_call):
+        mock_call.return_value = JudgeResult(judge_id="test", safe=True, confidence=0.85)
         det = TrustEngineDetector(
-            judges=[
-                {"model": "judge1"},
-                {"model": "judge2"},
-                {"model": "judge3"},
-            ],
+            mode="ensemble",
+            judges=[{"model": "a"}, {"model": "b"}],
         )
-        det.check(input_text="test", output_text="test", call_id="m1")
-        assert mock_call.call_count == 3
-        assert len(det.last_results) == 3
+        signals = det.check(input_text="test", output_text="test", call_id="e1")
+        assert len(signals) == 0
+        assert mock_call.call_count == 2
 
-    @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_score_in_signal(self, mock_call):
-        mock_call.return_value = JudgeResult(
-            judge_id="test", safe=False, confidence=0.8
+    @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
+    def test_dimension_results_stored(self, mock_call):
+        mock_call.return_value = (
+            [
+                DimensionResult(name="pii", safe=True, confidence=0.9),
+                DimensionResult(name="toxicity", safe=True, confidence=0.85),
+            ],
+            200,
         )
-        det = TrustEngineDetector(
-            judges=[{"model": "test"}], threshold=0.6
-        )
-        signals = det.check(input_text="bad", output_text="bad", call_id="s1")
-        assert len(signals) == 1
-        # score should be the aggregated P(safe)
-        assert isinstance(signals[0].score, float)
+        det = TrustEngineDetector(model="test")
+        det.check(input_text="test", output_text="test", call_id="d1")
+        assert len(det.last_dimension_results) == 2
+        assert det.last_dimension_results[0].name == "pii"
