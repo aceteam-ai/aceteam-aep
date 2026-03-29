@@ -411,11 +411,13 @@ def create_proxy_app(
         from ..dashboard.app import create_app as create_dashboard
 
         dashboard_app = create_dashboard(get_state=state.to_dict)
+        # Look up endpoints by path to avoid fragile positional indices
+        dash_endpoints = {r.path: r.endpoint for r in dashboard_app.routes}  # type: ignore[union-attr]
         routes.extend(
             [
-                Route("/aep/", dashboard_app.routes[0].endpoint),  # type: ignore[union-attr]
-                Route("/aep/ciso", dashboard_app.routes[1].endpoint),  # type: ignore[union-attr]
-                Route("/aep/api/state", dashboard_app.routes[2].endpoint),  # type: ignore[union-attr]
+                Route("/aep/", dash_endpoints["/"]),
+                Route("/aep/ciso", dash_endpoints["/ciso"]),
+                Route("/aep/api/state", dash_endpoints["/api/state"]),
             ]
         )
 

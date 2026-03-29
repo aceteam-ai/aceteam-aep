@@ -74,3 +74,28 @@ def test_dashboard_api_with_signals() -> None:
     assert data["action"] == "block"
     assert len(data["signals"]) == 1
     assert data["signals"][0]["type"] == "pii"
+
+
+def test_ciso_route_returns_200() -> None:
+    app = create_app(get_state=_mock_state)
+    client = TestClient(app)
+    resp = client.get("/ciso")
+    assert resp.status_code == 200
+    assert "AEP Dashboard" in resp.text
+    assert "var currentView = 'ciso';" in resp.text
+
+
+def test_homepage_view_ciso_param() -> None:
+    app = create_app(get_state=_mock_state)
+    client = TestClient(app)
+    resp = client.get("/?view=ciso")
+    assert resp.status_code == 200
+    assert "var currentView = 'ciso';" in resp.text
+
+
+def test_homepage_default_dev_view() -> None:
+    app = create_app(get_state=_mock_state)
+    client = TestClient(app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "var currentView = 'dev';" in resp.text
