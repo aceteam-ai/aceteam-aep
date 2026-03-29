@@ -141,8 +141,12 @@ class AepPrivateKey:
         return cls(_key=key)
 
     def save(self, path: str | Path) -> None:
+        import stat
+
+        p = Path(path)
         pem = self._key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
-        Path(path).write_bytes(pem)
+        p.write_bytes(pem)
+        p.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600 — owner read/write only
 
     def sign(self, data: bytes) -> bytes:
         return self._key.sign(data)
