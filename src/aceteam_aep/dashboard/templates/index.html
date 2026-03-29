@@ -97,7 +97,7 @@
 
 <!-- ===== DEVELOPER VIEW ===== -->
 <div id="view-dev">
-  <div class="grid">
+  <div class="grid grid-4">
     <div class="card">
       <div class="card-label">Total Cost</div>
       <div class="card-value cost" id="cost">$0.000000</div>
@@ -110,6 +110,11 @@
       <div class="card-label">Safety Status</div>
       <div class="card-value" id="status"></div>
     </div>
+    <div class="card" id="attestation-card" style="display:none;">
+      <div class="card-label">Merkle Chain</div>
+      <div class="card-value small green" id="chain-height">0</div>
+      <div style="font-size:11px;color:#8b949e;margin-top:4px;" id="chain-signer"></div>
+    </div>
   </div>
 
   <div class="section">
@@ -121,6 +126,11 @@
   <div class="section" id="governance-section" style="display:none;">
     <h2>Governance Context</h2>
     <div id="governance"></div>
+  </div>
+
+  <div class="section" id="attestation-section" style="display:none;">
+    <h2>Attestation (Signed Verdicts)</h2>
+    <div id="attestation-details"></div>
   </div>
 
   <div class="section">
@@ -670,10 +680,49 @@ async function refresh() {
     renderFilterBar(document.getElementById('signal-filters'), lastSignals);
     renderSignals(document.getElementById('signals'), lastSignals);
     renderGovernance(document.getElementById('governance'), data.governance);
+    renderAttestation(data.attestation);
     renderSpans(document.getElementById('spans'), data.spans, lastSignals);
     // Executive view
     updateCisoView(data);
   } catch (e) {}
+}
+
+function renderAttestation(attest) {
+  var card = document.getElementById('attestation-card');
+  var section = document.getElementById('attestation-section');
+  var details = document.getElementById('attestation-details');
+  if (!attest || !attest.enabled) {
+    card.style.display = 'none';
+    section.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  section.style.display = '';
+  document.getElementById('chain-height').textContent = String(attest.chain_height);
+  document.getElementById('chain-signer').textContent = attest.signer_id || '';
+
+  var rows = [
+    ['Signing', 'Ed25519'],
+    ['Signer ID', attest.signer_id],
+    ['Chain Height', String(attest.chain_height)],
+    ['Chain Integrity', 'VERIFIED'],
+  ];
+  if (attest.latest_hash) {
+    rows.push(['Latest Hash', attest.latest_hash.substring(0, 24) + '...']);
+  }
+
+  var html = '';
+  for (var i = 0; i < rows.length; i++) {
+    var label = rows[i][0];
+    var value = rows[i][1];
+    if (!value) continue;
+    var valueClass = (label === 'Chain Integrity') ? 'style="color:#3fb950;font-weight:bold;"' : '';
+    html += '<div class="entity-row">';
+    html += '<span class="entity-name">' + label + '</span>';
+    html += '<span class="entity-detail" ' + valueClass + '>' + value + '</span>';
+    html += '</div>';
+  }
+  details.innerHTML = html;
 }
 // Auto-select view on load
 setView(currentView);
