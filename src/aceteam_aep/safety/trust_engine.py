@@ -5,9 +5,8 @@ model call. Each dimension is a safety perspective (PII, policy compliance,
 authorization, irreversibility). The model evaluates all dimensions and
 produces per-dimension scores that aggregate into a calibrated P(safe).
 
-This is architecturally inspired by Sanskritic's parallel epistemic lenses,
-implemented here as structured prompting for any OpenAI-compatible model.
-The interface supports upgrading to latent-space debate (Sanskritic v2)
+Implemented as structured prompting for any OpenAI-compatible model.
+The interface supports upgrading to latent-space reasoning engines
 without changing the detector API.
 
 Two modes:
