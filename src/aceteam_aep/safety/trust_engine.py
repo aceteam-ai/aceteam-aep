@@ -157,11 +157,9 @@ def _call_judge(config: JudgeConfig, input_text: str, output_text: str) -> Judge
         base_url = config.base_url or "https://api.openai.com/v1"
         api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
 
-        # Strip trailing /v1 if present (we add it)
-        if not base_url.endswith("/v1"):
-            url = f"{base_url}/chat/completions"
-        else:
-            url = f"{base_url}/chat/completions"
+        # Normalize: ensure URL ends with /chat/completions
+        base = base_url.rstrip("/")
+        url = f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
 
         user_msg = JUDGE_USER_TEMPLATE.format(
             input_text=input_text[:2000],  # truncate to avoid token limits
