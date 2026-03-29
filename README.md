@@ -16,7 +16,9 @@ No code changes. Just run the proxy and point your agent at it:
 
 ```bash
 # Terminal 1: Start the AEP safety proxy
-aceteam-aep proxy --port 8080
+aceteam-aep proxy --port 8080                          # defaults
+aceteam-aep proxy --config aep.yaml                    # unified config
+aceteam-aep proxy --policy policies/healthcare.yaml    # industry policy
 
 # Terminal 2: Run OpenClaw through the proxy
 export OPENAI_BASE_URL=http://localhost:8080/v1
@@ -164,6 +166,24 @@ client = wrap(openai.OpenAI(), policy={
 
 Or from a YAML file: `wrap(client, policy="aep-policy.yaml")`
 
+### Vertical Policy Templates
+
+Pre-built policies tuned per industry:
+
+```bash
+aceteam-aep proxy --policy policies/finance.yaml     # Aggressive PII, tight cost controls
+aceteam-aep proxy --policy policies/healthcare.yaml   # HIPAA-aligned, zero-tolerance PII
+aceteam-aep proxy --policy policies/legal.yaml        # Privilege-aware, flag-heavy for audit
+aceteam-aep proxy --policy policies/startup.yaml      # Dev-friendly, relaxed thresholds
+```
+
+| Policy | PII Threshold | Cost Multiplier | Default Action |
+|--------|:------------:|:---------------:|:--------------:|
+| Finance | 0.5 | 3x | block |
+| Healthcare | 0.3 | 4x | block |
+| Legal | 0.6 | 8x | flag |
+| Startup | 0.8 | 10x | flag |
+
 ### Enforcement: PASS / FLAG / BLOCK
 
 Every call produces an enforcement decision based on signal severity:
@@ -205,6 +225,35 @@ class MyDetector:
         return []
 
 client = wrap(openai.OpenAI(), detectors=[MyDetector()])
+```
+
+### Signal Feedback Loop
+
+Operators mark flagged signals as confirmed (true positive) or dismissed (false positive). The system learns and recommends threshold adjustments:
+
+```bash
+# Submit a verdict via API
+curl -X POST http://localhost:8080/aep/api/feedback \
+  -d '{"signal_type": "pii", "score": 0.62, "verdict": "dismissed"}'
+
+# Get threshold recommendations
+curl http://localhost:8080/aep/api/feedback/summary
+# → {"pii": {"suggested_threshold": 0.75, "false_positive_rate": 0.6, ...}}
+```
+
+Or from Python:
+
+```python
+from aceteam_aep import FeedbackStore
+from aceteam_aep.feedback import recommend_thresholds, apply_recommendations
+
+store = FeedbackStore("feedback.jsonl")
+store.record("pii", score=0.62, verdict="dismissed")
+store.record("pii", score=0.91, verdict="confirmed")
+
+summary = recommend_thresholds(store, current_thresholds={"pii": 0.5})
+# Generates updated policy YAML with recommended thresholds
+apply_recommendations(summary, "policies/finance.yaml", "policies/finance-tuned.yaml")
 ```
 
 ## Governance Headers
