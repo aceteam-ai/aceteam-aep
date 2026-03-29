@@ -421,11 +421,15 @@ def create_proxy_app(
             ]
         )
 
+    # Server-side feedback store — path is NOT user-configurable via API
+    # to prevent path traversal attacks.
+    from ..feedback import FeedbackStore
+
+    _feedback_store = FeedbackStore("aep-feedback.jsonl")
+
     # Feedback API — POST /aep/api/feedback
     async def feedback_handler(request: Request) -> Response:
         """Record a signal verdict (confirmed/dismissed) from an operator."""
-        from ..feedback import FeedbackStore
-
         try:
             body = await request.json()
         except Exception:
@@ -439,9 +443,7 @@ def create_proxy_app(
                 status_code=400,
             )
 
-        feedback_path = body.get("feedback_path", "aep-feedback.jsonl")
-        store = FeedbackStore(feedback_path)
-        v = store.record(
+        v = _feedback_store.record(
             signal_type,
             score=body.get("score"),
             verdict=verdict,
@@ -455,10 +457,9 @@ def create_proxy_app(
     # Feedback summary API — GET /aep/api/feedback/summary
     async def feedback_summary_handler(request: Request) -> Response:
         """Return feedback analysis and threshold recommendations."""
-        from ..feedback import FeedbackStore, recommend_thresholds
+        from ..feedback import recommend_thresholds
 
-        feedback_path = request.query_params.get("feedback_path", "aep-feedback.jsonl")
-        store = FeedbackStore(feedback_path)
+        store = _feedback_store
 
         # Extract current thresholds from policy
         current_thresholds: dict[str, float | None] = {}
