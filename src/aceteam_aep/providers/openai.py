@@ -93,6 +93,16 @@ def _uses_max_completion_tokens(model: str) -> bool:
     return any(model == p or model.startswith(p + "-") for p in prefixes)
 
 
+def _supports_temperature(model: str) -> bool:
+    """Return True if the model accepts temperature parameter."""
+    info = get_model_info(model)
+    if info is not None:
+        return info.supports_temperature
+    # Fallback: o1, o3, gpt-5 don't support temperature
+    prefixes = ("o1", "o3", "gpt-5")
+    return not any(model == p or model.startswith(p + "-") for p in prefixes)
+
+
 def _extract_usage(usage: Any) -> Usage:
     if usage is None:
         return Usage()
@@ -142,9 +152,11 @@ class OpenAIClient:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
-            "temperature": temperature if temperature is not None else self._temperature,
             token_param: max_tokens if max_tokens is not None else self._max_tokens,
         }
+
+        if _supports_temperature(self._model):
+            kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if tools:
             kwargs["tools"] = tools
@@ -183,11 +195,13 @@ class OpenAIClient:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
-            "temperature": temperature if temperature is not None else self._temperature,
             token_param: max_tokens if max_tokens is not None else self._max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+
+        if _supports_temperature(self._model):
+            kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if tools:
             kwargs["tools"] = tools
