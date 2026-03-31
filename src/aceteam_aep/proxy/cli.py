@@ -508,6 +508,18 @@ def main() -> None:
     )
     wrap_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command to run (after --)")
 
+    # --- mcp-server subcommand ---
+    mcp_parser = sub.add_parser(
+        "mcp-server",
+        help="Start AEP safety as an MCP server (stdin/stdout JSON-RPC)",
+    )
+    mcp_parser.add_argument(
+        "--policy",
+        type=str,
+        default=None,
+        help="Path to AEP policy YAML file",
+    )
+
     args = parser.parse_args()
 
     # Strip leading "--" from cmd if present
@@ -522,6 +534,10 @@ def main() -> None:
         _run_keygen(args)
     elif args.command == "verify":
         _run_verify(args)
+    elif args.command == "mcp-server":
+        from ..mcp import run_mcp_server
+
+        run_mcp_server(policy_path=args.policy)
     else:
         parser.print_help()
         sys.exit(1)
