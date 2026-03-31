@@ -117,6 +117,18 @@
     </div>
   </div>
 
+  <div class="section" id="budget-section" style="display:none;">
+    <h2>Budget</h2>
+    <div style="display:flex;gap:16px;align-items:center;">
+      <div style="flex:1;">
+        <div class="bar-container" style="height:12px;margin:0;">
+          <div id="budget-bar" style="height:100%;background:#58a6ff;border-radius:4px;transition:width 0.3s;"></div>
+        </div>
+      </div>
+      <div id="budget-text" style="font-size:14px;color:#8b949e;white-space:nowrap;"></div>
+    </div>
+  </div>
+
   <div class="section">
     <h2>Safety Signals</h2>
     <div class="filter-bar" id="signal-filters"></div>
@@ -681,10 +693,27 @@ async function refresh() {
     renderSignals(document.getElementById('signals'), lastSignals);
     renderGovernance(document.getElementById('governance'), data.governance);
     renderAttestation(data.attestation);
+    renderBudget(data.budget);
     renderSpans(document.getElementById('spans'), data.spans, lastSignals);
     // Executive view
     updateCisoView(data);
   } catch (e) {}
+}
+
+function renderBudget(budget) {
+  var section = document.getElementById('budget-section');
+  if (!budget) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  var limit = budget.total || budget.per_session || 0;
+  var spent = budget.spent || 0;
+  var remaining = budget.remaining != null ? budget.remaining : limit - spent;
+  var pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
+  var bar = document.getElementById('budget-bar');
+  bar.style.width = pct + '%';
+  bar.style.background = pct > 90 ? '#da3633' : pct > 70 ? '#d29922' : '#58a6ff';
+  var label = '$' + spent.toFixed(4) + ' / $' + limit.toFixed(2);
+  if (remaining != null) label += ' ($' + remaining.toFixed(4) + ' remaining)';
+  document.getElementById('budget-text').textContent = label;
 }
 
 function renderAttestation(attest) {
