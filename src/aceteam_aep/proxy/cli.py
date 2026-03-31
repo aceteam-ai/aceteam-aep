@@ -128,6 +128,8 @@ def _run_proxy(args: argparse.Namespace) -> None:
             dashboard=not args.no_dashboard,
             sign_key=sign_key,
             signer_id=signer_id,
+            budget=getattr(args, "budget", None),
+            budget_per_session=getattr(args, "budget_per_session", None),
         )
         port = args.port or 8899
         host = args.host or "127.0.0.1"
@@ -428,6 +430,18 @@ def main() -> None:
         type=str,
         default="proxy:default",
         help="Signer identity for attestation headers (default: proxy:default)",
+    )
+    proxy_parser.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="Total budget cap in USD (returns 429 when exceeded)",
+    )
+    proxy_parser.add_argument(
+        "--budget-per-session",
+        type=float,
+        default=None,
+        help="Per-session budget cap in USD (returns 429 when exceeded)",
     )
 
     # --- keygen subcommand ---

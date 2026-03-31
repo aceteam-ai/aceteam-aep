@@ -75,6 +75,8 @@ class ProxyState:
         target_base_url: str = "https://api.openai.com",
         detectors: list[Any] | None = None,
         policy: EnforcementPolicy | dict[str, Any] | str | None = None,
+        budget: float | None = None,
+        budget_per_session: float | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
         self.cost_tracker = CostTracker()
@@ -87,6 +89,10 @@ class ProxyState:
         self._call_costs: list[Decimal] = []
         self.governance_contexts: list[dict[str, Any]] = []
         self._started_at = datetime.now(UTC)
+        self.budget = Decimal(str(budget)) if budget is not None else None
+        self.budget_per_session = (
+            Decimal(str(budget_per_session)) if budget_per_session is not None else None
+        )
 
         # Register detectors
         for det in detectors or _default_proxy_detectors():
@@ -95,6 +101,24 @@ class ProxyState:
     @property
     def cost_usd(self) -> Decimal:
         return self.cost_tracker.total_spent()
+
+    def check_budget(self) -> str | None:
+        """Check if budget is exceeded. Returns error message or None."""
+        cost = self.cost_usd
+        if self.budget is not None and cost >= self.budget:
+            return f"Total budget exceeded: ${cost:.4f} >= ${self.budget:.4f}"
+        if self.budget_per_session is not None and cost >= self.budget_per_session:
+            return f"Session budget exceeded: ${cost:.4f} >= ${self.budget_per_session:.4f}"
+        return None
+
+    @property
+    def budget_remaining(self) -> float | None:
+        """Remaining budget in USD, or None if no budget set."""
+        if self.budget is not None:
+            return float(self.budget - self.cost_usd)
+        if self.budget_per_session is not None:
+            return float(self.budget_per_session - self.cost_usd)
+        return None
 
     @property
     def latest_enforcement(self) -> EnforcementDecision:
@@ -146,6 +170,14 @@ class ProxyState:
                 for s in self.span_tracker.get_spans()
             ],
             "governance": self.governance_contexts,
+            "budget": {
+                "total": float(self.budget) if self.budget else None,
+                "per_session": float(self.budget_per_session) if self.budget_per_session else None,
+                "spent": float(self.cost_usd),
+                "remaining": self.budget_remaining,
+            }
+            if (self.budget or self.budget_per_session)
+            else None,
             "attestation": None,  # populated by proxy when signing enabled
         }
 
@@ -177,6 +209,8 @@ def create_proxy_app(
     dashboard: bool = True,
     sign_key: Any | None = None,
     signer_id: str = "proxy:default",
+    budget: float | None = None,
+    budget_per_session: float | None = None,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
@@ -184,6 +218,8 @@ def create_proxy_app(
         target_base_url=target_base_url,
         detectors=detectors,
         policy=policy,
+        budget=budget,
+        budget_per_session=budget_per_session,
     )
 
     # Attestation engine (optional — enabled when sign_key is provided)
@@ -204,9 +240,7 @@ def create_proxy_app(
                 "signer_id": attestation_engine.signer_id,
                 "chain_height": attestation_engine.chain_height,
                 "latest_hash": (
-                    attestation_engine.chain[-1]["chain_hash"]
-                    if attestation_engine.chain
-                    else None
+                    attestation_engine.chain[-1]["chain_hash"] if attestation_engine.chain else None
                 ),
             }
         return d
@@ -225,6 +259,23 @@ def create_proxy_app(
             body = json.loads(body_bytes) if body_bytes else {}
         except json.JSONDecodeError:
             body = {}
+
+        # --- BUDGET CHECK ---
+        budget_error = state.check_budget()
+        if budget_error:
+            return Response(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": f"AEP budget: {budget_error}",
+                            "type": "aep_budget_exceeded",
+                            "code": "budget_exceeded",
+                        }
+                    }
+                ),
+                status_code=429,
+                media_type="application/json",
+            )
 
         # --- PARSE AEP GOVERNANCE HEADERS ---
         aep_ctx = parse_aep_headers(request.headers)
