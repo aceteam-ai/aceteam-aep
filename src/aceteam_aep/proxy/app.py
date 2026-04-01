@@ -89,6 +89,8 @@ class ProxyState:
         self._call_costs: list[Decimal] = []
         self.governance_contexts: list[dict[str, Any]] = []
         self._started_at = datetime.now(UTC)
+        self.blocked_count = 0
+        self._avg_call_cost = Decimal("0")
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -125,6 +127,14 @@ class ProxyState:
         if self.decisions:
             return self.decisions[-1]
         return EnforcementDecision(action="pass")
+
+    @property
+    def estimated_savings(self) -> Decimal:
+        """Estimated cost saved by blocking calls before they reach the LLM."""
+        if not self._call_costs:
+            return Decimal("0")
+        avg = sum(self._call_costs) / len(self._call_costs)
+        return avg * self.blocked_count
 
     def _cost_by_span_id(self) -> dict[str, float]:
         """Build a lookup of span_id → cost in USD."""
@@ -178,6 +188,15 @@ class ProxyState:
             }
             if (self.budget or self.budget_per_session)
             else None,
+            "savings": {
+                "blocked_calls": self.blocked_count,
+                "estimated_savings_usd": float(self.estimated_savings),
+                "avg_call_cost_usd": float(
+                    sum(self._call_costs) / len(self._call_costs)
+                )
+                if self._call_costs
+                else 0.0,
+            },
             "attestation": None,  # populated by proxy when signing enabled
         }
 
@@ -309,6 +328,7 @@ def create_proxy_app(
                 state.signals.extend(input_signals)
                 state.decisions.append(input_decision)
                 state.call_count += 1
+                state.blocked_count += 1
                 log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
                 return JSONResponse(
                     status_code=400,
@@ -435,6 +455,7 @@ def create_proxy_app(
             model=model,
             usage=usage,
         )
+        state._call_costs.append(cost_node.compute_cost)
         state.span_tracker.end_span(span.span_id)
         state.call_count += 1
 
