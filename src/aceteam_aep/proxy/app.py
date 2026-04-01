@@ -90,7 +90,6 @@ class ProxyState:
         self.governance_contexts: list[dict[str, Any]] = []
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
-        self._avg_call_cost = Decimal("0")
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
