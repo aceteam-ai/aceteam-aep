@@ -1,5 +1,8 @@
 # aceteam-aep
 
+[![PyPI](https://img.shields.io/pypi/v/aceteam-aep)](https://pypi.org/project/aceteam-aep/)
+[![AEP Safe](https://img.shields.io/badge/AEP-Safe-brightgreen)](https://github.com/aceteam-ai/aceteam-aep)
+
 AceTeam™ trust & safety infrastructure for AI agents. The Agentic Execution Protocol™ (AEP™) adds cost tracking, safety detection, and enforcement to any LLM-powered tool — **zero code changes required.**
 
 ## Installation
@@ -311,6 +314,14 @@ Covers: proxy setup, routing agents (Python/OpenClaw/curl), triggering safety si
 - **xAI** (Grok)
 - **Ollama** (local models)
 - **OpenAI-compatible** (SambaNova, TheAgentic, DeepSeek)
+
+## Safety Badge
+
+Add this badge to your repo's README to show it uses AEP safety enforcement:
+
+```markdown
+[![AEP Safe](https://img.shields.io/badge/AEP-Safe-brightgreen)](https://github.com/aceteam-ai/aceteam-aep)
+```
 
 ## Trademarks
 

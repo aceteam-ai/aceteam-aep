@@ -1,0 +1,49 @@
+# AEP Policy: Education (FERPA Compliance)
+#
+# Designed for K-12, community colleges, CSU, and UC systems.
+# FERPA (Family Educational Rights and Privacy Act) protects student
+# education records from unauthorized disclosure.
+#
+# Key concerns:
+# - Student IDs, grades, transcripts must not leak to LLM providers
+# - Financial aid and disciplinary records are high-sensitivity
+# - Content must be appropriate for educational settings
+# - Cost controls for institution-funded AI usage
+#
+# Usage:
+#   aceteam-aep proxy --policy policies/education.yaml
+#   pip install aceteam-aep[safety]  # includes FERPA detector
+
+default_action: flag
+block_on: [high]
+flag_on: [medium, low]
+
+detectors:
+  # FERPA: block — student education records must never leak.
+  ferpa:
+    action: block
+    enabled: true
+
+  # PII: block — student names + context = FERPA violation.
+  # Lower threshold to catch partial matches.
+  pii:
+    action: block
+    threshold: 0.5
+    enabled: true
+
+  # Content safety: block — educational content must be appropriate.
+  content_safety:
+    action: block
+    threshold: 0.6
+    enabled: true
+
+  # Agent threats: block — school networks are sensitive.
+  agent_threat:
+    action: block
+    enabled: true
+
+  # Cost anomaly: flag — institutional budgets are tight.
+  cost_anomaly:
+    action: flag
+    multiplier: 4
+    enabled: true
