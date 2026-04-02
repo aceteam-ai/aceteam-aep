@@ -107,9 +107,70 @@
   .detector-toggle label { font-size: 12px; color: #c9d1d9; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; }
   .detector-toggle.disabled label { text-decoration: line-through; }
   .category-divider { width: 100%; font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 1px; margin: 4px 0; }
+  .setup-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+  .setup-card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; max-width: 560px; width: 90%; }
+  .setup-card h2 { color: #58a6ff; font-size: 18px; margin-bottom: 16px; }
+  .setup-card p { color: #8b949e; font-size: 14px; margin-bottom: 16px; }
+  .setup-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+  .setup-option { background: #0d1117; border: 2px solid #30363d; border-radius: 8px; padding: 16px; cursor: pointer; text-align: center; transition: border-color 0.2s; }
+  .setup-option:hover { border-color: #58a6ff; }
+  .setup-option.selected { border-color: #58a6ff; background: #0d1117; }
+  .setup-option h3 { color: #c9d1d9; font-size: 14px; margin-bottom: 4px; }
+  .setup-option p { color: #8b949e; font-size: 12px; margin: 0; }
+  .setup-input { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 12px; border-radius: 6px; font-family: inherit; font-size: 13px; margin-bottom: 8px; }
+  .setup-input:focus { border-color: #58a6ff; outline: none; }
+  .setup-btn { background: #238636; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; }
+  .setup-btn:hover { background: #2ea043; }
+  .setup-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .setup-code { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; font-family: 'SF Mono', Consolas, monospace; font-size: 12px; color: #58a6ff; position: relative; margin-bottom: 8px; word-break: break-all; }
+  .setup-copy { position: absolute; top: 6px; right: 6px; background: #30363d; border: none; color: #8b949e; padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+  .setup-copy:hover { background: #484f58; color: #c9d1d9; }
+  .setup-step { display: none; }
+  .setup-step.active { display: block; }
+  .setup-detected { color: #3fb950; font-size: 12px; margin-bottom: 8px; }
 </style>
 </head>
 <body>
+<div class="setup-overlay" id="setup-overlay" style="display:none;">
+  <div class="setup-card">
+    <div class="setup-step active" id="setup-step-1">
+      <h2>Welcome to SafeClaw</h2>
+      <p>Configure your LLM provider to get started.</p>
+      <div id="setup-detected"></div>
+      <div class="setup-options">
+        <div class="setup-option" onclick="selectSetupOption('byok', event)">
+          <h3>I have API keys</h3>
+          <p>OpenAI, Anthropic, or local</p>
+        </div>
+        <div class="setup-option" onclick="selectSetupOption('aceteam', event)">
+          <h3>Use AceTeam</h3>
+          <p>$5 free credit, no key needed</p>
+        </div>
+      </div>
+      <div id="setup-byok" style="display:none;">
+        <input class="setup-input" id="setup-api-key" type="password" placeholder="sk-... or paste your API key">
+        <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
+      </div>
+      <div id="setup-aceteam" style="display:none;">
+        <p style="color:#d29922;font-size:13px;">Coming soon. For now, paste your own API key above.</p>
+      </div>
+    </div>
+    <div class="setup-step" id="setup-step-2">
+      <h2>Point your agent here</h2>
+      <p>Add this to your terminal:</p>
+      <div class="setup-code" id="setup-export-cmd">
+        <button class="setup-copy" onclick="copySetupText('setup-export-cmd')">Copy</button>
+        export OPENAI_BASE_URL=http://localhost:8899/v1
+      </div>
+      <p style="margin-top:16px;">Using Claude Code? Add to your config:</p>
+      <div class="setup-code" id="setup-mcp-config">
+        <button class="setup-copy" onclick="copySetupText('setup-mcp-config')">Copy</button>
+        {"mcpServers":{"aceteam":{"type":"streamable-http","url":"http://localhost:8899/mcp/"}}}
+      </div>
+      <button class="setup-btn" onclick="closeSetup()" style="margin-top:16px;">Got it, start using SafeClaw</button>
+    </div>
+  </div>
+</div>
 <h1>
   AEP Dashboard <span class="live pulse">&#x25cf; live</span>
   <div class="safety-toggle">
@@ -295,6 +356,51 @@ var activeFilter = 'all';
 var lastSignals = [];
 var collapsedGroups = {};
 var safetyEnabled = true;
+
+// Setup wizard — show on first visit
+function checkFirstRun() {
+  if (localStorage.getItem('safeclaw-setup-done')) return;
+  fetch('api/state').then(function(r) { return r.json(); }).then(function(state) {
+    if (state.calls > 0) {
+      localStorage.setItem('safeclaw-setup-done', '1');
+      return;
+    }
+    document.getElementById('setup-overlay').style.display = 'flex';
+  }).catch(function() {});
+}
+
+function selectSetupOption(option, evt) {
+  var options = document.querySelectorAll('.setup-option');
+  for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
+  if (evt && evt.currentTarget) { evt.currentTarget.classList.add('selected'); }
+  document.getElementById('setup-byok').style.display = option === 'byok' ? 'block' : 'none';
+  document.getElementById('setup-aceteam').style.display = option === 'aceteam' ? 'block' : 'none';
+}
+
+function saveApiKey() {
+  var key = document.getElementById('setup-api-key').value.trim();
+  if (!key) return;
+  localStorage.setItem('safeclaw-api-key-hint', key.substring(0, 8) + '...');
+  document.getElementById('setup-step-1').classList.remove('active');
+  document.getElementById('setup-step-2').classList.add('active');
+}
+
+function copySetupText(elementId) {
+  var el = document.getElementById(elementId);
+  var copyBtn = el.querySelector('.setup-copy');
+  var fullText = el.textContent || '';
+  var btnText = copyBtn ? (copyBtn.textContent || '') : '';
+  var text = fullText.replace(btnText, '').trim();
+  navigator.clipboard.writeText(text);
+}
+
+function closeSetup() {
+  localStorage.setItem('safeclaw-setup-done', '1');
+  document.getElementById('setup-overlay').style.display = 'none';
+}
+
+// Run on page load
+checkFirstRun();
 
 function toggleSafety() {
   safetyEnabled = !safetyEnabled;
