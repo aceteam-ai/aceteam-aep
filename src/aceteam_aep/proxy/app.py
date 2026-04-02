@@ -90,6 +90,7 @@ class ProxyState:
         self.governance_contexts: list[dict[str, Any]] = []
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
+        self.safety_enabled = True
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -154,6 +155,7 @@ class ProxyState:
             "action": decision.action,
             "reason": decision.reason,
             "session_started": self._started_at.isoformat(),
+            "safety_enabled": self.safety_enabled,
             "signals": [
                 {
                     "type": s.signal_type,
@@ -315,30 +317,34 @@ def create_proxy_app(
         if "messages" in body:
             input_text = _extract_text_from_messages(body["messages"])
 
-        input_signals = state.registry.run_all(
-            input_text=input_text,
-            output_text="",
-            call_id=call_id,
-        )
+        input_signals: list[SafetySignal] = []
+        if state.safety_enabled:
+            input_signals = state.registry.run_all(
+                input_text=input_text,
+                output_text="",
+                call_id=call_id,
+            )
 
-        if input_signals:
-            input_decision = evaluate(input_signals, state.policy)
-            if input_decision.action == "block":
-                state.signals.extend(input_signals)
-                state.decisions.append(input_decision)
-                state.call_count += 1
-                state.blocked_count += 1
-                log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "error": {
-                            "message": (f"AEP safety: request blocked — {input_decision.reason}"),
-                            "type": "aep_safety_block",
-                            "code": "safety_block",
-                        }
-                    },
-                )
+            if input_signals:
+                input_decision = evaluate(input_signals, state.policy)
+                if input_decision.action == "block":
+                    state.signals.extend(input_signals)
+                    state.decisions.append(input_decision)
+                    state.call_count += 1
+                    state.blocked_count += 1
+                    log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": {
+                                "message": (
+                                    f"AEP safety: request blocked — {input_decision.reason}"
+                                ),
+                                "type": "aep_safety_block",
+                                "code": "safety_block",
+                            }
+                        },
+                    )
 
         # --- FORWARD TO TARGET API ---
         target_url = f"{state.target_base_url}{path}"
@@ -459,31 +465,38 @@ def create_proxy_app(
         state.call_count += 1
 
         # --- OUTPUT SAFETY CHECK ---
-        output_signals = state.registry.run_all(
-            input_text=input_text,
-            output_text=output_text,
-            call_id=call_id,
-            call_cost=cost_node.compute_cost,
-        )
-
-        all_signals = input_signals + output_signals
-        state.signals.extend(all_signals)
-
-        decision = evaluate(all_signals, state.policy)
-        state.decisions.append(decision)
-
-        if decision.action == "block":
-            log.warning("BLOCKED response %s: %s", call_id, decision.reason)
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": (f"AEP safety: response blocked — {decision.reason}"),
-                        "type": "aep_safety_block",
-                        "code": "safety_block",
-                    }
-                },
+        if state.safety_enabled:
+            output_signals = state.registry.run_all(
+                input_text=input_text,
+                output_text=output_text,
+                call_id=call_id,
+                call_cost=cost_node.compute_cost,
             )
+
+            all_signals = input_signals + output_signals
+            state.signals.extend(all_signals)
+
+            decision = evaluate(all_signals, state.policy)
+            state.decisions.append(decision)
+
+            if decision.action == "block":
+                log.warning("BLOCKED response %s: %s", call_id, decision.reason)
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": {
+                            "message": (
+                                f"AEP safety: response blocked — {decision.reason}"
+                            ),
+                            "type": "aep_safety_block",
+                            "code": "safety_block",
+                        }
+                    },
+                )
+        else:
+            all_signals = []
+            decision = EnforcementDecision(action="pass")
+            state.decisions.append(decision)
 
         # --- PASS THROUGH (with AEP metadata header) ---
         resp_headers = build_response_headers(
@@ -612,10 +625,45 @@ def create_proxy_app(
             media_type="application/json",
         )
 
+    # Safety toggle API — POST /aep/api/safety
+    async def safety_toggle_handler(request: Request) -> Response:
+        """Toggle safety on/off or swap the enforcement policy at runtime."""
+        try:
+            body = await request.json()
+        except Exception:
+            return Response('{"error": "invalid JSON"}', status_code=400)
+
+        # Toggle safety enabled/disabled
+        if "enabled" in body:
+            state.safety_enabled = bool(body["enabled"])
+            log.info("Safety %s", "enabled" if state.safety_enabled else "disabled")
+
+        # Hot-swap policy from inline dict
+        if "policy" in body:
+            state.policy = EnforcementPolicy.from_config(body["policy"])
+            log.info("Policy swapped at runtime")
+
+        return Response(
+            json.dumps({
+                "safety_enabled": state.safety_enabled,
+                "policy": {
+                    "default_action": state.policy.default_action,
+                    "block_on": sorted(state.policy.block_on),
+                    "flag_on": sorted(state.policy.flag_on),
+                    "detectors": {
+                        k: {"action": v.action, "threshold": v.threshold, "enabled": v.enabled}
+                        for k, v in state.policy.overrides.items()
+                    },
+                },
+            }),
+            media_type="application/json",
+        )
+
     routes.extend(
         [
             Route("/aep/api/feedback", feedback_handler, methods=["POST"]),
             Route("/aep/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
+            Route("/aep/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
         ]
     )
 
