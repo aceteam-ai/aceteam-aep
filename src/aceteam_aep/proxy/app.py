@@ -508,6 +508,15 @@ def create_proxy_app(
             trace_id=aep_ctx.trace_id,
         )
 
+        # Confidence and category headers for flagged/blocked calls
+        if all_signals:
+            scored = [s for s in all_signals if s.score is not None]
+            if scored:
+                top = max(scored, key=lambda s: s.score or 0)
+                resp_headers["X-AEP-Confidence"] = f"{top.score:.0%}"
+                resp_headers["X-AEP-Reason"] = (top.detail or "")[:200]
+                resp_headers["X-AEP-Category"] = top.detector or top.signal_type
+
         # Sign verdict and add attestation headers (if signing enabled)
         if attestation_engine is not None:
             signal_dicts = [
