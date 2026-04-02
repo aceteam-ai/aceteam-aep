@@ -42,14 +42,21 @@ src/aceteam_aep/
 │   ├── pii.py           # PII detector (HuggingFace piiranha model + regex fallback)
 │   ├── content.py       # Content safety (HuggingFace toxicity classifier)
 │   ├── cost_anomaly.py  # Cost anomaly detection (statistical, no ML)
-│   └── agent_threat.py  # Agent threat patterns (regex: port scans, subprocess, credential access)
-├── enforcement.py       # EnforcementPolicy, evaluate(), discover_policy()
+│   ├── agent_threat.py  # Agent threat patterns (regex: port scans, subprocess, credential access)
+│   ├── ferpa.py         # FERPA education records detector (student IDs, grades, transcripts)
+│   └── trust_engine.py  # Trust Engine — multi-perspective + ensemble + external judge service
+├── enforcement.py       # EnforcementPolicy, evaluate(), discover_policy(), build_detectors_from_policy()
+├── config.py            # Unified YAML config: proxy, enforcement, budget (CLI > env > YAML > defaults)
+├── feedback.py          # Signal feedback loop: verdicts → threshold recommendations
+├── instrument.py        # Global SDK patching: instrument() patches OpenAI/Anthropic at module level
+├── attestation.py       # Ed25519 signed verdicts + Merkle audit chains
+├── provenance/          # Source attribution: extractor + tracker
 ├── costs.py             # CostTracker, CostNode — per-call cost accounting
 ├── spans.py             # SpanTracker — execution trace recording
 ├── types.py             # Usage, shared types
 ├── dashboard/
-│   └── templates/       # Jinja2 HTML dashboard
-└── __init__.py          # Public API: wrap, AepSession, AepSource
+│   └── templates/       # HTML dashboard (developer + executive views, safety toggle, review buttons)
+└── __init__.py          # Public API
 ```
 
 ## Wrap Mode
@@ -120,6 +127,8 @@ Built-in detectors:
 | `ContentSafetyDetector` | s-nlp/roberta_toxicity (125MB) | Toxic, harmful, unsafe content |
 | `CostAnomalyDetector` | Statistical (no ML) | Cost spikes >Nx session average |
 | `AgentThreatDetector` | Regex patterns | Port scans, subprocess, socket, credential access |
+| `FerpaDetector` | Regex patterns | Student IDs, grades, transcripts, financial aid (FERPA) |
+| `TrustEngineDetector` | Multi-perspective LLM | Calibrated confidence across configurable dimensions |
 
 ## Enforcement Policy
 
@@ -183,3 +192,61 @@ Pre-built image: `ghcr.io/aceteam-ai/aep-proxy:latest`
 - Entrypoint: `aceteam-aep proxy`
 
 Published on tag push via GitHub Actions.
+
+## Trust Engine
+
+Multi-perspective safety evaluation with calibrated confidence scoring. Three modes:
+
+| Mode | How it works | When to use |
+|------|-------------|-------------|
+| `multi-perspective` | One LLM call, N dimensions in prompt | Default — cheap, fast |
+| `ensemble` | N separate LLM calls | Diverse model families |
+| `judge_service_url` | Calls external Flask service | R-Judge specialist judges |
+
+Dimensions are safety perspectives. Two sets:
+
+- **Default**: pii, toxicity, agent_threat, policy_compliance, irreversibility
+- **R-Judge domains**: finance, iot, software, web, program (from SJTU R-Judge benchmark, EMNLP 2024)
+
+Dimensions are toggleable per policy YAML. The external judge service (AdaExtract2 `judge_service.py`) wraps Gustavo's specialist prompts as a Flask API.
+
+## Runtime Safety Toggle
+
+`POST /aep/api/safety` enables/disables safety at runtime without restart:
+
+```bash
+# Safety off
+curl -X POST localhost:8899/aep/api/safety -d '{"enabled": false}'
+
+# Hot-swap policy
+curl -X POST localhost:8899/aep/api/safety -d '{"policy": {"default_action": "block"}}'
+
+# Check state
+curl localhost:8899/aep/api/safety
+```
+
+Dashboard has a toggle switch in the header. State is reflected in `/aep/api/state` as `safety_enabled`.
+
+## Signal Feedback Loop
+
+Operators mark flagged signals as confirmed (true positive) or dismissed (false positive):
+
+```
+POST /aep/api/feedback → JSONL store → analyze FP rate → recommend threshold → apply to YAML
+```
+
+The system uses the 90th percentile of dismissed scores (capped below lowest confirmed) to suggest thresholds. Needs 5+ verdicts per detector.
+
+## Vertical Policy Templates
+
+Pre-built policies in `policies/`:
+
+| Policy | PII Threshold | Cost Multiplier | Default Action |
+|--------|:------------:|:---------------:|:--------------:|
+| `finance.yaml` | 0.5 | 3x | block |
+| `healthcare.yaml` | 0.3 | 4x | block |
+| `legal.yaml` | 0.6 | 8x | flag |
+| `education.yaml` | 0.5 | 4x | flag |
+| `startup.yaml` | 0.8 | 10x | flag |
+| `clawcamp.yaml` | 0.6 | 5x | flag (5 R-Judge categories) |
+| `safety-off.yaml` | — | — | pass (all detectors disabled) |
