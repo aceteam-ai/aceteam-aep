@@ -216,3 +216,37 @@ def test_build_detectors_custom_multiplier() -> None:
     detectors = build_detectors_from_policy(policy)
     cost_det = next(d for d in detectors if d.name == "cost_anomaly")
     assert cost_det._multiplier == 20
+
+
+def test_build_detectors_includes_trust_engine():
+    """build_detectors_from_policy creates TrustEngineDetector when configured."""
+    from aceteam_aep.enforcement import build_detectors_from_policy, EnforcementPolicy, DetectorPolicy
+    policy = EnforcementPolicy(
+        overrides={
+            "trust_engine": DetectorPolicy(
+                action="flag",
+                enabled=True,
+                extra={"dimensions": ["finance", "program", "web"]},
+            ),
+            "agent_threat": DetectorPolicy(enabled=False),
+            "pii": DetectorPolicy(enabled=False),
+            "cost_anomaly": DetectorPolicy(enabled=False),
+            "content_safety": DetectorPolicy(enabled=False),
+        }
+    )
+    detectors = build_detectors_from_policy(policy)
+    names = [getattr(d, "name", type(d).__name__) for d in detectors]
+    assert any("trust" in n.lower() for n in names), f"No trust engine detector in {names}"
+
+
+def test_build_detectors_trust_engine_disabled():
+    """Trust Engine detector not created when disabled."""
+    from aceteam_aep.enforcement import build_detectors_from_policy, EnforcementPolicy, DetectorPolicy
+    policy = EnforcementPolicy(
+        overrides={
+            "trust_engine": DetectorPolicy(enabled=False),
+        }
+    )
+    detectors = build_detectors_from_policy(policy)
+    names = [getattr(d, "name", type(d).__name__) for d in detectors]
+    assert not any("trust" in n.lower() for n in names)

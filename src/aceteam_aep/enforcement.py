@@ -213,6 +213,26 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
         except Exception:
             pass
 
+    # Trust Engine
+    te_cfg = policy.overrides.get("trust_engine")
+    if te_cfg and te_cfg.enabled:
+        try:
+            from .safety.trust_engine import TrustEngineDetector, DOMAIN_DIMENSIONS
+
+            dims = te_cfg.extra.get("dimensions") if te_cfg.extra else None
+            if dims and isinstance(dims, list):
+                selected = {k: v for k, v in DOMAIN_DIMENSIONS.items() if k in dims}
+                if selected:
+                    threshold = te_cfg.threshold if te_cfg.threshold else 0.6
+                    detectors.append(TrustEngineDetector(
+                        dimensions=selected,
+                        threshold=threshold,
+                    ))
+            else:
+                detectors.append(TrustEngineDetector(dimensions=DOMAIN_DIMENSIONS))
+        except Exception:
+            pass
+
     return detectors
 
 
