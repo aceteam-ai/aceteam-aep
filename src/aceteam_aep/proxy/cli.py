@@ -277,6 +277,102 @@ def _load_sign_key(args: argparse.Namespace) -> tuple[object | None, str]:
     return key, signer_id
 
 
+def _run_connect(args: argparse.Namespace) -> None:
+    """Connect the local proxy to an AceTeam account."""
+    import json
+    import webbrowser
+    from pathlib import Path
+
+    print("\n  Connect to AceTeam")
+    print(f"  {'─' * 35}\n")
+
+    # Check if already connected
+    cred_dir = Path.home() / ".config" / "aceteam-aep"
+    cred_file = cred_dir / "credentials.json"
+
+    if cred_file.exists() and not args.force:
+        try:
+            creds = json.loads(cred_file.read_text())
+            if creds.get("api_key"):
+                key_hint = creds["api_key"][:8] + "..." if len(creds.get("api_key", "")) > 8 else "***"
+                print(f"  Already connected (key: {key_hint})")
+                print(f"  Use --force to reconnect.\n")
+                return
+        except Exception:
+            pass
+
+    if args.api_key:
+        # Direct API key provided
+        api_key = args.api_key
+        print(f"  Using provided API key: {api_key[:8]}...")
+    else:
+        # Interactive: open browser for auth
+        aceteam_url = args.url or "https://aceteam.ai"
+        auth_url = f"{aceteam_url}/settings/api-keys"
+        print(f"  Opening AceTeam to generate an API key...")
+        print(f"  URL: {auth_url}\n")
+
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            pass
+
+        # Prompt for the key
+        try:
+            api_key = input("  Paste your API key (act_...): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n  Cancelled.\n")
+            return
+
+        if not api_key:
+            print("  No key provided. Cancelled.\n")
+            return
+
+    # Validate the key format
+    if not api_key.startswith("act_") and not args.force:
+        print(f"  Warning: key doesn't start with 'act_'. Use --force to save anyway.")
+        return
+
+    # Save credentials
+    cred_dir.mkdir(parents=True, exist_ok=True)
+    cred_data = {
+        "api_key": api_key,
+        "url": args.url or "https://aceteam.ai",
+    }
+    cred_file.write_text(json.dumps(cred_data, indent=2))
+    os.chmod(cred_file, 0o600)
+    print(f"  ✓ Credentials saved to {cred_file}")
+
+    # Update proxy if running
+    proxy_port = args.port or 8899
+    try:
+        import httpx
+
+        r = httpx.get(f"http://localhost:{proxy_port}/aep/api/state", timeout=2)
+        if r.status_code == 200:
+            print(f"  ✓ Proxy detected on port {proxy_port}")
+            print(f"  ℹ Restart the proxy to activate AceTeam features")
+    except Exception:
+        pass
+
+    print(f"\n  Connected to AceTeam!")
+    print(f"  • Workflows and 40+ node types now available")
+    print(f"  • $5 free credit for LLM calls")
+    print(f"  • Restart proxy to activate: aceteam-aep proxy --port {proxy_port}\n")
+
+
+def _run_disconnect(args: argparse.Namespace) -> None:
+    """Remove AceTeam credentials."""
+    from pathlib import Path
+
+    cred_file = Path.home() / ".config" / "aceteam-aep" / "credentials.json"
+    if cred_file.exists():
+        cred_file.unlink()
+        print("\n  ✓ Disconnected from AceTeam. Local safety still active.\n")
+    else:
+        print("\n  Not connected to AceTeam.\n")
+
+
 def _run_keygen(args: argparse.Namespace) -> None:
     """Generate Ed25519 keypair for verdict signing."""
     from pathlib import Path
@@ -717,6 +813,25 @@ def main() -> None:
         help="Print config as JSON without writing anything",
     )
 
+    # --- connect subcommand ---
+    connect_parser = sub.add_parser(
+        "connect",
+        help="Connect the local proxy to an AceTeam account",
+    )
+    connect_parser.add_argument("--api-key", help="AceTeam API key (act_...)")
+    connect_parser.add_argument(
+        "--url", default="https://aceteam.ai", help="AceTeam URL"
+    )
+    connect_parser.add_argument(
+        "--port", type=int, default=8899, help="Proxy port"
+    )
+    connect_parser.add_argument(
+        "--force", action="store_true", help="Overwrite existing credentials"
+    )
+
+    # --- disconnect subcommand ---
+    sub.add_parser("disconnect", help="Remove AceTeam credentials")
+
     args = parser.parse_args()
 
     # Strip leading "--" from cmd if present
@@ -737,6 +852,10 @@ def main() -> None:
         run_mcp_server(policy_path=args.policy)
     elif args.command == "setup":
         _run_setup(args)
+    elif args.command == "connect":
+        _run_connect(args)
+    elif args.command == "disconnect":
+        _run_disconnect(args)
     else:
         parser.print_help()
         sys.exit(1)
