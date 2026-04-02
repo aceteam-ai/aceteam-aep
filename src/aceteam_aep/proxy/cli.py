@@ -381,6 +381,170 @@ def _print_wrap_summary(state: dict) -> None:
     print(f"  {_DIM}{'─' * 45}{_RESET}\n")
 
 
+def _run_setup(args: argparse.Namespace) -> None:
+    """Interactive setup — detect runtime, configure proxy, write Claude Code config."""
+    import json
+    import shutil
+    import webbrowser
+    from pathlib import Path
+
+    port = args.port or 8899
+
+    if args.print_config:
+        print(
+            json.dumps(
+                {
+                    "shell": f"export OPENAI_BASE_URL=http://localhost:{port}/v1",
+                    "claude_code": {
+                        "mcpServers": {
+                            "aceteam": {
+                                "type": "streamable-http",
+                                "url": f"http://localhost:{port}/mcp/",
+                            }
+                        }
+                    },
+                    "container": f"podman run -p {port}:{port} ghcr.io/aceteam-ai/aep-proxy",
+                },
+                indent=2,
+            )
+        )
+        return
+
+    print("\n  SafeClaw Setup")
+    print(f"  {'─' * 35}\n")
+
+    # Step 1: Detect container runtime
+    container_cmd = None
+    for cmd in ("podman", "docker"):
+        if shutil.which(cmd):
+            container_cmd = cmd
+            print(f"  ✓ Found {cmd}")
+            break
+
+    # Step 2: Start the proxy
+    if container_cmd and not args.no_container:
+        image = "ghcr.io/aceteam-ai/aep-proxy:latest"
+        print(f"  Starting proxy via {container_cmd}...")
+
+        run_cmd = [
+            container_cmd,
+            "run",
+            "-d",
+            "--name",
+            "safeclaw-proxy",
+            "-p",
+            f"{port}:{port}",
+        ]
+
+        # Forward API keys from environment if present
+        for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+            val = os.environ.get(key)
+            if val:
+                run_cmd.extend(["-e", f"{key}={val}"])
+                print(f"  ✓ Forwarding {key} from environment")
+
+        run_cmd.append(image)
+
+        # Remove existing container if present
+        subprocess.run([container_cmd, "rm", "-f", "safeclaw-proxy"], capture_output=True)
+
+        result = subprocess.run(run_cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"  ✓ Proxy running in container on port {port}")
+        else:
+            print(f"  ✗ Container failed: {result.stderr.strip()}")
+            print("  Falling back to native proxy...")
+            container_cmd = None
+
+    if not container_cmd or args.no_container:
+        print(f"  Starting proxy natively on port {port}...")
+        print(f"  Run: aceteam-aep proxy --port {port}")
+        print("  (Start this in a separate terminal)\n")
+
+    # Step 3: Detect and configure Claude Code
+    claude_configured = False
+    claude_config_path = Path.home() / ".claude.json"
+    claude_settings_path = Path.home() / ".claude" / "settings.json"
+
+    mcp_entry = {
+        "type": "streamable-http",
+        "url": f"http://localhost:{port}/mcp/",
+    }
+
+    for config_path in (claude_settings_path, claude_config_path):
+        if config_path.exists():
+            try:
+                import json as _json
+
+                config = _json.loads(config_path.read_text())
+                mcp_servers = config.setdefault("mcpServers", {})
+                if "aceteam" not in mcp_servers:
+                    mcp_servers["aceteam"] = mcp_entry
+                    config_path.write_text(_json.dumps(config, indent=2))
+                    print(f"  ✓ Claude Code configured: {config_path}")
+                    claude_configured = True
+                else:
+                    print(f"  ✓ Claude Code already configured: {config_path}")
+                    claude_configured = True
+                break
+            except Exception as exc:
+                print(f"  ✗ Could not update {config_path}: {exc}")
+
+    if not claude_configured:
+        print("  ℹ Claude Code not detected. Add manually:")
+        print(
+            f'    {{"mcpServers": {{"aceteam": {{"type": "streamable-http",'
+            f' "url": "http://localhost:{port}/mcp/"}}}}}}'
+        )
+
+    # Step 4: Configure shell profile
+    shell_configured = False
+    if not args.no_shell:
+        export_line = f"export OPENAI_BASE_URL=http://localhost:{port}/v1"
+        shell = os.environ.get("SHELL", "")
+        profile_candidates: list[Path] = []
+        if "zsh" in shell:
+            profile_candidates = [Path.home() / ".zshrc"]
+        elif "bash" in shell:
+            profile_candidates = [Path.home() / ".bashrc", Path.home() / ".bash_profile"]
+        elif "fish" in shell:
+            profile_candidates = [Path.home() / ".config" / "fish" / "config.fish"]
+
+        for profile in profile_candidates:
+            if profile.exists():
+                content = profile.read_text()
+                if "OPENAI_BASE_URL" not in content:
+                    with open(profile, "a") as f:
+                        f.write(f"\n# SafeClaw proxy\n{export_line}\n")
+                    print(f"  ✓ Added OPENAI_BASE_URL to {profile}")
+                    shell_configured = True
+                else:
+                    print(f"  ✓ OPENAI_BASE_URL already in {profile}")
+                    shell_configured = True
+                break
+
+    if not shell_configured and not args.no_shell:
+        print("  ℹ Add to your shell profile:")
+        print(f"    export OPENAI_BASE_URL=http://localhost:{port}/v1")
+
+    # Step 5: Open dashboard
+    dashboard_url = f"http://localhost:{port}/aep/"
+    print(f"\n  {'─' * 35}")
+    print(f"  Dashboard:  {dashboard_url}")
+    print(f"  LLM Proxy:  http://localhost:{port}/v1")
+    print(f"  MCP:        http://localhost:{port}/mcp/")
+    print()
+
+    if not args.no_browser:
+        try:
+            webbrowser.open(dashboard_url)
+            print("  ✓ Opening dashboard in browser...")
+        except Exception:
+            pass
+
+    print("\n  SafeClaw is ready. Make your first call.\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="aceteam-aep",
@@ -528,6 +692,31 @@ def main() -> None:
         help="Path to AEP policy YAML file",
     )
 
+    # --- setup subcommand ---
+    setup_parser = sub.add_parser(
+        "setup",
+        help="Interactive setup — detect runtime, configure proxy, write Claude Code config",
+    )
+    setup_parser.add_argument(
+        "--port", type=int, default=8899, help="Proxy port (default: 8899)"
+    )
+    setup_parser.add_argument(
+        "--no-container",
+        action="store_true",
+        help="Skip container detection, use native proxy",
+    )
+    setup_parser.add_argument(
+        "--no-shell", action="store_true", help="Don't modify shell profile"
+    )
+    setup_parser.add_argument(
+        "--no-browser", action="store_true", help="Don't open browser"
+    )
+    setup_parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="Print config as JSON without writing anything",
+    )
+
     args = parser.parse_args()
 
     # Strip leading "--" from cmd if present
@@ -546,6 +735,8 @@ def main() -> None:
         from ..mcp import run_mcp_server
 
         run_mcp_server(policy_path=args.policy)
+    elif args.command == "setup":
+        _run_setup(args)
     else:
         parser.print_help()
         sys.exit(1)
