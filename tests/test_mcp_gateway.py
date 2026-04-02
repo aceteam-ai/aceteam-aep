@@ -232,3 +232,93 @@ def test_fastmcp_importable():
     except ImportError:
         has_fastmcp = False
     assert has_fastmcp
+
+
+def test_mcp_check_safety_increments_call_count():
+    """Each check_safety call should increment the session call counter."""
+    import json as _json
+
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.proxy.app import create_proxy_app
+
+    app = create_proxy_app()
+    with TestClient(app) as client:
+        headers, _ = _init_mcp_session(client)
+
+        # Make two check_safety calls
+        for i in range(2):
+            resp = client.post(
+                "/mcp/mcp/",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 10 + i,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "check_safety",
+                        "arguments": {"text": f"Safe message number {i}"},
+                    },
+                },
+                headers=headers,
+            )
+            assert resp.status_code == 200
+
+        # Verify call count via get_safety_status
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_safety_status",
+                    "arguments": {},
+                },
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = _parse_sse_json(resp)
+        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
+        status = _json.loads(content)
+        assert status["calls"] >= 2, f"Expected at least 2 calls, got {status['calls']}"
+
+
+def test_mcp_set_policy_with_detectors():
+    """set_safety_policy should accept detector configuration and report updated status."""
+    import json as _json
+
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.proxy.app import create_proxy_app
+
+    app = create_proxy_app()
+    with TestClient(app) as client:
+        headers, _ = _init_mcp_session(client)
+
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 30,
+                "method": "tools/call",
+                "params": {
+                    "name": "set_safety_policy",
+                    "arguments": {
+                        "detectors": {
+                            "pii": {"enabled": False},
+                            "agent_threat": {"enabled": True, "action": "block"},
+                        }
+                    },
+                },
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = _parse_sse_json(resp)
+        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
+        result = _json.loads(content)
+        assert result["status"] == "updated"
+        detectors = result.get("policy", {}).get("detectors", {})
+        assert detectors.get("pii", {}).get("enabled") is False
+        assert detectors.get("agent_threat", {}).get("action") == "block"
