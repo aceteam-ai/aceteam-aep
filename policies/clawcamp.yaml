@@ -42,8 +42,16 @@ detectors:
     multiplier: 5
     enabled: true
 
-  # Trust Engine: flag — shows confidence percentage in dashboard
+  # Trust Engine: 5 R-Judge domain categories (toggleable independently)
+  # Each runs as a reasoning dimension in the multi-perspective prompt.
   trust_engine:
     action: flag
     threshold: 0.4
     enabled: true
+    # R-Judge categories — toggle with POST /aep/api/safety
+    dimensions:
+      - finance
+      - iot
+      - software
+      - web
+      - program
