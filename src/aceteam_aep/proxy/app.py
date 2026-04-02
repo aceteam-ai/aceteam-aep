@@ -704,6 +704,31 @@ def create_proxy_app(
         ]
     )
 
+    # Mount MCP gateway if fastmcp is installed
+    mcp_http_app = None
+    try:
+        from ..mcp_gateway import create_mcp_app
+
+        mcp_http_app = create_mcp_app(state)
+        if mcp_http_app is not None:
+            from starlette.routing import Mount
+
+            routes.append(Mount("/mcp", app=mcp_http_app))
+            log.info("MCP gateway mounted at /mcp/")
+    except Exception as exc:
+        log.debug("MCP gateway not available: %s", exc)
+
+    # Wire MCP lifespan into parent app (required by FastMCP for task group init)
+    if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def lifespan(app):
+            async with mcp_http_app.lifespan(app):
+                yield
+
+        return Starlette(routes=routes, lifespan=lifespan)
+
     return Starlette(routes=routes)
 
 

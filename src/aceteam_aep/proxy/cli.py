@@ -139,17 +139,25 @@ def _run_proxy(args: argparse.Namespace) -> None:
     if dashboard:
         dashboard_msg = f"  Dashboard:  http://localhost:{port}/aep/\n"
 
+    mcp_msg = ""
+    try:
+        import fastmcp as _  # noqa: F811,F401
+
+        mcp_msg = f"  MCP:        http://localhost:{port}/mcp/\n"
+    except ImportError:
+        pass
+
     print(
         f"\n"
-        f"  AEP Proxy\n"
+        f"  SafeClaw Gateway\n"
         f"  {'─' * 35}\n"
-        f"  Listening:  http://localhost:{port}\n"
+        f"  LLM Proxy:  http://localhost:{port}/v1\n"
         f"  Target:     {target}\n"
         f"{dashboard_msg}"
+        f"{mcp_msg}"
         f"\n"
-        f"  Usage:\n"
+        f"  Point your agent here:\n"
         f"    export OPENAI_BASE_URL=http://localhost:{port}/v1\n"
-        f"    python my_agent.py\n"
         f"\n"
     )
 
