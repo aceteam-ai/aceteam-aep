@@ -638,10 +638,17 @@ def create_proxy_app(
             state.safety_enabled = bool(body["enabled"])
             log.info("Safety %s", "enabled" if state.safety_enabled else "disabled")
 
-        # Hot-swap policy from inline dict
+        # Hot-swap policy from inline dict (not file paths — prevents path traversal)
         if "policy" in body:
-            state.policy = EnforcementPolicy.from_config(body["policy"])
-            log.info("Policy swapped at runtime")
+            policy_data = body["policy"]
+            if isinstance(policy_data, dict):
+                state.policy = EnforcementPolicy.from_dict(policy_data)
+                log.info("Policy swapped at runtime")
+            else:
+                return Response(
+                    '{"error": "policy must be a JSON object, not a file path"}',
+                    status_code=400,
+                )
 
         return Response(
             json.dumps({
