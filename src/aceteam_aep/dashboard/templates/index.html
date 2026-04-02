@@ -99,6 +99,14 @@
   .toggle-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform 0.3s; }
   .toggle-switch.on::after { transform: translateX(20px); }
   .toggle-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+  .policy-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .detector-toggle { display: flex; align-items: center; gap: 6px; background: #0d1117; padding: 6px 12px; border-radius: 6px; cursor: pointer; user-select: none; border: 1px solid #30363d; transition: border-color 0.2s; }
+  .detector-toggle:hover { border-color: #58a6ff; }
+  .detector-toggle.disabled { opacity: 0.4; }
+  .detector-toggle input[type="checkbox"] { accent-color: #58a6ff; cursor: pointer; width: 14px; height: 14px; }
+  .detector-toggle label { font-size: 12px; color: #c9d1d9; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; }
+  .detector-toggle.disabled label { text-decoration: line-through; }
+  .category-divider { width: 100%; font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 1px; margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -145,6 +153,13 @@
         </div>
       </div>
       <div id="budget-text" style="font-size:14px;color:#8b949e;white-space:nowrap;"></div>
+    </div>
+  </div>
+
+  <div class="section" id="policy-section">
+    <h2>Policy Controls</h2>
+    <div class="policy-controls" id="policy-controls">
+      <span class="empty">Loading policy...</span>
     </div>
   </div>
 
@@ -292,6 +307,166 @@ function toggleSafety() {
   var label = document.getElementById('safety-label');
   toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
   label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+}
+
+var currentPolicy = null;
+
+function fetchPolicy() {
+  fetch('api/safety')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      safetyEnabled = data.safety_enabled;
+      var toggle = document.getElementById('safety-toggle');
+      var label = document.getElementById('safety-label');
+      toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
+      label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+      currentPolicy = data.policy;
+      renderPolicyControls(data.policy);
+    })
+    .catch(function() {});
+}
+
+function renderPolicyControls(policy) {
+  var container = document.getElementById('policy-controls');
+  if (!container || !policy) return;
+  container.textContent = '';
+
+  var detectors = policy.detectors || {};
+  var detectorNames = Object.keys(detectors);
+
+  var displayNames = {
+    agent_threat: 'Agent Threat',
+    pii: 'PII Detection',
+    cost_anomaly: 'Cost Anomaly',
+    content_safety: 'Content Safety',
+    trust_engine: 'Trust Engine',
+    ferpa: 'FERPA'
+  };
+
+  var domainCategories = ['finance', 'iot', 'software', 'web', 'program'];
+  var categoryNames = {
+    finance: 'Finance', iot: 'IoT', software: 'Software', web: 'Web', program: 'Program'
+  };
+
+  if (detectorNames.length === 0) {
+    var empty = document.createElement('span');
+    empty.className = 'empty';
+    empty.textContent = 'No detectors configured';
+    container.appendChild(empty);
+    return;
+  }
+
+  detectorNames.forEach(function(name) {
+    var det = detectors[name];
+    var isEnabled = det.enabled !== false;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'detector-toggle' + (isEnabled ? '' : ' disabled');
+
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = isEnabled;
+    cb.id = 'det-' + name;
+    cb.onchange = function() { toggleDetector(name, cb.checked); };
+
+    var lbl = document.createElement('label');
+    lbl.htmlFor = 'det-' + name;
+    lbl.textContent = displayNames[name] || name;
+
+    wrap.appendChild(cb);
+    wrap.appendChild(lbl);
+    container.appendChild(wrap);
+  });
+
+  var teConfig = detectors.trust_engine;
+  if (teConfig && teConfig.enabled !== false) {
+    var divider = document.createElement('div');
+    divider.className = 'category-divider';
+    divider.textContent = 'Trust Engine Categories';
+    container.appendChild(divider);
+
+    var activeDims = (teConfig.extra && teConfig.extra.dimensions) || domainCategories;
+
+    domainCategories.forEach(function(cat) {
+      var isActive = activeDims.indexOf(cat) >= 0;
+
+      var wrap = document.createElement('div');
+      wrap.className = 'detector-toggle' + (isActive ? '' : ' disabled');
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = isActive;
+      cb.id = 'cat-' + cat;
+      cb.onchange = function() { toggleCategory(cat, cb.checked); };
+
+      var lbl = document.createElement('label');
+      lbl.htmlFor = 'cat-' + cat;
+      lbl.textContent = categoryNames[cat] || cat;
+
+      wrap.appendChild(cb);
+      wrap.appendChild(lbl);
+      container.appendChild(wrap);
+    });
+  }
+}
+
+function toggleDetector(name, enabled) {
+  if (!currentPolicy) return;
+  var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
+  if (!detectors[name]) detectors[name] = {};
+  detectors[name].enabled = enabled;
+
+  var newPolicy = {
+    default_action: currentPolicy.default_action,
+    block_on: currentPolicy.block_on,
+    flag_on: currentPolicy.flag_on,
+    detectors: detectors
+  };
+
+  fetch('api/safety', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({policy: newPolicy})
+  }).then(function(r) { return r.json(); })
+    .then(function(data) {
+      currentPolicy = data.policy;
+      renderPolicyControls(data.policy);
+    });
+}
+
+function toggleCategory(cat, enabled) {
+  if (!currentPolicy) return;
+  var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
+  var te = detectors.trust_engine || {};
+  var extra = te.extra || {};
+  var dims = extra.dimensions || ['finance', 'iot', 'software', 'web', 'program'];
+
+  if (enabled && dims.indexOf(cat) < 0) {
+    dims.push(cat);
+  } else if (!enabled) {
+    dims = dims.filter(function(d) { return d !== cat; });
+  }
+
+  extra.dimensions = dims;
+  te.extra = extra;
+  detectors.trust_engine = te;
+
+  var newPolicy = {
+    default_action: currentPolicy.default_action,
+    block_on: currentPolicy.block_on,
+    flag_on: currentPolicy.flag_on,
+    detectors: detectors
+  };
+
+  fetch('api/safety', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({policy: newPolicy})
+  }).then(function(r) { return r.json(); })
+    .then(function(data) {
+      currentPolicy = data.policy;
+      renderPolicyControls(data.policy);
+    });
 }
 
 function submitVerdict(signalType, score, verdict) {
@@ -848,6 +1023,8 @@ function renderAttestation(attest) {
 setView(currentView);
 refresh();
 setInterval(refresh, 2000);
+fetchPolicy();
+setInterval(fetchPolicy, 5000);
 </script>
 </body>
 </html>
