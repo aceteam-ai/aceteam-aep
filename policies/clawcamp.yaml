@@ -1,0 +1,49 @@
+# AEP Policy: ClawCamp Demo (April 16, 2026)
+#
+# Tuned for the live SafeClaw workshop demo. All detectors enabled
+# with thresholds set to produce clear PASS/FLAG/BLOCK outcomes
+# on the pre-scripted demo scenarios.
+#
+# Usage:
+#   aceteam-aep proxy --policy policies/clawcamp.yaml
+#
+# Demo flow:
+#   1. Safety ON  → attack blocked (this policy)
+#   2. Safety OFF → same attack passes (safety-off.yaml)
+#   3. Safety ON  → blocked again
+#   4. Show flagged item with confidence %
+#   5. Show cost savings report
+
+default_action: flag
+block_on: [high]
+flag_on: [medium]
+
+detectors:
+  # PII: block with moderate threshold — catches SSNs, emails
+  pii:
+    action: block
+    threshold: 0.6
+    enabled: true
+
+  # Content safety: flag — show confidence % on toxicity
+  content_safety:
+    action: flag
+    threshold: 0.5
+    enabled: true
+
+  # Agent threats: block — the main demo moment (nmap, reverse shell)
+  agent_threat:
+    action: block
+    enabled: true
+
+  # Cost anomaly: flag — show spend tracking
+  cost_anomaly:
+    action: flag
+    multiplier: 5
+    enabled: true
+
+  # Trust Engine: flag — shows confidence percentage in dashboard
+  trust_engine:
+    action: flag
+    threshold: 0.4
+    enabled: true
