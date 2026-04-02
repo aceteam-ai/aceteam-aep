@@ -230,3 +230,30 @@ class TestTrustEngineDetector:
         det.check(input_text="test", output_text="test", call_id="d1")
         assert len(det.last_dimension_results) == 2
         assert det.last_dimension_results[0].name == "pii"
+
+
+class TestDomainDimensions:
+    """Tests for R-Judge domain category dimensions."""
+
+    def test_domain_dimensions_defined(self):
+        from aceteam_aep.safety.trust_engine import DOMAIN_DIMENSIONS
+        expected = {"finance", "iot", "software", "web", "program"}
+        assert set(DOMAIN_DIMENSIONS.keys()) == expected
+
+    def test_domain_dimensions_have_descriptions(self):
+        from aceteam_aep.safety.trust_engine import DOMAIN_DIMENSIONS
+        for name, desc in DOMAIN_DIMENSIONS.items():
+            assert isinstance(desc, str) and len(desc) > 20, f"{name} missing description"
+
+    def test_detector_with_domain_dimensions(self):
+        from aceteam_aep.safety.trust_engine import TrustEngineDetector, DOMAIN_DIMENSIONS
+        detector = TrustEngineDetector(
+            dimensions=DOMAIN_DIMENSIONS,
+            mode="multi-perspective",
+        )
+        assert set(detector.dimensions.keys()) == set(DOMAIN_DIMENSIONS.keys())
+
+    def test_combined_default_and_domain(self):
+        from aceteam_aep.safety.trust_engine import DEFAULT_DIMENSIONS, DOMAIN_DIMENSIONS
+        combined = {**DEFAULT_DIMENSIONS, **DOMAIN_DIMENSIONS}
+        assert len(combined) == 10
