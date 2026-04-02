@@ -4,13 +4,12 @@
 # Used in the "safety on vs safety off" demo comparison.
 #
 # Usage:
-#   # Show attack passing through with safety off
 #   curl -X POST localhost:8899/aep/api/safety \
-#     -d '{"policy": "policies/safety-off.yaml"}'
+#     -d '{"enabled": false}'
 #
 #   # Then switch back to safety on
 #   curl -X POST localhost:8899/aep/api/safety \
-#     -d '{"policy": "policies/clawcamp.yaml"}'
+#     -d '{"enabled": true}'
 
 default_action: pass
 block_on: []

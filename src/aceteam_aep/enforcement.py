@@ -208,7 +208,7 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
         try:
             from .safety.content import ContentSafetyDetector
 
-            threshold = content_cfg.threshold if content_cfg and content_cfg.threshold else 0.7
+            threshold = content_cfg.threshold if content_cfg and content_cfg.threshold is not None else 0.7
             detectors.append(ContentSafetyDetector(threshold=threshold))
         except Exception:
             pass
