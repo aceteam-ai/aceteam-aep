@@ -44,11 +44,13 @@ detectors:
 
   # Trust Engine: 5 R-Judge domain categories (toggleable independently)
   # Each runs as a reasoning dimension in the multi-perspective prompt.
+  # Set judge_service_url to use Gustavo's Flask service instead of direct LLM calls.
   trust_engine:
     action: flag
     threshold: 0.4
     enabled: true
-    # R-Judge categories — toggle with POST /aep/api/safety
+    # Uncomment when judge service is running:
+    # judge_service_url: http://localhost:5050
     dimensions:
       - finance
       - iot

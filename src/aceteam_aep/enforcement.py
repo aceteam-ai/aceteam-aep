@@ -208,8 +208,44 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
         try:
             from .safety.content import ContentSafetyDetector
 
-            threshold = content_cfg.threshold if content_cfg and content_cfg.threshold is not None else 0.7
+            threshold = (
+                content_cfg.threshold
+                if content_cfg and content_cfg.threshold is not None
+                else 0.7
+            )
             detectors.append(ContentSafetyDetector(threshold=threshold))
+        except Exception:
+            pass
+
+    # FERPA (education records)
+    ferpa_cfg = policy.overrides.get("ferpa")
+    if ferpa_cfg and ferpa_cfg.enabled:
+        from .safety.ferpa import FerpaDetector
+
+        detectors.append(FerpaDetector())
+
+    # Trust Engine
+    te_cfg = policy.overrides.get("trust_engine")
+    if te_cfg and te_cfg.enabled:
+        try:
+            from .safety.trust_engine import TrustEngineDetector
+
+            te_kwargs: dict[str, Any] = {}
+            if te_cfg.threshold is not None:
+                te_kwargs["threshold"] = te_cfg.threshold
+            dims = te_cfg.extra.get("dimensions")
+            if dims:
+                te_kwargs["dimensions"] = dims
+            judge_url = te_cfg.extra.get("judge_service_url")
+            if judge_url:
+                te_kwargs["judge_service_url"] = judge_url
+            model = te_cfg.extra.get("model")
+            if model:
+                te_kwargs["model"] = model
+            base_url = te_cfg.extra.get("base_url")
+            if base_url:
+                te_kwargs["base_url"] = base_url
+            detectors.append(TrustEngineDetector(**te_kwargs))
         except Exception:
             pass
 
