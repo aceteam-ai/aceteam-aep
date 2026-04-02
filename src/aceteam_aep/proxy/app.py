@@ -625,9 +625,33 @@ def create_proxy_app(
             media_type="application/json",
         )
 
-    # Safety toggle API — POST /aep/api/safety
+    # Safety toggle API — GET/POST /aep/api/safety
     async def safety_toggle_handler(request: Request) -> Response:
-        """Toggle safety on/off or swap the enforcement policy at runtime."""
+        """Toggle safety on/off or swap the enforcement policy at runtime.
+
+        GET returns current state. POST accepts {"enabled": bool} and/or {"policy": dict}.
+        """
+        if request.method == "GET":
+            return Response(
+                json.dumps({
+                    "safety_enabled": state.safety_enabled,
+                    "policy": {
+                        "default_action": state.policy.default_action,
+                        "block_on": sorted(state.policy.block_on),
+                        "flag_on": sorted(state.policy.flag_on),
+                        "detectors": {
+                            k: {
+                                "action": v.action,
+                                "threshold": v.threshold,
+                                "enabled": v.enabled,
+                            }
+                            for k, v in state.policy.overrides.items()
+                        },
+                    },
+                }),
+                media_type="application/json",
+            )
+
         try:
             body = await request.json()
         except Exception:
