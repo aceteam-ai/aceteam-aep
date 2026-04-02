@@ -60,6 +60,7 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
             text: The text to check for safety issues.
             context: Optional context about what the agent is doing.
         """
+        state.call_count += 1
         call_id = f"mcp-{state.call_count}"
 
         signals = state.registry.run_all(

@@ -157,7 +157,74 @@ def test_mcp_check_safety_blocks_dangerous():
         assert "BLOCK" in content
 
 
-def test_cli_banner_shows_mcp():
+def test_mcp_set_safety_policy():
+    """set_safety_policy tool should toggle safety off and back on."""
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.proxy.app import create_proxy_app
+
+    app = create_proxy_app()
+    with TestClient(app) as client:
+        headers, _ = _init_mcp_session(client)
+
+        # Disable safety
+        resp = client.post("/mcp/mcp/", json={
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "set_safety_policy",
+                "arguments": {"enabled": False},
+            },
+        }, headers=headers)
+        assert resp.status_code == 200
+        data = _parse_sse_json(resp)
+        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
+        assert '"safety_enabled": false' in content
+
+        # Re-enable safety
+        resp = client.post("/mcp/mcp/", json={
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "set_safety_policy",
+                "arguments": {"enabled": True},
+            },
+        }, headers=headers)
+        assert resp.status_code == 200
+        data = _parse_sse_json(resp)
+        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
+        assert '"safety_enabled": true' in content
+
+
+def test_mcp_get_cost_summary():
+    """get_cost_summary tool should return cost data."""
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.proxy.app import create_proxy_app
+
+    app = create_proxy_app()
+    with TestClient(app) as client:
+        headers, _ = _init_mcp_session(client)
+
+        resp = client.post("/mcp/mcp/", json={
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "get_cost_summary",
+                "arguments": {},
+            },
+        }, headers=headers)
+        assert resp.status_code == 200
+        data = _parse_sse_json(resp)
+        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
+        assert "total_cost_usd" in content
+        assert "total_calls" in content
+
+
+def test_fastmcp_importable():
     """fastmcp should be installed in dev dependencies."""
     try:
         import fastmcp  # noqa: F401
