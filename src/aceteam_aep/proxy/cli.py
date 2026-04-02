@@ -335,6 +335,7 @@ def _run_connect(args: argparse.Namespace) -> None:
 
     # Save credentials
     cred_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(cred_dir, 0o700)
     cred_data = {
         "api_key": api_key,
         "url": args.url or "https://aceteam.ai",
@@ -368,7 +369,8 @@ def _run_disconnect(args: argparse.Namespace) -> None:
     cred_file = Path.home() / ".config" / "aceteam-aep" / "credentials.json"
     if cred_file.exists():
         cred_file.unlink()
-        print("\n  ✓ Disconnected from AceTeam. Local safety still active.\n")
+        print("\n  ✓ Disconnected from AceTeam. Local safety still active.")
+        print("  ℹ Restart the proxy to deactivate AceTeam features.\n")
     else:
         print("\n  Not connected to AceTeam.\n")
 
