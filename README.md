@@ -1,9 +1,17 @@
-# aceteam-aep
+# aceteam-aep — SafeClaw Gateway
 
 [![PyPI](https://img.shields.io/pypi/v/aceteam-aep)](https://pypi.org/project/aceteam-aep/)
 [![AEP Safe](https://img.shields.io/badge/AEP-Safe-brightgreen)](https://github.com/aceteam-ai/aceteam-aep)
 
 AceTeam™ trust & safety infrastructure for AI agents. The Agentic Execution Protocol™ (AEP™) adds cost tracking, safety detection, and enforcement to any LLM-powered tool — **zero code changes required.**
+
+The gateway runs a single process on one port with three interfaces:
+
+| Path | What it does |
+|------|-------------|
+| `/v1/*` | OpenAI-compatible reverse proxy with safety enforcement |
+| `/aep/` | Dashboard — cost, signals, policy controls, setup wizard |
+| `/mcp/` | MCP tools for Claude Code and any MCP client |
 
 ## Installation
 
@@ -13,21 +21,35 @@ pip install aceteam-aep[safety,proxy]      # Safety detectors + proxy
 pip install aceteam-aep                    # Core only (cost tracking + regex safety)
 ```
 
-## Quick Start — Make OpenClaw (or any agent) Safe
-
-No code changes. Just run the proxy and point your agent at it:
+## Quick Start
 
 ```bash
-# Terminal 1: Start the AEP safety proxy
-aceteam-aep proxy --port 8080
+# Install and start the gateway
+pip install aceteam-aep[all]
+aceteam-aep proxy
+```
 
-# Terminal 2: Run OpenClaw through the proxy
-export OPENAI_BASE_URL=http://localhost:8080/v1
+The gateway prints three URLs on startup:
+
+```
+  SafeClaw Gateway
+  ───────────────────────────────────
+  LLM Proxy:  http://localhost:8899/v1
+  Dashboard:  http://localhost:8899/aep/
+  MCP:        http://localhost:8899/mcp/
+```
+
+Open the dashboard — a **setup wizard** appears on first visit and walks you through pointing your agent at the proxy or configuring Claude Code.
+
+**Point an agent at the gateway:**
+
+```bash
+export OPENAI_BASE_URL=http://localhost:8899/v1
 export OPENAI_API_KEY=sk-your-key
 openclaw run "analyze these financial statements"
 ```
 
-Open **http://localhost:8080/aep/** — the dashboard shows every LLM call flowing through in real-time: cost, safety signals, and enforcement decisions.
+Open **http://localhost:8899/aep/** — every LLM call appears in real-time with cost, safety signals, and enforcement decisions.
 
 The proxy intercepts **both directions**:
 - **Incoming requests** — blocks dangerous prompts before they reach the API
@@ -246,6 +268,25 @@ One env var. Zero code changes. The agent doesn't know AEP exists.
 
 **Tested with NVIDIA NemoClaw/OpenShell:** Agent threats (port scanning, subprocess execution) blocked at the proxy before reaching the LLM. Normal calls pass through with receipts. See [aep-quickstart](https://github.com/aceteam-ai/aep-quickstart) for the full NemoClaw demo.
 
+## Claude Code Integration
+
+Add the gateway as an MCP server in your Claude Code config:
+
+```json
+{
+  "mcpServers": {
+    "aceteam": {
+      "type": "streamable-http",
+      "url": "http://localhost:8899/mcp/"
+    }
+  }
+}
+```
+
+This gives Claude four tools: `check_safety`, `get_safety_status`, `set_safety_policy`, and `get_cost_summary`. All tools share live state with the proxy — safety checks via MCP appear in the dashboard and affect traffic enforcement.
+
+See [docs/engineering/mcp-integration.md](docs/engineering/mcp-integration.md) for full tool reference.
+
 ## Dashboard
 
 Two views — toggle between Developer and Executive:
@@ -253,6 +294,10 @@ Two views — toggle between Developer and Executive:
 **Developer:** Individual calls, safety signals, cost per call, governance context, call timeline.
 
 **Executive:** Enforcement coverage %, threats blocked, compliance status (PII/threats/toxicity/anomalies), safety breakdown, cost attribution by entity.
+
+**Policy controls:** Per-detector checkboxes and per-category Trust Engine toggles — adjust enforcement without restarting. The master safety toggle in the header disables all detectors instantly.
+
+**Setup wizard:** Shows on first visit (zero calls). Guides through API key configuration and agent setup — provides the `OPENAI_BASE_URL` export command and Claude Code MCP config to copy.
 
 ```python
 client.aep.serve_dashboard()  # http://localhost:8899
