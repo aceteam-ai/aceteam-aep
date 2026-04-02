@@ -644,6 +644,7 @@ def create_proxy_app(
                                 "action": v.action,
                                 "threshold": v.threshold,
                                 "enabled": v.enabled,
+                                **({"extra": dict(v.extra)} if v.extra else {}),
                             }
                             for k, v in state.policy.overrides.items()
                         },
@@ -682,7 +683,12 @@ def create_proxy_app(
                     "block_on": sorted(state.policy.block_on),
                     "flag_on": sorted(state.policy.flag_on),
                     "detectors": {
-                        k: {"action": v.action, "threshold": v.threshold, "enabled": v.enabled}
+                        k: {
+                            "action": v.action,
+                            "threshold": v.threshold,
+                            "enabled": v.enabled,
+                            **({"extra": dict(v.extra)} if v.extra else {}),
+                        }
                         for k, v in state.policy.overrides.items()
                     },
                 },

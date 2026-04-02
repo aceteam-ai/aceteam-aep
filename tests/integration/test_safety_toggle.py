@@ -181,6 +181,44 @@ def test_policy_hot_swap():
         proc.wait(timeout=5)
 
 
+def test_disable_detector_via_policy():
+    """Disabling agent_threat via policy swap lets dangerous calls through."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        __import__("pytest").skip("OPENAI_API_KEY not set")
+
+    port = _find_free_port()
+    proc, proxy = _start_proxy(port)
+
+    try:
+        r = _call(proxy, DANGEROUS_PROMPT)
+        assert r.status_code == 400
+
+        r = httpx.post(
+            f"{proxy}/aep/api/safety",
+            json={
+                "policy": {
+                    "default_action": "flag",
+                    "block_on": ["high"],
+                    "flag_on": ["medium", "low"],
+                    "detectors": {
+                        "agent_threat": {"enabled": False, "action": "block"},
+                        "pii": {"enabled": True, "action": "block"},
+                        "cost_anomaly": {"enabled": True, "action": "flag"},
+                    },
+                }
+            },
+            timeout=5,
+        )
+        assert r.status_code == 200
+
+        r = _call(proxy, DANGEROUS_PROMPT)
+        assert r.status_code == 200
+
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+
+
 def test_confidence_headers_on_blocked():
     """Blocked calls include safety signals with scores in proxy state."""
     if not os.environ.get("OPENAI_API_KEY"):

@@ -477,3 +477,35 @@ class TestExecutiveView:
         # Cost per span exposed
         for span in state["spans"]:
             assert "cost" in span
+
+
+# ---------------------------------------------------------------------------
+# Dashboard template: policy controls section
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_has_policy_controls_section():
+    """Dashboard HTML contains the policy controls section."""
+    from pathlib import Path
+    html = (Path(__file__).parent.parent / "src" / "aceteam_aep" / "dashboard" / "templates" / "index.html").read_text()
+    assert 'id="policy-controls"' in html
+    assert 'id="policy-section"' in html
+    assert "renderPolicyControls" in html
+    assert "toggleDetector" in html
+    assert "toggleCategory" in html
+
+
+def test_dashboard_policy_controls_detector_names():
+    """Dashboard JS contains display names for all known detectors."""
+    from pathlib import Path
+    html = (Path(__file__).parent.parent / "src" / "aceteam_aep" / "dashboard" / "templates" / "index.html").read_text()
+    for name in ["Agent Threat", "PII Detection", "Cost Anomaly", "Trust Engine"]:
+        assert name in html, f"Missing detector display name: {name}"
+
+
+def test_dashboard_policy_controls_category_names():
+    """Dashboard JS contains the 5 R-Judge domain categories."""
+    from pathlib import Path
+    html = (Path(__file__).parent.parent / "src" / "aceteam_aep" / "dashboard" / "templates" / "index.html").read_text()
+    for cat in ["Finance", "IoT", "Software", "Web", "Program"]:
+        assert cat in html, f"Missing category name: {cat}"
