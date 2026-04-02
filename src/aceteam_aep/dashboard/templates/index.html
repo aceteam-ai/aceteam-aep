@@ -431,7 +431,8 @@ function toggleDetector(name, enabled) {
     .then(function(data) {
       currentPolicy = data.policy;
       renderPolicyControls(data.policy);
-    });
+    })
+    .catch(function() { fetchPolicy(); });
 }
 
 function toggleCategory(cat, enabled) {
@@ -466,7 +467,8 @@ function toggleCategory(cat, enabled) {
     .then(function(data) {
       currentPolicy = data.policy;
       renderPolicyControls(data.policy);
-    });
+    })
+    .catch(function() { fetchPolicy(); });
 }
 
 function submitVerdict(signalType, score, verdict) {
