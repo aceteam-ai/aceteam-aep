@@ -441,6 +441,8 @@ class TrustEngineDetector:
         # Ensemble mode
         mode: str = "multi-perspective",
         judges: list[dict[str, Any] | JudgeConfig] | None = None,
+        # External judge service (e.g., R-Judge Flask service)
+        judge_service_url: str | None = None,
         # Shared
         threshold: float = 0.6,
         cache_ttl: float = 300.0,
@@ -451,6 +453,7 @@ class TrustEngineDetector:
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
+        self._judge_service_url = judge_service_url
         self._threshold = threshold
         self._cache = VerdictCache(ttl_seconds=cache_ttl)
         self._max_workers = max_workers
@@ -497,7 +500,9 @@ class TrustEngineDetector:
         if cached is not None:
             return cached
 
-        if self._mode == "multi-perspective":
+        if self._judge_service_url:
+            p_safe = self._eval_judge_service(input_text, output_text)
+        elif self._mode == "multi-perspective":
             p_safe = self._eval_multi_perspective(input_text, output_text)
         else:
             p_safe = self._eval_ensemble(input_text, output_text)
@@ -505,6 +510,45 @@ class TrustEngineDetector:
         signals = self._produce_signals(p_safe, call_id)
         self._cache.put(input_text, output_text, signals)
         return signals
+
+    def _eval_judge_service(
+        self, input_text: str, output_text: str
+    ) -> float:
+        """Call external R-Judge Flask service."""
+        import httpx
+
+        categories = [
+            n for n in self._dimensions
+            if n in ("finance", "iot", "software", "web", "program")
+        ] or None
+
+        try:
+            resp = httpx.post(
+                f"{self._judge_service_url}/judge",
+                json={
+                    "input_text": input_text[:2000],
+                    "output_text": output_text[:2000],
+                    "categories": categories,
+                },
+                timeout=30.0,
+            )
+            data = resp.json()
+            conf = data.get("confidence", 0.5)
+            p_safe = conf if data.get("safe") else 1 - conf
+
+            self._last_dimension_results = [
+                DimensionResult(
+                    name=cat,
+                    safe=res.get("safe", True),
+                    confidence=res.get("confidence", 0.5),
+                    reasoning=res.get("reasoning", ""),
+                )
+                for cat, res in data.get("category_results", {}).items()
+            ]
+            return p_safe
+        except Exception as e:
+            log.warning("Judge service call failed: %s", e)
+            return 0.5
 
     def _eval_multi_perspective(self, input_text: str, output_text: str) -> float:
         """Single model call with multiple dimensions."""
