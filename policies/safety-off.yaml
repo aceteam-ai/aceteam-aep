@@ -1,0 +1,31 @@
+# AEP Policy: Safety OFF (demo comparison mode)
+#
+# All detectors disabled. Calls pass through with cost tracking only.
+# Used in the "safety on vs safety off" demo comparison.
+#
+# Usage:
+#   # Show attack passing through with safety off
+#   curl -X POST localhost:8899/aep/api/safety \
+#     -d '{"policy": "policies/safety-off.yaml"}'
+#
+#   # Then switch back to safety on
+#   curl -X POST localhost:8899/aep/api/safety \
+#     -d '{"policy": "policies/clawcamp.yaml"}'
+
+default_action: pass
+block_on: []
+flag_on: []
+
+detectors:
+  pii:
+    enabled: false
+  content_safety:
+    enabled: false
+  agent_threat:
+    enabled: false
+  cost_anomaly:
+    enabled: false
+  ferpa:
+    enabled: false
+  trust_engine:
+    enabled: false

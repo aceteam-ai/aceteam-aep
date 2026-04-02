@@ -84,11 +84,30 @@
   .entity-detail { color: #8b949e; font-size: 12px; }
   .entity-cost { color: #58a6ff; font-size: 13px; font-weight: bold; }
   .session-info { font-size: 12px; color: #484f58; margin-bottom: 16px; }
+  .confidence-pct { font-size: 12px; font-weight: bold; margin-left: auto; }
+  .confidence-high { color: #da3633; }
+  .confidence-med { color: #d29922; }
+  .confidence-low { color: #3fb950; }
+  .review-btns { display: flex; gap: 4px; margin-left: 8px; }
+  .review-btn { padding: 2px 8px; font-size: 10px; border-radius: 3px; border: none; cursor: pointer; font-family: inherit; }
+  .review-btn-confirm { background: #da3633; color: #fff; }
+  .review-btn-dismiss { background: #238636; color: #fff; }
+  .review-btn:hover { opacity: 0.8; }
+  .safety-toggle { display: flex; align-items: center; gap: 8px; margin-left: 16px; }
+  .toggle-switch { position: relative; width: 40px; height: 20px; background: #da3633; border-radius: 10px; cursor: pointer; transition: background 0.3s; }
+  .toggle-switch.on { background: #238636; }
+  .toggle-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform 0.3s; }
+  .toggle-switch.on::after { transform: translateX(20px); }
+  .toggle-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
 </style>
 </head>
 <body>
 <h1>
   AEP Dashboard <span class="live pulse">&#x25cf; live</span>
+  <div class="safety-toggle">
+    <span class="toggle-label" id="safety-label">Safety ON</span>
+    <div class="toggle-switch on" id="safety-toggle" onclick="toggleSafety()"></div>
+  </div>
   <div class="view-toggle">
     <button id="btn-dev" class="active" onclick="setView('dev')">Developer</button>
     <button id="btn-ciso" onclick="setView('ciso')">Executive</button>
@@ -260,6 +279,28 @@ var currentView = 'dev';
 var activeFilter = 'all';
 var lastSignals = [];
 var collapsedGroups = {};
+var safetyEnabled = true;
+
+function toggleSafety() {
+  safetyEnabled = !safetyEnabled;
+  fetch('api/safety', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled: safetyEnabled})
+  });
+  var toggle = document.getElementById('safety-toggle');
+  var label = document.getElementById('safety-label');
+  toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
+  label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+}
+
+function submitVerdict(signalType, score, verdict) {
+  fetch('api/feedback', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({signal_type: signalType, score: score, verdict: verdict})
+  });
+}
 
 function setView(view) {
   currentView = view;
@@ -402,12 +443,37 @@ function renderSignalList(container, signals) {
     detail.textContent = esc(s.type) + ': ' + esc(s.detail);
     row.appendChild(detail);
 
-    // Score badge
+    // Confidence percentage for trust_engine signals, score badge for others
     if (s.score !== null && s.score !== undefined) {
-      var scoreBadge = document.createElement('span');
-      scoreBadge.className = 'score-badge';
-      scoreBadge.textContent = '(' + (s.score <= 1 ? s.score.toFixed(2) : s.score.toFixed(1) + 'x') + ')';
-      row.appendChild(scoreBadge);
+      if (s.type === 'trust_engine' && s.score <= 1) {
+        var confPct = document.createElement('span');
+        var pct = Math.round(s.score * 100);
+        confPct.className = 'confidence-pct' + (pct >= 70 ? ' confidence-high' : pct >= 40 ? ' confidence-med' : ' confidence-low');
+        confPct.textContent = pct + '% unsafe';
+        row.appendChild(confPct);
+      } else {
+        var scoreBadge = document.createElement('span');
+        scoreBadge.className = 'score-badge';
+        scoreBadge.textContent = '(' + (s.score <= 1 ? s.score.toFixed(2) : s.score.toFixed(1) + 'x') + ')';
+        row.appendChild(scoreBadge);
+      }
+    }
+
+    // Review buttons for flagged signals (medium severity)
+    if (s.severity === 'medium') {
+      var btns = document.createElement('span');
+      btns.className = 'review-btns';
+      var confirmBtn = document.createElement('button');
+      confirmBtn.className = 'review-btn review-btn-confirm';
+      confirmBtn.textContent = 'Confirm';
+      confirmBtn.onclick = function() { submitVerdict(s.type, s.score, 'confirmed'); btns.textContent = 'Confirmed'; };
+      btns.appendChild(confirmBtn);
+      var dismissBtn = document.createElement('button');
+      dismissBtn.className = 'review-btn review-btn-dismiss';
+      dismissBtn.textContent = 'Dismiss';
+      dismissBtn.onclick = function() { submitVerdict(s.type, s.score, 'dismissed'); btns.textContent = 'Dismissed'; };
+      btns.appendChild(dismissBtn);
+      row.appendChild(btns);
     }
 
     container.appendChild(row);
@@ -704,6 +770,12 @@ async function refresh() {
     var res = await fetch('api/state');
     var data = await res.json();
     lastSignals = data.signals || [];
+    // Sync safety toggle state
+    if (data.safety_enabled !== undefined && data.safety_enabled !== safetyEnabled) {
+      safetyEnabled = data.safety_enabled;
+      document.getElementById('safety-toggle').className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
+      document.getElementById('safety-label').textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+    }
     // Developer view
     document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
     document.getElementById('calls').textContent = String(data.calls);
