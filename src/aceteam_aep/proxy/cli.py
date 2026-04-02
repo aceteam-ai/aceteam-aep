@@ -571,12 +571,21 @@ def _run_setup(args: argparse.Namespace) -> None:
         if config_path.exists():
             try:
                 import json as _json
+                import tempfile
 
                 config = _json.loads(config_path.read_text())
                 mcp_servers = config.setdefault("mcpServers", {})
                 if "aceteam" not in mcp_servers:
                     mcp_servers["aceteam"] = mcp_entry
-                    config_path.write_text(_json.dumps(config, indent=2))
+                    tmp = tempfile.NamedTemporaryFile(
+                        mode="w",
+                        dir=config_path.parent,
+                        delete=False,
+                        suffix=".tmp",
+                    )
+                    tmp.write(_json.dumps(config, indent=2))
+                    tmp.close()
+                    os.replace(tmp.name, str(config_path))
                     print(f"  ✓ Claude Code configured: {config_path}")
                     claude_configured = True
                 else:
@@ -596,15 +605,20 @@ def _run_setup(args: argparse.Namespace) -> None:
     # Step 4: Configure shell profile
     shell_configured = False
     if not args.no_shell:
-        export_line = f"export OPENAI_BASE_URL=http://localhost:{port}/v1"
         shell = os.environ.get("SHELL", "")
         profile_candidates: list[Path] = []
-        if "zsh" in shell:
+        if "fish" in shell:
+            # Fish uses set -gx, not export
+            export_line = f"set -gx OPENAI_BASE_URL http://localhost:{port}/v1"
+            profile_candidates = [Path.home() / ".config" / "fish" / "config.fish"]
+        elif "zsh" in shell:
+            export_line = f"export OPENAI_BASE_URL=http://localhost:{port}/v1"
             profile_candidates = [Path.home() / ".zshrc"]
         elif "bash" in shell:
+            export_line = f"export OPENAI_BASE_URL=http://localhost:{port}/v1"
             profile_candidates = [Path.home() / ".bashrc", Path.home() / ".bash_profile"]
-        elif "fish" in shell:
-            profile_candidates = [Path.home() / ".config" / "fish" / "config.fish"]
+        else:
+            export_line = f"export OPENAI_BASE_URL=http://localhost:{port}/v1"
 
         for profile in profile_candidates:
             if profile.exists():
