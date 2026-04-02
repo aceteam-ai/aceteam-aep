@@ -834,6 +834,21 @@ def main() -> None:
     # --- disconnect subcommand ---
     sub.add_parser("disconnect", help="Remove AceTeam credentials")
 
+    # --- judge-service subcommand ---
+    judge_parser = sub.add_parser(
+        "judge-service",
+        help="Start the local 5-category safety judge service",
+    )
+    judge_parser.add_argument(
+        "--port", type=int, default=5000, help="Judge service port (default: 5000)"
+    )
+    judge_parser.add_argument(
+        "--model", default="gpt-4o-mini", help="LLM model for judging (default: gpt-4o-mini)"
+    )
+    judge_parser.add_argument(
+        "--base-url", default=None, help="OpenAI-compatible API base URL (for local models)"
+    )
+
     args = parser.parse_args()
 
     # Strip leading "--" from cmd if present
@@ -858,6 +873,14 @@ def main() -> None:
         _run_connect(args)
     elif args.command == "disconnect":
         _run_disconnect(args)
+    elif args.command == "judge-service":
+        from ..judge_service import run_judge_service
+
+        run_judge_service(
+            port=args.port,
+            model=args.model,
+            base_url=args.base_url,
+        )
     else:
         parser.print_help()
         sys.exit(1)
