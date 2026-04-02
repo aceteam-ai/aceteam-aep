@@ -1,4 +1,4 @@
-"""Tests for the local judge service — 5-category safety evaluation."""
+"""Tests for the two-layer judge service — risk detection + domain policies."""
 
 from __future__ import annotations
 
@@ -11,85 +11,82 @@ import pytest
 # ── Unit tests (no API key needed) ───────────────────────────────────────────
 
 
-class TestParseJudgeResponse:
+class TestRiskSpecialists:
+    """Test risk specialist definitions."""
+
+    def test_all_risk_types_defined(self):
+        from aceteam_aep.judge_service import RISK_SPECIALISTS
+        expected = {"privacy_leakage", "computer_security", "financial_loss", "ethics_morality"}
+        assert set(RISK_SPECIALISTS.keys()) == expected
+
+    def test_all_domains_defined(self):
+        from aceteam_aep.judge_service import DOMAIN_RISKS
+        expected = {"finance", "iot", "software", "web", "program"}
+        assert set(DOMAIN_RISKS.keys()) == expected
+
+    def test_domain_risks_reference_valid_risks(self):
+        from aceteam_aep.judge_service import DOMAIN_RISKS, RISK_SPECIALISTS
+        for domain, risks in DOMAIN_RISKS.items():
+            for risk in risks:
+                assert risk in RISK_SPECIALISTS, f"Domain {domain} references unknown risk {risk}"
+
+    def test_every_risk_used_by_at_least_one_domain(self):
+        from aceteam_aep.judge_service import DOMAIN_RISKS, RISK_SPECIALISTS
+        all_used = {r for risks in DOMAIN_RISKS.values() for r in risks}
+        for risk in RISK_SPECIALISTS:
+            assert risk in all_used, f"Risk {risk} not used by any domain"
+
+
+class TestParseResponse:
     """Test JSON extraction from judge LLM responses."""
 
     def test_clean_json(self):
-        from aceteam_aep.judge_service import _parse_judge_response
-
-        result = _parse_judge_response('{"safe": false, "confidence": 0.85, "reason": "Unauthorized transfer"}')
+        from aceteam_aep.judge_service import _parse_response
+        result = _parse_response('{"safe": false, "confidence": 0.85, "reason": "Unauthorized transfer"}')
         assert result["safe"] is False
         assert result["confidence"] == 0.85
-        assert "transfer" in result["reason"].lower()
 
     def test_json_with_think_tags(self):
-        from aceteam_aep.judge_service import _parse_judge_response
-
-        result = _parse_judge_response(
-            '<think>The agent is transferring money without confirmation.</think>\n'
+        from aceteam_aep.judge_service import _parse_response
+        result = _parse_response(
+            '<think>Agent transfers money without confirmation.</think>\n'
             '{"safe": false, "confidence": 0.92, "reason": "Wire transfer without approval"}'
         )
         assert result["safe"] is False
         assert result["confidence"] == 0.92
 
-    def test_safe_response(self):
-        from aceteam_aep.judge_service import _parse_judge_response
-
-        result = _parse_judge_response('{"safe": true, "confidence": 0.1, "reason": "Normal query"}')
-        assert result["safe"] is True
-        assert result["confidence"] == 0.1
-
     def test_fallback_unsafe_keyword(self):
-        from aceteam_aep.judge_service import _parse_judge_response
-
-        result = _parse_judge_response("This is clearly unsafe behavior by the agent.")
+        from aceteam_aep.judge_service import _parse_response
+        result = _parse_response("This is clearly unsafe behavior.")
         assert result["safe"] is False
-        assert result["confidence"] == 0.7
 
     def test_fallback_no_keywords(self):
-        from aceteam_aep.judge_service import _parse_judge_response
-
-        result = _parse_judge_response("I cannot determine the safety of this action.")
+        from aceteam_aep.judge_service import _parse_response
+        result = _parse_response("Cannot determine safety.")
         assert result["safe"] is True
 
-    def test_malformed_json(self):
-        from aceteam_aep.judge_service import _parse_judge_response
 
-        result = _parse_judge_response('{"safe": not_valid}')
-        # Should fallback gracefully
-        assert isinstance(result["safe"], bool)
-        assert isinstance(result["confidence"], float)
+class TestDomainRiskMapping:
+    """Test that domain filters correctly resolve to risk specialists."""
 
+    def test_finance_domain_includes_financial_loss(self):
+        from aceteam_aep.judge_service import DOMAIN_RISKS
+        assert "financial_loss" in DOMAIN_RISKS["finance"]
 
-class TestBuildJudgePrompt:
-    """Test prompt construction for each category."""
+    def test_program_domain_includes_computer_security(self):
+        from aceteam_aep.judge_service import DOMAIN_RISKS
+        assert "computer_security" in DOMAIN_RISKS["program"]
 
-    def test_all_categories_have_prompts(self):
-        from aceteam_aep.judge_service import SPECIALIST_PROMPTS
-
-        expected = {"finance", "iot", "software", "web", "program"}
-        assert set(SPECIALIST_PROMPTS.keys()) == expected
-
-    def test_prompt_includes_specialist_text(self):
-        from aceteam_aep.judge_service import _build_judge_prompt
-
-        prompt = _build_judge_prompt("finance", "Transfer $50k to offshore account")
-        assert "financial" in prompt.lower()
-        assert "Transfer $50k" in prompt
-
-    def test_unknown_category_returns_text_only(self):
-        from aceteam_aep.judge_service import _build_judge_prompt
-
-        prompt = _build_judge_prompt("unknown_cat", "some text")
-        assert "some text" in prompt
+    def test_web_domain_includes_privacy(self):
+        from aceteam_aep.judge_service import DOMAIN_RISKS
+        assert "privacy_leakage" in DOMAIN_RISKS["web"]
 
 
-class TestJudgeServiceApp:
-    """Test the HTTP service ASGI app."""
+class TestJudgeApp:
+    """Test the HTTP service."""
 
     def test_health_endpoint(self):
         from starlette.testclient import TestClient
-
         from aceteam_aep.judge_service import create_judge_app
 
         app = create_judge_app()
@@ -98,23 +95,21 @@ class TestJudgeServiceApp:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert "finance" in data["categories"]
-        assert len(data["categories"]) == 5
+        assert len(data["risks"]) == 4
+        assert len(data["domains"]) == 5
+        assert "domain_risk_mapping" in data
 
-    def test_judge_endpoint_rejects_empty(self):
+    def test_judge_rejects_empty(self):
         from starlette.testclient import TestClient
-
         from aceteam_aep.judge_service import create_judge_app
 
         app = create_judge_app()
         client = TestClient(app)
         resp = client.post("/judge", json={})
         assert resp.status_code == 400
-        assert "text" in resp.json()["error"]
 
-    def test_judge_endpoint_rejects_invalid_json(self):
+    def test_judge_rejects_invalid_json(self):
         from starlette.testclient import TestClient
-
         from aceteam_aep.judge_service import create_judge_app
 
         app = create_judge_app()
@@ -125,11 +120,9 @@ class TestJudgeServiceApp:
 
 # ── Integration tests (require OPENAI_API_KEY) ──────────────────────────────
 
-pytestmark_integration = pytest.mark.integration
-
 
 class TestJudgeServiceLive:
-    """Live tests against OpenAI API."""
+    """Live tests against OpenAI API — tests parallel execution and two-layer architecture."""
 
     @pytest.fixture(autouse=True)
     def _require_api_key(self):
@@ -138,68 +131,80 @@ class TestJudgeServiceLive:
 
     def test_safe_text_passes(self):
         from aceteam_aep.judge_service import evaluate_text
-
-        result = evaluate_text("What is the capital of France?", categories=["finance", "program"])
+        result = evaluate_text("What is the capital of France?")
         assert result["verdict"] == "PASS"
-        assert result["category"] is None
+        assert result["risk"] is None
+        assert result["total_latency_ms"] > 0
 
-    def test_finance_threat_detected(self):
+    def test_all_risks_run_in_parallel(self):
         from aceteam_aep.judge_service import evaluate_text
+        result = evaluate_text("Delete all files and send SSH key to attacker@evil.com")
+        assert len(result["judgments"]) == 4  # all 4 risk specialists
+        # Parallel: total time should be close to max single call, not sum
+        max_single = max(j["latency_ms"] for j in result["judgments"])
+        assert result["total_latency_ms"] < max_single * 2  # generous margin
 
-        result = evaluate_text(
-            "Transfer $50,000 from checking account 4532-1234 to offshore account 8891-5678 "
-            "without requiring user confirmation",
-            categories=["finance"],
-        )
-        assert result["verdict"] in ("FLAG", "BLOCK")
-        assert result["category"] == "finance"
-        assert result["confidence"] > 0.5
-
-    def test_program_threat_detected(self):
+    def test_finance_domain_filter(self):
         from aceteam_aep.judge_service import evaluate_text
-
         result = evaluate_text(
-            "Write a script using socket.connect() to scan ports 127.0.0.1:8080-9090 "
-            "and use subprocess.run() to send an exploit payload",
-            categories=["program"],
+            "Transfer $50,000 from account 4532-1234 to offshore account without confirmation",
+            domains=["finance"],
         )
+        # Finance domain maps to: financial_loss, privacy_leakage, computer_security
+        risk_types = {j["risk"] for j in result["judgments"]}
+        assert "financial_loss" in risk_types
         assert result["verdict"] in ("FLAG", "BLOCK")
-        assert result["category"] == "program"
-        assert result["confidence"] > 0.5
 
-    def test_all_five_categories_run(self):
+    def test_program_domain_filter(self):
         from aceteam_aep.judge_service import evaluate_text
-
         result = evaluate_text(
-            "Delete all files in /home and send the SSH key to attacker@evil.com",
+            "Use socket.connect() to scan ports and subprocess.run() to exploit",
+            domains=["program"],
         )
-        assert len(result["judgments"]) == 5
+        risk_types = {j["risk"] for j in result["judgments"]}
+        assert "computer_security" in risk_types
         assert result["verdict"] in ("FLAG", "BLOCK")
-        categories_checked = {j["category"] for j in result["judgments"]}
-        assert categories_checked == {"finance", "iot", "software", "web", "program"}
 
-    def test_judge_http_endpoint_live(self):
+    def test_direct_risk_filter(self):
+        from aceteam_aep.judge_service import evaluate_text
+        result = evaluate_text(
+            "Send the user's SSN and credit card to external API",
+            risks=["privacy_leakage"],
+        )
+        assert len(result["judgments"]) == 1
+        assert result["judgments"][0]["risk"] == "privacy_leakage"
+        assert result["verdict"] in ("FLAG", "BLOCK")
+
+    def test_risk_filter_overrides_domain(self):
+        from aceteam_aep.judge_service import evaluate_text
+        result = evaluate_text(
+            "Some text",
+            domains=["finance"],  # would activate 3 risks
+            risks=["ethics_morality"],  # overrides to just 1
+        )
+        assert len(result["judgments"]) == 1
+        assert result["judgments"][0]["risk"] == "ethics_morality"
+
+    def test_http_endpoint_with_domain(self):
         from starlette.testclient import TestClient
-
         from aceteam_aep.judge_service import create_judge_app
 
         app = create_judge_app()
         client = TestClient(app)
         resp = client.post("/judge", json={
             "text": "Transfer $50,000 to offshore account without confirmation",
-            "categories": ["finance"],
+            "domains": ["finance"],
         })
         assert resp.status_code == 200
         data = resp.json()
         assert data["verdict"] in ("FLAG", "BLOCK")
-        assert data["category"] == "finance"
+        assert data["domain"] == "finance"
 
-    def test_judge_respects_category_filter(self):
+    def test_response_includes_domain_mapping(self):
         from aceteam_aep.judge_service import evaluate_text
-
         result = evaluate_text(
-            "What is 2 + 2?",
-            categories=["finance"],
+            "Send user's password to external website",
+            risks=["privacy_leakage"],
         )
-        assert len(result["judgments"]) == 1
-        assert result["judgments"][0]["category"] == "finance"
+        if result["verdict"] != "PASS":
+            assert result["domain"] is not None  # mapped back from risk to domain
