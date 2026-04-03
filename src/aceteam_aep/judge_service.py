@@ -31,12 +31,103 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+
+# ── Feedback Store ──
+
+
+class FeedbackStore:
+    """Vector-backed feedback store using LanceDB for semantic similarity search."""
+
+    def __init__(self, db_path: str = "~/.config/aceteam-aep/feedback.lance") -> None:
+        self._db: Any = None
+        self._table: Any = None
+        self._db_path = os.path.expanduser(db_path)
+        self._schema: Any = None
+
+    def _ensure_db(self) -> None:
+        if self._db is not None:
+            return
+        try:
+            import lancedb
+            from lancedb.embeddings import get_registry
+            from lancedb.pydantic import LanceModel, Vector
+
+            openai_embed = get_registry().get("openai").create(name="text-embedding-3-small")
+
+            class FeedbackEntry(LanceModel):
+                text: str = openai_embed.SourceField()
+                vector: Vector(1536) = openai_embed.VectorField()  # type: ignore[valid-type]
+                verdict: str
+                reason: str
+                risk: str
+                confidence: float
+                timestamp: float
+
+            self._schema = FeedbackEntry
+            self._db = lancedb.connect(self._db_path)
+            self._table = self._db.create_table("feedback", schema=FeedbackEntry, exist_ok=True)
+        except ImportError:
+            log.info(
+                "lancedb not installed — feedback store disabled. "
+                "Install with: pip install aceteam-aep[feedback]"
+            )
+        except Exception as e:
+            log.warning("Failed to initialize feedback store: %s", e)
+
+    def add(
+        self,
+        text: str,
+        verdict: str,
+        reason: str = "",
+        risk: str = "",
+        confidence: float = 0.0,
+    ) -> None:
+        self._ensure_db()
+        if self._table is None:
+            return
+        try:
+            self._table.add(
+                [
+                    {
+                        "text": text,
+                        "verdict": verdict,
+                        "reason": reason,
+                        "risk": risk,
+                        "confidence": confidence,
+                        "timestamp": time.time(),
+                    }
+                ]
+            )
+        except Exception as e:
+            log.warning("Failed to store feedback: %s", e)
+
+    def search(self, query: str, risk: str | None = None, limit: int = 3) -> list[dict]:
+        self._ensure_db()
+        if self._table is None or self._table.count_rows() == 0:
+            return []
+        try:
+            results = self._table.search(query).limit(limit).to_list()
+            if risk:
+                results = [r for r in results if r.get("risk") == risk]
+            return results
+        except Exception as e:
+            log.warning("Feedback search failed: %s", e)
+            return []
+
+    @property
+    def count(self) -> int:
+        self._ensure_db()
+        if self._table is None:
+            return 0
+        return self._table.count_rows()
 
 # ── Risk-Type Specialists (Gustavo's approach, multi_specialist_approach branch) ──
 
@@ -108,9 +199,29 @@ JUDGE_SYSTEM = (
 )
 
 
-def _build_prompt(risk_key: str, text: str) -> str:
+def _build_prompt(
+    risk_key: str, text: str, feedback_store: FeedbackStore | None = None
+) -> str:
     specialist = RISK_SPECIALISTS.get(risk_key, "")
-    return f"{specialist}\n\nEvaluate this agent interaction:\n\n{text}"
+
+    feedback_section = ""
+    if feedback_store:
+        similar = feedback_store.search(text, risk=risk_key, limit=3)
+        denied = [f for f in similar if f.get("verdict") == "denied"]
+        approved = [f for f in similar if f.get("verdict") == "approved"]
+
+        if denied:
+            feedback_section += "\n\n**Previous human decisions on similar actions:**\n"
+            for d in denied:
+                feedback_section += f'- DENIED: "{d["text"][:150]}" — Reason: {d["reason"]}\n'
+            feedback_section += "\nWeight these prior human decisions heavily in your evaluation.\n"
+
+        if approved:
+            feedback_section += "\n**Previously approved safe actions:**\n"
+            for a in approved:
+                feedback_section += f'- APPROVED: "{a["text"][:150]}" — Reason: {a["reason"]}\n'
+
+    return f"{specialist}{feedback_section}\n\nEvaluate this agent interaction:\n\n{text}"
 
 
 def _parse_response(response_text: str) -> dict[str, Any]:
@@ -139,11 +250,12 @@ def _call_judge(
     model: str,
     base_url: str,
     api_key: str,
+    feedback_store: FeedbackStore | None = None,
 ) -> dict[str, Any]:
     """Call a single risk specialist. Designed to run in a thread."""
     import httpx
 
-    prompt = _build_prompt(risk_key, text)
+    prompt = _build_prompt(risk_key, text, feedback_store=feedback_store)
     start = time.monotonic()
     try:
         resp = httpx.post(
@@ -186,6 +298,7 @@ def evaluate_text(
     model: str = "gpt-4o-mini",
     base_url: str | None = None,
     api_key: str | None = None,
+    feedback_store: FeedbackStore | None = None,
 ) -> dict[str, Any]:
     """Run risk specialists in parallel and return aggregated verdict.
 
@@ -196,6 +309,7 @@ def evaluate_text(
         model: LLM model for judging.
         base_url: OpenAI-compatible API base URL.
         api_key: API key.
+        feedback_store: Optional FeedbackStore for few-shot injection.
     """
     if api_key is None:
         import os
@@ -221,7 +335,9 @@ def evaluate_text(
 
     with ThreadPoolExecutor(max_workers=len(active_risks)) as pool:
         futures = {
-            pool.submit(_call_judge, risk, text, model, target, api_key): risk
+            pool.submit(
+                _call_judge, risk, text, model, target, api_key, feedback_store
+            ): risk
             for risk in active_risks
         }
         for future in as_completed(futures):
@@ -273,6 +389,8 @@ def create_judge_app(
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
+    feedback_store = FeedbackStore()
+
     async def judge_handler(request: Request) -> JSONResponse:
         try:
             body = await request.json()
@@ -290,6 +408,7 @@ def create_judge_app(
             model=model,
             base_url=base_url,
             api_key=api_key,
+            feedback_store=feedback_store,
         )
         return JSONResponse(result)
 
@@ -301,10 +420,37 @@ def create_judge_app(
             "domain_risk_mapping": DOMAIN_RISKS,
         })
 
-    return Starlette(routes=[
-        Route("/judge", judge_handler, methods=["POST"]),
-        Route("/health", health, methods=["GET"]),
-    ])
+    async def feedback_handler(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        text = body.get("text", "")
+        verdict = body.get("verdict", "")
+        if not text or not verdict:
+            return JSONResponse(
+                {"error": "missing 'text' and 'verdict' fields"}, status_code=400
+            )
+        feedback_store.add(
+            text=text,
+            verdict=verdict,
+            reason=body.get("reason", ""),
+            risk=body.get("risk", ""),
+            confidence=body.get("confidence", 0.0),
+        )
+        return JSONResponse({"status": "stored", "total": feedback_store.count})
+
+    async def feedback_history(request: Request) -> JSONResponse:
+        return JSONResponse({"total": feedback_store.count})
+
+    return Starlette(
+        routes=[
+            Route("/judge", judge_handler, methods=["POST"]),
+            Route("/health", health, methods=["GET"]),
+            Route("/feedback", feedback_handler, methods=["POST"]),
+            Route("/feedback/history", feedback_history, methods=["GET"]),
+        ]
+    )
 
 
 def run_judge_service(
@@ -320,6 +466,8 @@ def run_judge_service(
     print(f"\n  Judge Service (two-layer: risk detection + domain policies)")
     print(f"  {'─' * 50}")
     print(f"  Endpoint:  http://localhost:{port}/judge")
+    print(f"  Feedback:  http://localhost:{port}/feedback")
+    print(f"  History:   http://localhost:{port}/feedback/history")
     print(f"  Health:    http://localhost:{port}/health")
     print(f"  Model:     {model}")
     print(f"  Risks:     {', '.join(ALL_RISKS)}")

@@ -32,7 +32,8 @@ dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
 proxy = ["aceteam-aep[dashboard]"]
 mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
-all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp]"]
+feedback = ["lancedb>=0.30"]
+all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback]"]
 dev = [
     "aceteam-aep[all]",
     "httpx>=0.28",

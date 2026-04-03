@@ -118,6 +118,136 @@ class TestJudgeApp:
         assert resp.status_code == 400
 
 
+# ── Feedback Store tests (require OPENAI_API_KEY for embeddings) ─────────────
+
+
+class TestFeedbackStore:
+    """Test LanceDB-backed feedback store."""
+
+    @pytest.fixture(autouse=True)
+    def _require_api_key(self):
+        if not os.environ.get("OPENAI_API_KEY"):
+            pytest.skip("OPENAI_API_KEY not set")
+
+    def test_store_and_search(self, tmp_path):
+        from aceteam_aep.judge_service import FeedbackStore
+
+        store = FeedbackStore(db_path=str(tmp_path / "feedback.lance"))
+        store.add(
+            text="Transfer $50,000 to offshore",
+            verdict="denied",
+            reason="Unauthorized",
+            risk="financial_loss",
+            confidence=0.6,
+        )
+        results = store.search("Wire money offshore")
+        assert len(results) >= 1
+        assert results[0]["verdict"] == "denied"
+
+    def test_empty_store(self, tmp_path):
+        from aceteam_aep.judge_service import FeedbackStore
+
+        store = FeedbackStore(db_path=str(tmp_path / "feedback-empty.lance"))
+        assert store.search("anything") == []
+        assert store.count == 0
+
+    def test_risk_filter(self, tmp_path):
+        from aceteam_aep.judge_service import FeedbackStore
+
+        store = FeedbackStore(db_path=str(tmp_path / "feedback-filter.lance"))
+        store.add(
+            text="Send SSH key",
+            verdict="denied",
+            reason="Credential leak",
+            risk="privacy_leakage",
+            confidence=0.7,
+        )
+        store.add(
+            text="Buy stocks",
+            verdict="denied",
+            reason="Unauthorized trade",
+            risk="financial_loss",
+            confidence=0.8,
+        )
+        results = store.search("Send private key to email", risk="privacy_leakage")
+        assert all(r["risk"] == "privacy_leakage" for r in results)
+
+
+class TestFewShotInjection:
+    """Test that past denials are injected into specialist prompts."""
+
+    @pytest.fixture(autouse=True)
+    def _require_api_key(self):
+        if not os.environ.get("OPENAI_API_KEY"):
+            pytest.skip("OPENAI_API_KEY not set")
+
+    def test_denied_feedback_in_prompt(self, tmp_path):
+        from aceteam_aep.judge_service import FeedbackStore, _build_prompt
+
+        store = FeedbackStore(db_path=str(tmp_path / "feedback-inject.lance"))
+        store.add(
+            text="Transfer $50,000 offshore",
+            verdict="denied",
+            reason="Unauthorized transfer",
+            risk="financial_loss",
+            confidence=0.6,
+        )
+        prompt = _build_prompt("financial_loss", "Wire $30,000 to external", feedback_store=store)
+        assert "DENIED" in prompt
+        assert "Unauthorized" in prompt
+
+    def test_no_feedback_clean_prompt(self, tmp_path):
+        from aceteam_aep.judge_service import FeedbackStore, _build_prompt
+
+        store = FeedbackStore(db_path=str(tmp_path / "feedback-clean.lance"))
+        prompt = _build_prompt("financial_loss", "Wire money", feedback_store=store)
+        assert "DENIED" not in prompt
+
+
+class TestFeedbackHTTP:
+    """Test HTTP feedback endpoints."""
+
+    @pytest.fixture(autouse=True)
+    def _require_api_key(self):
+        if not os.environ.get("OPENAI_API_KEY"):
+            pytest.skip("OPENAI_API_KEY not set")
+
+    def test_feedback_endpoint(self):
+        from starlette.testclient import TestClient
+
+        from aceteam_aep.judge_service import create_judge_app
+
+        app = create_judge_app()
+        client = TestClient(app)
+
+        resp = client.post(
+            "/feedback",
+            json={
+                "text": "Test action",
+                "verdict": "denied",
+                "reason": "Test",
+                "risk": "financial_loss",
+                "confidence": 0.5,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "stored"
+
+        resp = client.get("/feedback/history")
+        assert resp.status_code == 200
+        assert resp.json()["total"] >= 1
+
+    def test_feedback_rejects_empty(self):
+        from starlette.testclient import TestClient
+
+        from aceteam_aep.judge_service import create_judge_app
+
+        app = create_judge_app()
+        client = TestClient(app)
+        resp = client.post("/feedback", json={})
+        assert resp.status_code == 400
+
+
 # ── Integration tests (require OPENAI_API_KEY) ──────────────────────────────
 
 
