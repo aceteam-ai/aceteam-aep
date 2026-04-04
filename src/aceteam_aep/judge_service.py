@@ -47,40 +47,51 @@ class FeedbackStore:
     """Vector-backed feedback store using LanceDB for semantic similarity search."""
 
     def __init__(self, db_path: str = "~/.config/aceteam-aep/feedback.lance") -> None:
+        import threading
+
         self._db: Any = None
         self._table: Any = None
         self._db_path = os.path.expanduser(db_path)
         self._schema: Any = None
+        self._lock = threading.Lock()
 
     def _ensure_db(self) -> None:
         if self._db is not None:
             return
-        try:
-            import lancedb
-            from lancedb.embeddings import get_registry
-            from lancedb.pydantic import LanceModel, Vector
+        with self._lock:
+            if self._db is not None:
+                return
+            if not os.environ.get("OPENAI_API_KEY"):
+                log.warning(
+                    "OPENAI_API_KEY not set — feedback embeddings will fail. "
+                    "The feedback feature requires OPENAI_API_KEY even with alternative LLM backends."
+                )
+            try:
+                import lancedb
+                from lancedb.embeddings import get_registry
+                from lancedb.pydantic import LanceModel, Vector
 
-            openai_embed = get_registry().get("openai").create(name="text-embedding-3-small")
+                openai_embed = get_registry().get("openai").create(name="text-embedding-3-small")
 
-            class FeedbackEntry(LanceModel):
-                text: str = openai_embed.SourceField()
-                vector: Vector(1536) = openai_embed.VectorField()  # type: ignore[valid-type]
-                verdict: str
-                reason: str
-                risk: str
-                confidence: float
-                timestamp: float
+                class FeedbackEntry(LanceModel):
+                    text: str = openai_embed.SourceField()
+                    vector: Vector(1536) = openai_embed.VectorField()  # type: ignore[valid-type]
+                    verdict: str
+                    reason: str
+                    risk: str
+                    confidence: float
+                    timestamp: float
 
-            self._schema = FeedbackEntry
-            self._db = lancedb.connect(self._db_path)
-            self._table = self._db.create_table("feedback", schema=FeedbackEntry, exist_ok=True)
-        except ImportError:
-            log.info(
-                "lancedb not installed — feedback store disabled. "
-                "Install with: pip install aceteam-aep[feedback]"
-            )
-        except Exception as e:
-            log.warning("Failed to initialize feedback store: %s", e)
+                self._schema = FeedbackEntry
+                self._db = lancedb.connect(self._db_path)
+                self._table = self._db.create_table("feedback", schema=FeedbackEntry, exist_ok=True)
+            except ImportError:
+                log.info(
+                    "lancedb not installed — feedback store disabled. "
+                    "Install with: pip install aceteam-aep[feedback]"
+                )
+            except Exception as e:
+                log.warning("Failed to initialize feedback store: %s", e)
 
     def add(
         self,
@@ -114,9 +125,12 @@ class FeedbackStore:
         if self._table is None or self._table.count_rows() == 0:
             return []
         try:
-            results = self._table.search(query).limit(limit).to_list()
+            fetch_limit = limit * 5 if risk else limit
+            results = self._table.search(query).limit(fetch_limit).to_list()
             if risk:
-                results = [r for r in results if r.get("risk") == risk]
+                results = [r for r in results if r.get("risk") == risk][:limit]
+            else:
+                results = results[:limit]
             return results
         except Exception as e:
             log.warning("Feedback search failed: %s", e)
@@ -213,13 +227,13 @@ def _build_prompt(
         if denied:
             feedback_section += "\n\n**Previous human decisions on similar actions:**\n"
             for d in denied:
-                feedback_section += f'- DENIED: "{d["text"][:150]}" — Reason: {d["reason"]}\n'
+                feedback_section += f'- DENIED: "{d["text"][:150]}" — Reason: {str(d.get("reason", ""))[:200]}\n'
             feedback_section += "\nWeight these prior human decisions heavily in your evaluation.\n"
 
         if approved:
             feedback_section += "\n**Previously approved safe actions:**\n"
             for a in approved:
-                feedback_section += f'- APPROVED: "{a["text"][:150]}" — Reason: {a["reason"]}\n'
+                feedback_section += f'- APPROVED: "{a["text"][:150]}" — Reason: {str(a.get("reason", ""))[:200]}\n'
 
     return f"{specialist}{feedback_section}\n\nEvaluate this agent interaction:\n\n{text}"
 
@@ -426,17 +440,35 @@ def create_judge_app(
         except Exception:
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         text = body.get("text", "")
-        verdict = body.get("verdict", "")
-        if not text or not verdict:
+        if not text:
             return JSONResponse(
                 {"error": "missing 'text' and 'verdict' fields"}, status_code=400
             )
+
+        # Validate verdict
+        valid_verdicts = {"approved", "denied"}
+        verdict = body.get("verdict", "").lower().strip()
+        if verdict not in valid_verdicts:
+            return JSONResponse(
+                {"error": f"verdict must be one of: {valid_verdicts}"}, status_code=400
+            )
+
+        # Validate and cap confidence
+        confidence = body.get("confidence", 0.0)
+        try:
+            confidence = max(0.0, min(1.0, float(confidence)))
+        except (ValueError, TypeError):
+            confidence = 0.0
+
+        # Truncate reason to prevent prompt injection via long payloads
+        reason = str(body.get("reason", ""))[:200]
+
         feedback_store.add(
             text=text,
             verdict=verdict,
-            reason=body.get("reason", ""),
+            reason=reason,
             risk=body.get("risk", ""),
-            confidence=body.get("confidence", 0.0),
+            confidence=confidence,
         )
         return JSONResponse({"status": "stored", "total": feedback_store.count})
 
