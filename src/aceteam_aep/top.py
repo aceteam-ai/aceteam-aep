@@ -29,8 +29,18 @@ def _fetch_state(base_url: str) -> dict | None:
     return None
 
 
+def _severity_color(sev: str) -> str:
+    return {"high": "red bold", "medium": "yellow", "low": "cyan"}.get(sev, "white")
+
+
 def _action_color(action: str) -> str:
     return {"pass": "green", "flag": "yellow bold", "block": "red bold"}.get(action, "white")
+
+
+def _action_badge(action: str) -> str:
+    colors = {"pass": "on green", "flag": "on yellow", "block": "on red"}
+    style = colors.get(action, "")
+    return f"[{style}] {action.upper()} [/{style}]"
 
 
 def _render(console: object, data: dict) -> object:
@@ -181,11 +191,11 @@ def _render(console: object, data: dict) -> object:
     else:
         layout["body"].split_column(Layout(name="main"))
 
-    layout["body"]["main"].split_row(
+    layout["body"]["main" if not budget_section else "main"].split_row(
         Layout(Panel(spans_table, border_style="blue"), ratio=3),
         Layout(name="sidebar", ratio=1),
     )
-    layout["body"]["main"]["sidebar"].split_column(
+    layout["body"]["main" if not budget_section else "main"]["sidebar"].split_column(
         Layout(Panel(sig_table, border_style="yellow")),
         Layout(Panel(stats_table, border_style="green")),
     )
