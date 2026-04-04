@@ -834,6 +834,21 @@ def main() -> None:
     # --- disconnect subcommand ---
     sub.add_parser("disconnect", help="Remove AceTeam credentials")
 
+    # --- top subcommand ---
+    top_parser = sub.add_parser("top", help="Terminal dashboard (like htop for AEP)")
+    top_parser.add_argument(
+        "--url", type=str, default=None, help="Proxy URL (default: http://localhost:8899)"
+    )
+    top_parser.add_argument(
+        "--port", type=int, default=None, help="Proxy port (shorthand for --url)"
+    )
+    top_parser.add_argument(
+        "--once", action="store_true", help="Print snapshot and exit"
+    )
+    top_parser.add_argument(
+        "--refresh", type=float, default=2.0, help="Refresh interval in seconds (default: 2)"
+    )
+
     # --- judge-service subcommand ---
     judge_parser = sub.add_parser(
         "judge-service",
@@ -873,6 +888,13 @@ def main() -> None:
         _run_connect(args)
     elif args.command == "disconnect":
         _run_disconnect(args)
+    elif args.command == "top":
+        from ..top import run_top
+
+        url = args.url
+        if url is None and args.port:
+            url = f"http://localhost:{args.port}"
+        run_top(url=url or "http://localhost:8899", once=args.once, refresh=args.refresh)
     elif args.command == "judge-service":
         from ..judge_service import run_judge_service
 

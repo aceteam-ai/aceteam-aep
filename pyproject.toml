@@ -33,7 +33,8 @@ proxy = ["aceteam-aep[dashboard]"]
 mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
 feedback = ["lancedb>=0.30"]
-all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback]"]
+top = ["rich>=13.0"]
+all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top]"]
 dev = [
     "aceteam-aep[all]",
     "httpx>=0.28",
