@@ -30,11 +30,12 @@ ollama = ["ollama>=0.4.0,<1.0.0"]
 safety = ["transformers>=4.40", "torch>=2.0"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
 proxy = ["aceteam-aep[dashboard]"]
+events = ["redis[hiredis]>=5.0"]
 mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
 feedback = ["lancedb>=0.30"]
 top = ["rich>=13.0"]
-all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top]"]
+all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events]"]
 dev = [
     "aceteam-aep[all]",
     "httpx>=0.28",
