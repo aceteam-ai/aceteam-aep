@@ -6,8 +6,10 @@ tracks cost, and enforces PASS/FLAG/BLOCK decisions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -26,6 +28,7 @@ from ..safety.cost_anomaly import CostAnomalyDetector
 from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
+from .redis_publisher import build_event, publish_event
 
 log = logging.getLogger(__name__)
 
@@ -283,6 +286,14 @@ def create_proxy_app(
         # --- BUDGET CHECK ---
         budget_error = state.check_budget()
         if budget_error:
+            _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
+            if _instance_id:
+                await publish_event(build_event(
+                    instance_id=_instance_id,
+                    event_type="budget_warning",
+                    action="block",
+                    message=budget_error,
+                ))
             return Response(
                 json.dumps(
                     {
@@ -333,6 +344,18 @@ def create_proxy_app(
                     state.call_count += 1
                     state.blocked_count += 1
                     log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
+                    _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
+                    if _instance_id:
+                        _detector = input_signals[0].detector if input_signals else None
+                        _severity = input_signals[0].severity if input_signals else None
+                        await publish_event(build_event(
+                            instance_id=_instance_id,
+                            event_type="safety_block",
+                            action="block",
+                            message=input_decision.reason or "Input blocked by safety filter",
+                            detector=_detector,
+                            severity=_severity,
+                        ))
                     return JSONResponse(
                         status_code=400,
                         content={
@@ -387,7 +410,7 @@ def create_proxy_app(
                     completion_tokens=out,
                     total_tokens=inp + out,
                 )
-                state.cost_tracker.record_llm_cost(
+                cost_node = state.cost_tracker.record_llm_cost(
                     span_id=stream_span.span_id,
                     model=model,
                     usage=usage,
@@ -397,6 +420,24 @@ def create_proxy_app(
                 state.signals.extend(signals)
                 if decision:
                     state.decisions.append(decision)
+
+                _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
+                if _instance_id and decision:
+                    _event_type = "safety_block" if decision.action == "block" else "llm_call"
+                    _detector = decision.signals[0].detector if decision.signals else None
+                    _severity = decision.signals[0].severity if decision.signals else None
+                    asyncio.ensure_future(publish_event(build_event(
+                        instance_id=_instance_id,
+                        event_type=_event_type,
+                        action=decision.action,
+                        message=decision.reason or f"{model} streaming call: {inp} in, {out} out",
+                        cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                        model=model,
+                        tokens_in=inp,
+                        tokens_out=out,
+                        detector=_detector,
+                        severity=_severity,
+                    )))
 
             return await handle_streaming_request(
                 target_url=target_url,
@@ -497,6 +538,25 @@ def create_proxy_app(
             all_signals = []
             decision = EnforcementDecision(action="pass")
             state.decisions.append(decision)
+
+        # --- PUBLISH EVENT TO REDIS ---
+        _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
+        if _instance_id:
+            _event_type = "safety_block" if decision.action == "block" else "llm_call"
+            _detector = decision.signals[0].detector if decision.signals else None
+            _severity = decision.signals[0].severity if decision.signals else None
+            await publish_event(build_event(
+                instance_id=_instance_id,
+                event_type=_event_type,
+                action=decision.action,
+                message=decision.reason or f"{model} call: {input_tokens} in, {output_tokens} out",
+                cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                model=model,
+                tokens_in=input_tokens if usage else None,
+                tokens_out=output_tokens if usage else None,
+                detector=_detector,
+                severity=_severity,
+            ))
 
         # --- PASS THROUGH (with AEP metadata header) ---
         resp_headers = build_response_headers(
