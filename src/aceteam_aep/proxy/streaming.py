@@ -11,6 +11,7 @@ When a request has `"stream": true`, the proxy:
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 import json
 import logging
 from typing import Any
@@ -62,9 +63,7 @@ def _accumulate_stream_chunks(
         usage = chunk.get("usage")
         if usage:
             input_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
-            output_tokens = (
-                usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
-            )
+            output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
 
     return model, "".join(text_parts), input_tokens, output_tokens
 
@@ -95,18 +94,21 @@ async def handle_streaming_request(
         debug: Enable debug logging for the stream
     """
 
-    async def stream_generator() -> Any:
+    async def stream_generator() -> AsyncGenerator[str, None]:
         accumulated_chunks: list[dict[str, Any]] = []
 
         if debug:
             log.debug("STREAM REQUEST %s: %s", call_id, target_url)
 
-        async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
-            "POST",
-            target_url,
-            content=body_bytes,
-            headers=headers,
-        ) as upstream:
+        async with (
+            httpx.AsyncClient(timeout=120.0) as client,
+            client.stream(
+                "POST",
+                target_url,
+                content=body_bytes,
+                headers=headers,
+            ) as upstream,
+        ):
             # Pass through each line immediately
             async for line in upstream.aiter_lines():
                 # Buffer for post-stream safety
