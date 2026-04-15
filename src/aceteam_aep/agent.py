@@ -5,6 +5,7 @@ run_agent_loop() for non-streaming, run_agent_loop_stream() for streaming.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -28,6 +29,8 @@ from .stream import (
 )
 from .tools import Tool
 from .types import AgentResult, ChatMessage, ChatResponse, Usage
+
+_DEFAULT_TOOL_TIMEOUT = 300.0  # 5 minutes
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +329,9 @@ async def run_agent_loop_stream(
                     )
 
                 try:
-                    result = await tool.invoke(tc.arguments)
+                    result = await asyncio.wait_for(
+                        tool.invoke(tc.arguments), timeout=_DEFAULT_TOOL_TIMEOUT
+                    )
                     result_str = json.dumps(result) if not isinstance(result, str) else result
                     working.append(
                         ChatMessage(
