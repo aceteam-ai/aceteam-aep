@@ -52,6 +52,7 @@ class ProxyConfig:
     target: str = "https://api.openai.com"
     dashboard: bool = True
     verbose: bool = False
+    debug: bool = False
 
     # Enforcement policy (built from enforcement section)
     policy: EnforcementPolicy = field(default_factory=EnforcementPolicy)
@@ -87,6 +88,7 @@ def load_config(
         target=proxy_section.get("target", "https://api.openai.com"),
         dashboard=proxy_section.get("dashboard", True),
         verbose=proxy_section.get("verbose", False),
+        debug=proxy_section.get("debug", False),
         max_per_session=budget_section.get("max_per_session"),
         max_per_call=budget_section.get("max_per_call"),
     )
@@ -109,6 +111,8 @@ def load_config(
         config.target = os.environ["AEP_TARGET"]
     if os.environ.get("AEP_LOG", "") in ("1", "true", "yes"):
         config.verbose = True
+    if os.environ.get("AEP_DEBUG", "") in ("1", "true", "yes"):
+        config.debug = True
 
     # AEP_POLICY env var overrides the enforcement section
     policy_path = os.environ.get("AEP_POLICY")
@@ -127,6 +131,8 @@ def load_config(
             config.dashboard = False
         if cli_overrides.get("policy"):
             config.policy = EnforcementPolicy.from_yaml(cli_overrides["policy"])
+        if cli_overrides.get("debug") is not None:
+            config.debug = cli_overrides["debug"]
 
     return config
 
