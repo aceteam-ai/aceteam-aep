@@ -105,9 +105,10 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     # Use unified config if --config provided, otherwise legacy args
     config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
-    debug = getattr(args, "debug", False) or (config_path and getattr(_resolve_config(args), "debug", False))
+    debug = getattr(args, "debug", False)
     if config_path:
         cfg = _resolve_config(args)
+        debug = debug or getattr(cfg, "debug", False)
         detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
         app = create_proxy_app(
             target_base_url=cfg.target,  # type: ignore[attr-defined]
