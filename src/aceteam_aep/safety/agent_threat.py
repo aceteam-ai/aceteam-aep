@@ -13,6 +13,7 @@ version will use the Trust Engine's ensemble-of-judges approach
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from .base import SafetySignal
 
@@ -56,14 +57,32 @@ class AgentThreatDetector:
 
     name = "agent_threat"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        scan_input: bool = False,
+        scan_output: bool = True,
+    ) -> None:
+        assert scan_input or scan_output
+        self._scan_input = scan_input
+        self._scan_output = scan_output
         self._patterns = _THREAT_PATTERNS
 
     def check(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs: object,
     ) -> list[SafetySignal]:
         signals: list[SafetySignal] = []
-        for text, source in [(input_text, "input"), (output_text, "output")]:
+        texts: list[tuple[str, Literal["input", "output"]]] = []
+        if self._scan_input:
+            texts.append((input_text, "input"))
+        if self._scan_output:
+            texts.append((output_text, "output"))
+        for text, source in texts:
             if not text:
                 continue
             for pattern, desc in self._patterns:
