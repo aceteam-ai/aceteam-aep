@@ -229,24 +229,26 @@
   .score-badge { font-size: 11px; color: var(--accent-lavender); font-weight: 400; }
 
   /* ── Call Timeline / Spans ── */
-  .span-item {
+  .span-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 3px;
+  }
+  .span-table td {
     padding: 8px 14px;
-    border-radius: var(--radius);
-    margin-bottom: 3px;
     font-size: 13px;
     background: var(--bg-inset);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    transition: background 0.15s;
+    vertical-align: middle;
   }
-  .span-item:nth-child(even) { background: rgba(15,21,32,0.6); }
-  .span-item:hover { background: var(--bg-raised); }
+  .span-table tr:nth-child(even) td { background: rgba(15,21,32,0.6); }
+  .span-table tr:hover td { background: var(--bg-raised); }
+  .span-table td:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+  .span-table td:last-child { border-radius: 0 var(--radius) var(--radius) 0; text-align: right; }
   .span-model { color: var(--accent-cyan); font-weight: 500; }
-  .span-time { color: var(--accent-sky); font-size: 11px; margin-right: 10px; min-width: 120px; }
+  .span-time { color: var(--accent-sky); font-size: 11px; white-space: nowrap; }
   .span-dur { color: var(--accent-lavender); font-variant-numeric: tabular-nums; }
-  .span-cost { color: var(--accent-amber); font-size: 12px; margin-right: 8px; opacity: 0.9; }
-  .span-right { display: flex; align-items: center; gap: 10px; }
+  .span-cost { color: var(--accent-amber); font-size: 12px; opacity: 0.9; }
+  .span-status { text-align: center; }
 
   .empty { color: var(--text-muted); font-style: italic; font-size: 13px; }
 
@@ -1222,7 +1224,7 @@ function renderGovernance(container, govList) {
     fields.forEach(function(f) {
       if (!f[1]) return;
       var row = document.createElement('div');
-      row.className = 'span-item';
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:var(--bg-inset);border-radius:6px;margin-bottom:3px;font-size:13px;';
       var label = document.createElement('span');
       label.className = 'span-model';
       label.textContent = f[0];
@@ -1245,46 +1247,45 @@ function renderSpans(container, spans, signals) {
     container.appendChild(empty);
     return;
   }
+  var table = document.createElement('table');
+  table.className = 'span-table';
   spans.forEach(function(s) {
-    var row = document.createElement('div');
-    row.className = 'span-item';
+    var tr = document.createElement('tr');
 
+    var tdTime = document.createElement('td');
+    tdTime.className = 'span-time';
     if (s.started_at) {
-      var timeEl = document.createElement('span');
-      timeEl.className = 'span-time';
       var d = new Date(s.started_at);
-      timeEl.textContent = d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-      row.appendChild(timeEl);
+      tdTime.textContent = d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
     }
+    tr.appendChild(tdTime);
 
-    var model = document.createElement('span');
-    model.className = 'span-model';
-    model.textContent = esc(s.executor);
-    row.appendChild(model);
+    var tdModel = document.createElement('td');
+    tdModel.className = 'span-model';
+    tdModel.textContent = esc(s.executor);
+    tr.appendChild(tdModel);
 
-    var right = document.createElement('span');
-    right.className = 'span-right';
-
-    // Per-call enforcement badge
+    var tdStatus = document.createElement('td');
+    tdStatus.className = 'span-status';
     var callAction = getCallAction(s.call_id, signals);
-    right.appendChild(makeSmallBadge(callAction));
+    tdStatus.appendChild(makeSmallBadge(callAction));
+    tr.appendChild(tdStatus);
 
-    // Cost per call
+    var tdCost = document.createElement('td');
+    tdCost.className = 'span-cost';
     if (s.cost > 0) {
-      var costEl = document.createElement('span');
-      costEl.className = 'span-cost';
-      costEl.textContent = '$' + s.cost.toFixed(6);
-      right.appendChild(costEl);
+      tdCost.textContent = '$' + s.cost.toFixed(6);
     }
+    tr.appendChild(tdCost);
 
-    var dur = document.createElement('span');
-    dur.className = 'span-dur';
-    dur.textContent = s.duration_ms ? Math.round(s.duration_ms) + 'ms' : '...';
-    right.appendChild(dur);
+    var tdDur = document.createElement('td');
+    tdDur.className = 'span-dur';
+    tdDur.textContent = s.duration_ms ? Math.round(s.duration_ms) + 'ms' : '...';
+    tr.appendChild(tdDur);
 
-    row.appendChild(right);
-    container.appendChild(row);
+    table.appendChild(tr);
   });
+  container.appendChild(table);
 }
 
 function formatDuration(ms) {
