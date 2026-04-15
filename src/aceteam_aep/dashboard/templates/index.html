@@ -40,6 +40,7 @@
   .score-badge { font-size: 11px; color: #8b949e; font-weight: normal; }
   .span-item { padding: 6px 12px; border-radius: 4px; margin-bottom: 4px; font-size: 13px; background: #0d1117; display: flex; justify-content: space-between; align-items: center; }
   .span-model { color: #58a6ff; }
+  .span-time { color: #8b949e; font-size: 12px; margin-left: 8px; }
   .span-dur { color: #8b949e; }
   .span-cost { color: #58a6ff; font-size: 12px; margin-right: 8px; }
   .span-right { display: flex; align-items: center; gap: 8px; }
@@ -811,10 +812,22 @@ function renderSpans(container, spans, signals) {
     var row = document.createElement('div');
     row.className = 'span-item';
 
+    var left = document.createElement('span');
+
     var model = document.createElement('span');
     model.className = 'span-model';
     model.textContent = esc(s.executor);
-    row.appendChild(model);
+    left.appendChild(model);
+
+    if (s.started_at) {
+      var timeEl = document.createElement('span');
+      timeEl.className = 'span-time';
+      var d = new Date(s.started_at);
+      timeEl.textContent = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+      left.appendChild(timeEl);
+    }
+
+    row.appendChild(left);
 
     var right = document.createElement('span');
     right.className = 'span-right';
