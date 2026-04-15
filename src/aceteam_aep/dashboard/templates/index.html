@@ -13,11 +13,11 @@
     --bg-surface: #0f1520;
     --bg-raised: #151d2b;
     --bg-inset: #0a0f18;
-    --border: #1a2535;
-    --border-subtle: #131c2a;
+    --border: #1e2a3e;
+    --border-subtle: #172030;
     --text-primary: #d0d8e8;
-    --text-muted: #506078;
-    --text-dim: #384858;
+    --text-muted: #8a9bb4;
+    --text-dim: #627890;
     --accent-cyan: #00d4ff;
     --accent-cyan-dim: rgba(0, 212, 255, 0.12);
     --accent-amber: #ffb347;
@@ -26,6 +26,9 @@
     --accent-red-dim: rgba(255, 71, 87, 0.12);
     --accent-green: #2ed573;
     --accent-green-dim: rgba(46, 213, 115, 0.12);
+    --accent-lavender: #b8a0e0;
+    --accent-sky: #6bc5e8;
+    --accent-peach: #e8a87c;
     --font-data: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
     --font-label: 'Instrument Sans', -apple-system, sans-serif;
     --radius: 6px;
@@ -131,7 +134,7 @@
     font-family: var(--font-label);
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--accent-sky);
     text-transform: uppercase;
     letter-spacing: 1.5px;
     margin-bottom: 10px;
@@ -178,7 +181,7 @@
     font-family: var(--font-label);
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--accent-sky);
     margin-bottom: 14px;
     text-transform: uppercase;
     letter-spacing: 1.8px;
@@ -223,7 +226,7 @@
   .sev-high { color: var(--accent-red); }
   .sev-medium { color: var(--accent-amber); }
   .sev-low { color: var(--accent-cyan); }
-  .score-badge { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+  .score-badge { font-size: 11px; color: var(--accent-lavender); font-weight: 400; }
 
   /* ── Call Timeline / Spans ── */
   .span-item {
@@ -240,12 +243,12 @@
   .span-item:nth-child(even) { background: rgba(15,21,32,0.6); }
   .span-item:hover { background: var(--bg-raised); }
   .span-model { color: var(--accent-cyan); font-weight: 500; }
-  .span-time { color: var(--text-muted); font-size: 11px; margin-right: 10px; min-width: 120px; }
-  .span-dur { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-  .span-cost { color: var(--accent-cyan); font-size: 12px; margin-right: 8px; opacity: 0.8; }
+  .span-time { color: var(--accent-sky); font-size: 11px; margin-right: 10px; min-width: 120px; }
+  .span-dur { color: var(--accent-lavender); font-variant-numeric: tabular-nums; }
+  .span-cost { color: var(--accent-amber); font-size: 12px; margin-right: 8px; opacity: 0.9; }
   .span-right { display: flex; align-items: center; gap: 10px; }
 
-  .empty { color: var(--text-dim); font-style: italic; font-size: 13px; }
+  .empty { color: var(--text-muted); font-style: italic; font-size: 13px; }
 
   /* ── Pulse / Live Indicator ── */
   .pulse { animation: glowPulse 2.5s ease-in-out infinite; }
@@ -266,7 +269,7 @@
     padding-top: 16px;
     border-top: 1px solid var(--border-subtle);
     text-align: center;
-    color: var(--text-dim);
+    color: var(--text-muted);
     font-size: 11px;
     font-family: var(--font-label);
     letter-spacing: 0.5px;
@@ -281,7 +284,7 @@
 
   /* ── Metrics ── */
   .metric-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-  .metric-label { color: var(--text-muted); font-size: 13px; }
+  .metric-label { color: var(--accent-sky); font-size: 13px; }
   .metric-value { color: var(--text-primary); font-size: 13px; font-weight: 700; }
   .metric-value.good { color: var(--accent-green); }
   .metric-value.warn { color: var(--accent-amber); }
@@ -353,7 +356,7 @@
   .zero-state { text-align: center; padding: 44px 20px; }
   .zero-state-icon { font-size: 48px; margin-bottom: 14px; }
   .zero-state-text { font-family: var(--font-label); font-size: 16px; color: var(--accent-green); font-weight: 700; }
-  .zero-state-sub { font-size: 13px; color: var(--text-muted); margin-top: 6px; }
+  .zero-state-sub { font-size: 13px; color: var(--accent-sky); margin-top: 6px; }
 
   /* ── Entity Rows ── */
   .entity-row {
@@ -366,10 +369,10 @@
     align-items: center;
   }
   .entity-name { color: var(--text-primary); font-size: 13px; }
-  .entity-detail { color: var(--text-muted); font-size: 12px; }
+  .entity-detail { color: var(--accent-peach); font-size: 12px; }
   .entity-cost { color: var(--accent-cyan); font-size: 13px; font-weight: 700; }
 
-  .session-info { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; font-family: var(--font-label); }
+  .session-info { font-size: 12px; color: var(--accent-sky); margin-bottom: 16px; font-family: var(--font-label); }
 
   /* ── Confidence ── */
   .confidence-pct { font-size: 12px; font-weight: 700; margin-left: auto; }
@@ -423,7 +426,7 @@
     font-family: var(--font-label);
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.8px;
   }
@@ -460,7 +463,7 @@
     font-family: var(--font-label);
     font-size: 9px;
     font-weight: 600;
-    color: var(--text-dim);
+    color: var(--accent-peach);
     text-transform: uppercase;
     letter-spacing: 1.5px;
     margin: 6px 0 2px;
@@ -587,7 +590,7 @@
         <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
       </div>
       <div id="setup-aceteam" style="display:none;">
-        <p style="color:#d29922;font-size:13px;">Coming soon. For now, paste your own API key above.</p>
+        <p style="color:#e8a87c;font-size:13px;">Coming soon. For now, paste your own API key above.</p>
       </div>
     </div>
     <div class="setup-step" id="setup-step-2">
@@ -636,7 +639,7 @@
     <div class="card" id="attestation-card" style="display:none;">
       <div class="card-label">Merkle Chain</div>
       <div class="card-value small green" id="chain-height">0</div>
-      <div style="font-size:11px;color:#8b949e;margin-top:4px;" id="chain-signer"></div>
+      <div style="font-size:11px;color:#6bc5e8;margin-top:4px;" id="chain-signer"></div>
     </div>
   </div>
 
@@ -645,10 +648,10 @@
     <div style="display:flex;gap:16px;align-items:center;">
       <div style="flex:1;">
         <div class="bar-container" style="height:12px;margin:0;">
-          <div id="budget-bar" style="height:100%;background:#58a6ff;border-radius:4px;transition:width 0.3s;"></div>
+          <div id="budget-bar" style="height:100%;background:#00d4ff;border-radius:4px;transition:width 0.3s;"></div>
         </div>
       </div>
-      <div id="budget-text" style="font-size:14px;color:#8b949e;white-space:nowrap;"></div>
+      <div id="budget-text" style="font-size:14px;color:#8a9bb4;white-space:nowrap;"></div>
     </div>
   </div>
 
@@ -692,7 +695,7 @@
     </div>
     <div class="card">
       <div class="card-label">Threats Blocked</div>
-      <div class="card-value" id="ciso-blocked" style="color:#da3633;">0</div>
+      <div class="card-value" id="ciso-blocked" style="color:#ff4757;">0</div>
     </div>
     <div class="card">
       <div class="card-label">Total Agent Spend</div>
@@ -1205,7 +1208,7 @@ function renderGovernance(container, govList) {
   container.textContent = '';
   govList.forEach(function(gov) {
     var callLabel = document.createElement('div');
-    callLabel.style.cssText = 'font-size:11px;color:#58a6ff;margin-top:8px;margin-bottom:4px;';
+    callLabel.style.cssText = 'font-size:11px;color:#6bc5e8;margin-top:8px;margin-bottom:4px;';
     callLabel.textContent = 'Call ' + (gov.call_id || '?');
     container.appendChild(callLabel);
     var fields = [
@@ -1338,11 +1341,11 @@ function updateCisoView(data) {
     complianceBar.className = 'bar-fill bar-green';
   } else if (compliancePct > 95) {
     complianceEl.className = 'card-value';
-    complianceEl.style.color = '#d29922';
+    complianceEl.style.color = '#ffb347';
     complianceBar.className = 'bar-fill bar-yellow';
   } else {
     complianceEl.className = 'card-value';
-    complianceEl.style.color = '#da3633';
+    complianceEl.style.color = '#ff4757';
     complianceBar.className = 'bar-fill bar-red';
   }
 
@@ -1370,15 +1373,15 @@ function updateCisoView(data) {
     // Zero-state: all clean
     var zs = document.createElement('div');
     zs.className = 'zero-state';
-    zs.innerHTML = '<div class="zero-state-icon" style="color:#3fb950;">&#x2714;</div>'
+    zs.innerHTML = '<div class="zero-state-icon" style="color:#2ed573;">&#x2714;</div>'
       + '<div class="zero-state-text">All agents compliant</div>'
       + '<div class="zero-state-sub">No safety incidents this session. ' + totalCalls + ' call' + (totalCalls > 1 ? 's' : '') + ' passed.</div>';
     complianceBody.appendChild(zs);
   } else if (totalCalls === 0) {
     var zs2 = document.createElement('div');
     zs2.className = 'zero-state';
-    zs2.innerHTML = '<div class="zero-state-icon" style="color:#484f58;">&#x2022;</div>'
-      + '<div class="zero-state-text" style="color:#8b949e;">Waiting for agent activity</div>'
+    zs2.innerHTML = '<div class="zero-state-icon" style="color:#627890;">&#x2022;</div>'
+      + '<div class="zero-state-text" style="color:#8a9bb4;">Waiting for agent activity</div>'
       + '<div class="zero-state-sub">No calls recorded yet.</div>';
     complianceBody.appendChild(zs2);
   } else {
@@ -1527,7 +1530,7 @@ function renderBudget(budget) {
   var pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
   var bar = document.getElementById('budget-bar');
   bar.style.width = pct + '%';
-  bar.style.background = pct > 90 ? '#da3633' : pct > 70 ? '#d29922' : '#58a6ff';
+  bar.style.background = pct > 90 ? '#ff4757' : pct > 70 ? '#ffb347' : '#00d4ff';
   var label = '$' + spent.toFixed(4) + ' / $' + limit.toFixed(2);
   if (remaining != null) label += ' ($' + remaining.toFixed(4) + ' remaining)';
   document.getElementById('budget-text').textContent = label;
@@ -1562,7 +1565,7 @@ function renderAttestation(attest) {
     var label = rows[i][0];
     var value = rows[i][1];
     if (!value) continue;
-    var valueClass = (label === 'Chain Integrity') ? 'style="color:#3fb950;font-weight:bold;"' : '';
+    var valueClass = (label === 'Chain Integrity') ? 'style="color:#2ed573;font-weight:bold;"' : '';
     html += '<div class="entity-row">';
     html += '<span class="entity-name">' + label + '</span>';
     html += '<span class="entity-detail" ' + valueClass + '>' + value + '</span>';
