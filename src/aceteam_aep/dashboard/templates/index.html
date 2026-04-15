@@ -240,7 +240,7 @@
   .span-item:nth-child(even) { background: rgba(15,21,32,0.6); }
   .span-item:hover { background: var(--bg-raised); }
   .span-model { color: var(--accent-cyan); font-weight: 500; }
-  .span-time { color: var(--text-muted); font-size: 11px; margin-left: 10px; }
+  .span-time { color: var(--text-muted); font-size: 11px; margin-right: 10px; min-width: 120px; }
   .span-dur { color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .span-cost { color: var(--accent-cyan); font-size: 12px; margin-right: 8px; opacity: 0.8; }
   .span-right { display: flex; align-items: center; gap: 10px; }
@@ -1246,22 +1246,18 @@ function renderSpans(container, spans, signals) {
     var row = document.createElement('div');
     row.className = 'span-item';
 
-    var left = document.createElement('span');
-
-    var model = document.createElement('span');
-    model.className = 'span-model';
-    model.textContent = esc(s.executor);
-    left.appendChild(model);
-
     if (s.started_at) {
       var timeEl = document.createElement('span');
       timeEl.className = 'span-time';
       var d = new Date(s.started_at);
-      timeEl.textContent = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-      left.appendChild(timeEl);
+      timeEl.textContent = d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+      row.appendChild(timeEl);
     }
 
-    row.appendChild(left);
+    var model = document.createElement('span');
+    model.className = 'span-model';
+    model.textContent = esc(s.executor);
+    row.appendChild(model);
 
     var right = document.createElement('span');
     right.className = 'span-right';
