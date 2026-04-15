@@ -56,6 +56,8 @@ def _resolve_config(args: argparse.Namespace) -> object:
         cli_overrides["no_dashboard"] = True
     if getattr(args, "policy", None):
         cli_overrides["policy"] = args.policy
+    if getattr(args, "debug", False):
+        cli_overrides["debug"] = True
 
     return load_config(config_path, cli_overrides=cli_overrides)
 
@@ -103,6 +105,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     # Use unified config if --config provided, otherwise legacy args
     config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
+    debug = getattr(args, "debug", False) or (config_path and getattr(_resolve_config(args), "debug", False))
     if config_path:
         cfg = _resolve_config(args)
         detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
@@ -111,6 +114,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
             detectors=detectors,
             policy=cfg.policy,  # type: ignore[attr-defined]
             dashboard=cfg.dashboard,  # type: ignore[attr-defined]
+            debug=debug,
         )
         port = cfg.port  # type: ignore[attr-defined]
         host = cfg.host  # type: ignore[attr-defined]
@@ -130,6 +134,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
             signer_id=signer_id,
             budget=getattr(args, "budget", None),
             budget_per_session=getattr(args, "budget_per_session", None),
+            debug=debug,
         )
         port = args.port or 8899
         host = args.host or "127.0.0.1"
@@ -147,12 +152,17 @@ def _run_proxy(args: argparse.Namespace) -> None:
     except ImportError:
         pass
 
+    debug_msg = ""
+    if debug:
+        debug_msg = f"  Debug:      ON ⚠️  (warning: exposes private data in logs)\n"
+
     print(
         f"\n"
         f"  SafeClaw Gateway\n"
         f"  {'─' * 35}\n"
         f"  LLM Proxy:  http://localhost:{port}/v1\n"
         f"  Target:     {target}\n"
+        f"{debug_msg}"
         f"{dashboard_msg}"
         f"{mcp_msg}"
         f"\n"
@@ -190,6 +200,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
             detectors=detectors,
             policy=cfg.policy,  # type: ignore[attr-defined]
             dashboard=dashboard,
+            debug=False,  # debug mode not supported for wrap
         )
     else:
         port = args.port or _find_free_port()
@@ -203,6 +214,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
             detectors=detectors,
             policy=policy,
             dashboard=dashboard,
+            debug=False,  # debug mode not supported for wrap
         )
 
     # Start proxy in a background thread
@@ -712,6 +724,11 @@ def main() -> None:
         type=float,
         default=None,
         help="Per-session budget cap in USD (returns 429 when exceeded)",
+    )
+    proxy_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode - log all requests to console",
     )
 
     # --- keygen subcommand ---

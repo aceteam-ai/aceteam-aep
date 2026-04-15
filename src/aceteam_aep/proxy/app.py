@@ -28,6 +28,7 @@ from ..safety.cost_anomaly import CostAnomalyDetector
 from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
+from .logutil import configure_proxy_debug_logging
 from .redis_publisher import build_event, publish_event
 
 log = logging.getLogger(__name__)
@@ -234,6 +235,7 @@ def create_proxy_app(
     signer_id: str = "proxy:default",
     budget: float | None = None,
     budget_per_session: float | None = None,
+    debug: bool = False,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
@@ -244,6 +246,10 @@ def create_proxy_app(
         budget=budget,
         budget_per_session=budget_per_session,
     )
+
+    # Enable debug logging if requested (see logutil; uvicorn/defaults drop DEBUG)
+    if debug:
+        configure_proxy_debug_logging()
 
     # Attestation engine (optional — enabled when sign_key is provided)
     attestation_engine = None
@@ -276,6 +282,14 @@ def create_proxy_app(
         call_id = uuid.uuid4().hex[:8]
         path = request.url.path
         body_bytes = await request.body()
+
+        # Debug logging for all requests (both input and output)
+        if debug:
+            try:
+                body = json.loads(body_bytes) if body_bytes else {}
+            except json.JSONDecodeError:
+                body = {}
+            log.debug("REQUEST %s %s %s: headers=%s, body=%s", call_id, request.method, path, dict(request.headers), body)
 
         # Parse request body
         try:
@@ -448,6 +462,7 @@ def create_proxy_app(
                 registry=state.registry,
                 policy=state.policy,
                 on_complete=on_stream_complete,
+                debug=debug,
             )
 
         # --- NON-STREAMING BRANCH ---
@@ -588,6 +603,20 @@ def create_proxy_app(
                 ),
             )
             resp_headers.update(attest_headers)
+
+        # Debug: log the response
+        if debug:
+            log.debug(
+                "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, status=%d, body=%s",
+                call_id,
+                request.method,
+                path,
+                model,
+                input_tokens,
+                output_tokens,
+                upstream_resp.status_code,
+                resp_data,
+            )
 
         return Response(
             content=upstream_resp.content,
