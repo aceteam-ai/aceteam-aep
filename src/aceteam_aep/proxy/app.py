@@ -25,10 +25,7 @@ from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate
-from ..safety.agent_threat import AgentThreatDetector
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
-from ..safety.content import ContentSafetyDetector
-from ..safety.cost_anomaly import CostAnomalyDetector
 from ..safety.custom import (
     CustomPolicy,
     CustomPolicyStore,
@@ -266,12 +263,15 @@ class ProxyState:
 
 
 def _default_proxy_detectors() -> Sequence[SafetyDetector]:
-    """Default detectors for the proxy."""
-    return (
-        CostAnomalyDetector(),
-        AgentThreatDetector(),
-        ContentSafetyDetector(),
-    )
+    """Default detectors for the proxy.
+
+    Returns an empty sequence: :class:`ProxyState` always registers
+    :class:`CustomSafetyDetector` with a :class:`CustomPolicyStore` so
+    natural-language policies from the dashboard/API are enforced. Add other
+    detectors via ``--detector``, policy-driven ``build_detectors_from_policy``,
+    or by passing an explicit ``detectors=`` list to :func:`create_proxy_app`.
+    """
+    return ()
 
 
 def create_proxy_app(
