@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,7 +11,7 @@ import pytest
 
 from aceteam_aep import AepSession, wrap
 from aceteam_aep.enforcement import EnforcementPolicy
-from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
 
 # ---------------------------------------------------------------------------
@@ -260,10 +261,10 @@ def test_custom_policy() -> None:
 def test_custom_detectors() -> None:
     """Pass a custom detector list to wrap()."""
 
-    class AlwaysFlagDetector:
+    class AlwaysFlagDetector(SafetyDetector):
         name = "always_flag"
 
-        def check(self, **kwargs: Any) -> list[SafetySignal]:
+        async def check(self, **kwargs) -> Sequence[SafetySignal]:
             return [
                 SafetySignal(
                     signal_type="custom",

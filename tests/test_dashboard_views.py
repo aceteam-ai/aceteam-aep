@@ -8,6 +8,7 @@ for both views.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -68,7 +69,7 @@ class HighDetector:
 
     name = "high_test"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
+    async def check(self, **kwargs) -> Sequence[SafetySignal]:
         return [
             SafetySignal(
                 signal_type="agent_threat",
@@ -85,7 +86,7 @@ class MediumDetector:
 
     name = "medium_test"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
+    async def check(self, **kwargs) -> Sequence[SafetySignal]:
         return [
             SafetySignal(
                 signal_type="content_safety",
@@ -102,7 +103,7 @@ class NoopDetector:
 
     name = "noop"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
+    async def check(self, **kwargs) -> Sequence[SafetySignal]:
         return []
 
 
@@ -219,7 +220,7 @@ class TestDeveloperView:
         class BinaryDetector:
             name = "binary"
 
-            def check(self, **kwargs: Any) -> list[SafetySignal]:
+            async def check(self, **kwargs) -> Sequence[SafetySignal]:
                 return [
                     SafetySignal(
                         signal_type="test",
@@ -396,7 +397,7 @@ class TestExecutiveView:
             def __init__(self) -> None:
                 self.signals_to_return: list[SafetySignal] = []
 
-            def check(self, **kwargs: Any) -> list[SafetySignal]:
+            async def check(self, **kwargs) -> Sequence[SafetySignal]:
                 return [
                     SafetySignal(
                         signal_type=s.signal_type,

@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Sequence
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from starlette.testclient import TestClient
 
 from aceteam_aep.proxy.app import create_proxy_app
-from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 
 
-class _ThreatDetector:
+class _ThreatDetector(SafetyDetector):
     name = "threat"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
+    async def check(self, **kwargs) -> Sequence[SafetySignal]:
         return [
             SafetySignal(
                 signal_type="agent_threat",
@@ -28,10 +28,10 @@ class _ThreatDetector:
         ]
 
 
-class _NoopDetector:
+class _NoopDetector(SafetyDetector):
     name = "noop"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
+    async def check(self, **kwargs) -> Sequence[SafetySignal]:
         return []
 
 

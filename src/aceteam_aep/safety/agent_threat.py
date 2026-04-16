@@ -78,7 +78,7 @@ class AgentThreatDetector(SafetyDetector):
         self._scan_output = scan_output
         self._patterns = _THREAT_PATTERNS
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,

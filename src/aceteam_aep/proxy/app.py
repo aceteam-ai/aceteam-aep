@@ -385,7 +385,7 @@ def create_proxy_app(
             input_text = _extract_text_from_messages(body["messages"])
 
         if state.safety_enabled:
-            input_signals = state.registry.run_all(
+            input_signals = await state.registry.run_all(
                 input_text=input_text,
                 output_text="",
                 call_id=call_id,
@@ -572,7 +572,7 @@ def create_proxy_app(
 
         # --- OUTPUT SAFETY CHECK ---
         if state.safety_enabled:
-            output_signals = state.registry.run_all(
+            output_signals = await state.registry.run_all(
                 input_text=input_text,
                 output_text=output_text,
                 call_id=call_id,

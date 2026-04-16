@@ -116,7 +116,7 @@ class FerpaDetector(SafetyDetector):
 
     name = "ferpa"
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,

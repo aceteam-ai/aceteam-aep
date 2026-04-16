@@ -105,7 +105,7 @@ class PiiDetector(SafetyDetector):
             )
             self._fallback = True
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,

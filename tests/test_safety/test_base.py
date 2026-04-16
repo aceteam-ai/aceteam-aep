@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from aceteam_aep.safety.base import DetectorRegistry, SafetySignal
+from collections.abc import Sequence
+
+from aceteam_aep.safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 
 
-class FakeDetector:
+class FakeDetector(SafetyDetector):
     name = "fake"
 
-    def check(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-    ) -> list[SafetySignal]:
+    async def check(
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> Sequence[SafetySignal]:
         if "bad" in output_text:
             return [
                 SafetySignal(
@@ -20,42 +27,59 @@ class FakeDetector:
         return []
 
 
-def test_detector_registry_runs_all_detectors() -> None:
+async def test_detector_registry_runs_all_detectors() -> None:
     reg = DetectorRegistry()
     reg.add(FakeDetector())
-    signals = reg.run_all(input_text="", output_text="something bad", call_id="abc")
+    signals = await reg.run_all(
+        input_text="",
+        output_text="something bad",
+        call_id="abc",
+    )
     assert len(signals) == 1
     assert signals[0].signal_type == "test"
     assert signals[0].detector == "fake"
 
 
-def test_detector_registry_empty_on_clean_input() -> None:
+async def test_detector_registry_empty_on_clean_input() -> None:
     reg = DetectorRegistry()
     reg.add(FakeDetector())
-    signals = reg.run_all(input_text="", output_text="all good", call_id="abc")
+    signals = await reg.run_all(
+        input_text="",
+        output_text="all good",
+        call_id="abc",
+    )
     assert signals == []
 
 
-def test_detector_registry_catches_detector_errors() -> None:
-    class BrokenDetector:
+async def test_detector_registry_catches_detector_errors() -> None:
+    class BrokenDetector(SafetyDetector):
         name = "broken"
 
-        def check(self, **kwargs: object) -> list[SafetySignal]:
+        async def check(self, **kwargs) -> Sequence[SafetySignal]:
             raise RuntimeError("boom")
 
     reg = DetectorRegistry()
     reg.add(BrokenDetector())
-    signals = reg.run_all(input_text="", output_text="test", call_id="abc")
+    signals = await reg.run_all(
+        input_text="",
+        output_text="test",
+        call_id="abc",
+    )
     assert signals == []
 
 
-def test_multiple_detectors_combine_signals() -> None:
-    class SecondDetector:
+async def test_multiple_detectors_combine_signals() -> None:
+    class SecondDetector(SafetyDetector):
         name = "second"
 
-        def check(
-            self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-        ) -> list[SafetySignal]:
+        async def check(
+            self,
+            *,
+            input_text: str,
+            output_text: str,
+            call_id: str,
+            **kwargs,
+        ) -> Sequence[SafetySignal]:
             if "bad" in input_text:
                 return [
                     SafetySignal(
@@ -70,7 +94,7 @@ def test_multiple_detectors_combine_signals() -> None:
     reg = DetectorRegistry()
     reg.add(FakeDetector())
     reg.add(SecondDetector())
-    signals = reg.run_all(input_text="bad input", output_text="bad output", call_id="x")
+    signals = await reg.run_all(input_text="bad input", output_text="bad output", call_id="x")
     assert len(signals) == 2
     types = {s.signal_type for s in signals}
     assert types == {"test", "input_check"}

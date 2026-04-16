@@ -28,9 +28,11 @@ Supports:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -82,7 +84,7 @@ def _default_detectors() -> list[Any]:
 class AepPreflightBlock(Exception):
     """Raised when pre-flight safety checks block a request."""
 
-    def __init__(self, decision: EnforcementDecision, signals: list[SafetySignal]) -> None:
+    def __init__(self, decision: EnforcementDecision, signals: Sequence[SafetySignal]) -> None:
         self.decision = decision
         self.signals = signals
         super().__init__(f"AEP pre-flight blocked: {decision.reason}")
@@ -220,7 +222,7 @@ class AepSession:
 
         serve(self, port=port)
 
-    def preflight_check(self, *, input_text: str, call_id: str) -> None:
+    async def preflight_check(self, *, input_text: str, call_id: str) -> None:
         """Run detectors on input text before the API call.
 
         Raises ``AepPreflightBlock`` if any detector returns a HIGH severity
@@ -229,7 +231,7 @@ class AepSession:
         if not input_text:
             return
 
-        signals = self._registry.run_all(
+        signals = await self._registry.run_all(
             input_text=input_text,
             output_text="",
             call_id=call_id,
@@ -248,7 +250,7 @@ class AepSession:
         call_id: str,
         input_text: str,
         output_text: str,
-        signals: list[SafetySignal],
+        signals: Sequence[SafetySignal],
         enforcement: EnforcementDecision,
     ) -> None:
         """Print input/output snippets and detector results when verbose."""
@@ -271,7 +273,7 @@ class AepSession:
             print(f"  {_DIM}(no signals){_RESET}")
         print(f"{_DIM}{'─' * 60}{_RESET}")
 
-    def _record_call(
+    async def _record_call(
         self,
         model: str,
         input_tokens: int,
@@ -307,7 +309,7 @@ class AepSession:
         self._call_costs.append(cost_node.compute_cost)
 
         # Run all registered detectors
-        signals = self._registry.run_all(
+        signals = await self._registry.run_all(
             input_text=input_text,
             output_text=output_text,
             call_id=call_id,
@@ -342,7 +344,7 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
 
         # Pre-flight: check input before sending to LLM
         input_text = _extract_input_text(kwargs.get("messages", []))
-        session.preflight_check(input_text=input_text, call_id=call_id)
+        asyncio.run(session.preflight_check(input_text=input_text, call_id=call_id))
 
         result = original_create(*args, **kwargs)
 
@@ -357,13 +359,15 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
                 if msg and hasattr(msg, "content") and msg.content:
                     output_text += msg.content
             input_text = _extract_input_text(kwargs.get("messages", []))
-            session._record_call(
-                model=model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                call_id=call_id,
-                output_text=output_text,
-                input_text=input_text,
+            asyncio.run(
+                session._record_call(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    call_id=call_id,
+                    output_text=output_text,
+                    input_text=input_text,
+                )
             )
         except Exception:
             pass  # Never break user code due to AEP instrumentation
@@ -384,7 +388,7 @@ def _wrap_openai_async(client: Any, session: AepSession) -> Any:
 
         # Pre-flight: check input before sending to LLM
         input_text = _extract_input_text(kwargs.get("messages", []))
-        session.preflight_check(input_text=input_text, call_id=call_id)
+        await session.preflight_check(input_text=input_text, call_id=call_id)
 
         result = await original_create(*args, **kwargs)
 
@@ -399,7 +403,7 @@ def _wrap_openai_async(client: Any, session: AepSession) -> Any:
                 if msg and hasattr(msg, "content") and msg.content:
                     output_text += msg.content
             input_text = _extract_input_text(kwargs.get("messages", []))
-            session._record_call(
+            await session._record_call(
                 model=model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -431,7 +435,7 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
 
         # Pre-flight: check input before sending to LLM
         input_text = _extract_input_text(kwargs.get("messages", []))
-        session.preflight_check(input_text=input_text, call_id=call_id)
+        asyncio.run(session.preflight_check(input_text=input_text, call_id=call_id))
 
         result = original_create(*args, **kwargs)
 
@@ -445,13 +449,15 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
                 if hasattr(block, "text"):
                     output_text += block.text
             input_text = _extract_input_text(kwargs.get("messages", []))
-            session._record_call(
-                model=model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                call_id=call_id,
-                output_text=output_text,
-                input_text=input_text,
+            asyncio.run(
+                session._record_call(
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    call_id=call_id,
+                    output_text=output_text,
+                    input_text=input_text,
+                )
             )
         except Exception:
             pass
@@ -472,7 +478,7 @@ def _wrap_anthropic_async(client: Any, session: AepSession) -> Any:
 
         # Pre-flight: check input before sending to LLM
         input_text = _extract_input_text(kwargs.get("messages", []))
-        session.preflight_check(input_text=input_text, call_id=call_id)
+        await session.preflight_check(input_text=input_text, call_id=call_id)
 
         result = await original_create(*args, **kwargs)
 
@@ -486,7 +492,7 @@ def _wrap_anthropic_async(client: Any, session: AepSession) -> Any:
                 if hasattr(block, "text"):
                     output_text += block.text
             input_text = _extract_input_text(kwargs.get("messages", []))
-            session._record_call(
+            await session._record_call(
                 model=model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
