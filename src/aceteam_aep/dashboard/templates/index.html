@@ -479,6 +479,221 @@
     margin: 6px 0 2px;
   }
 
+  /* ── Custom Policies ── */
+  .custom-policies-list { display: flex; flex-direction: column; gap: 6px; }
+  .policy-item {
+    background: var(--bg-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    gap: 4px 16px;
+    align-items: center;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+  }
+  .policy-item:hover { border-color: var(--border); background: rgba(15,21,32,0.8); }
+  .policy-item.disabled-policy { opacity: 0.45; }
+  .policy-item.disabled-policy:hover { opacity: 0.6; }
+  .policy-name {
+    font-family: var(--font-label);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
+  }
+  .policy-rule {
+    font-size: 12px;
+    color: var(--text-muted);
+    grid-column: 1;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .policy-actions {
+    grid-row: 1 / 3;
+    grid-column: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .policy-toggle-mini {
+    position: relative;
+    width: 34px; height: 18px;
+    background: var(--accent-red);
+    border-radius: 9px;
+    cursor: pointer;
+    transition: background 0.3s, box-shadow 0.3s;
+    box-shadow: 0 0 6px rgba(255,71,87,0.2);
+    flex-shrink: 0;
+  }
+  .policy-toggle-mini.on {
+    background: var(--accent-green);
+    box-shadow: 0 0 6px rgba(46,213,115,0.2);
+  }
+  .policy-toggle-mini::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.25s;
+  }
+  .policy-toggle-mini.on::after { transform: translateX(16px); }
+  .policy-action-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .policy-action-btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); background: var(--accent-cyan-dim); }
+  .policy-action-btn.delete:hover { border-color: var(--accent-red); color: var(--accent-red); background: var(--accent-red-dim); }
+
+  .add-policy-btn {
+    background: var(--bg-inset);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    color: var(--text-dim);
+    font-family: var(--font-label);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.4px;
+    transition: all 0.2s;
+  }
+  .add-policy-btn:hover {
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+    background: rgba(0,212,255,0.04);
+  }
+  .add-policy-btn .plus-icon {
+    width: 22px; height: 22px;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 300;
+  }
+
+  /* Policy form (inline) */
+  .policy-form {
+    background: var(--bg-raised);
+    border: 1px solid var(--accent-cyan);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px;
+    box-shadow: 0 0 20px rgba(0,212,255,0.06), 0 8px 32px rgba(0,0,0,0.2);
+    animation: fadeSlideIn 0.25s ease-out;
+  }
+  .policy-form-title {
+    font-family: var(--font-label);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-cyan);
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin-bottom: 14px;
+  }
+  .policy-form-group { margin-bottom: 12px; }
+  .policy-form-label {
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 5px;
+    display: block;
+  }
+  .policy-form-input {
+    width: 100%;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 9px 14px;
+    border-radius: var(--radius);
+    font-family: var(--font-data);
+    font-size: 13px;
+    transition: border-color 0.2s;
+  }
+  .policy-form-input:focus { border-color: var(--accent-cyan); outline: none; box-shadow: 0 0 0 2px rgba(0,212,255,0.08); }
+  .policy-form-textarea {
+    width: 100%;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 9px 14px;
+    border-radius: var(--radius);
+    font-family: var(--font-data);
+    font-size: 12px;
+    line-height: 1.6;
+    min-height: 64px;
+    resize: vertical;
+    transition: border-color 0.2s;
+  }
+  .policy-form-textarea:focus { border-color: var(--accent-cyan); outline: none; box-shadow: 0 0 0 2px rgba(0,212,255,0.08); }
+  .policy-form-btns { display: flex; gap: 8px; margin-top: 4px; }
+  .policy-form-save {
+    background: var(--accent-cyan);
+    color: var(--bg-deep);
+    border: none;
+    padding: 7px 18px;
+    border-radius: 16px;
+    font-family: var(--font-label);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.3px;
+    transition: opacity 0.15s, box-shadow 0.15s;
+    box-shadow: 0 0 10px rgba(0,212,255,0.15);
+  }
+  .policy-form-save:hover { opacity: 0.9; box-shadow: 0 0 16px rgba(0,212,255,0.25); }
+  .policy-form-save:disabled { opacity: 0.35; cursor: not-allowed; }
+  .policy-form-cancel {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    padding: 7px 18px;
+    border-radius: 16px;
+    font-family: var(--font-label);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .policy-form-cancel:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+  .policy-empty {
+    text-align: center;
+    padding: 28px 16px;
+    color: var(--text-dim);
+    font-family: var(--font-label);
+    font-size: 13px;
+    letter-spacing: 0.2px;
+  }
+  .policy-empty-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
+    opacity: 0.7;
+  }
+
   /* ── Setup Overlay ── */
   .setup-overlay {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -670,6 +885,11 @@
     <div class="policy-controls" id="policy-controls">
       <span class="empty">Loading policy...</span>
     </div>
+  </div>
+
+  <div class="section" id="custom-policies-section" style="animation-delay: 0.22s;">
+    <h2>Custom Policies</h2>
+    <div id="custom-policies-container"></div>
   </div>
 
   <div class="section">
@@ -1582,6 +1802,223 @@ function renderAttestation(attest) {
   }
   details.innerHTML = html;
 }
+// ── Custom Policies (frontend-only, localStorage) ──
+var customPolicies = [];
+var editingPolicyId = null; // null = not editing, 'new' = adding, string = editing existing
+
+function loadCustomPolicies() {
+  try {
+    var raw = localStorage.getItem('safeclaw-custom-policies');
+    customPolicies = raw ? JSON.parse(raw) : [];
+  } catch (e) { customPolicies = []; }
+}
+
+function saveCustomPolicies() {
+  localStorage.setItem('safeclaw-custom-policies', JSON.stringify(customPolicies));
+}
+
+function generatePolicyId() {
+  return 'cp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+}
+
+function renderCustomPolicies() {
+  var container = document.getElementById('custom-policies-container');
+  container.textContent = '';
+
+  // Show form if editing
+  if (editingPolicyId !== null) {
+    var isNew = editingPolicyId === 'new';
+    var existing = isNew ? null : customPolicies.find(function(p) { return p.id === editingPolicyId; });
+
+    var form = document.createElement('div');
+    form.className = 'policy-form';
+
+    var title = document.createElement('div');
+    title.className = 'policy-form-title';
+    title.textContent = isNew ? 'New Policy' : 'Edit Policy';
+    form.appendChild(title);
+
+    var nameGroup = document.createElement('div');
+    nameGroup.className = 'policy-form-group';
+    var nameLabel = document.createElement('label');
+    nameLabel.className = 'policy-form-label';
+    nameLabel.htmlFor = 'policy-form-name';
+    nameLabel.textContent = 'Name';
+    nameGroup.appendChild(nameLabel);
+    var nameInput = document.createElement('input');
+    nameInput.className = 'policy-form-input';
+    nameInput.id = 'policy-form-name';
+    nameInput.type = 'text';
+    nameInput.placeholder = 'e.g. No PII in Logs';
+    nameInput.value = existing ? existing.name : '';
+    nameGroup.appendChild(nameInput);
+    form.appendChild(nameGroup);
+
+    var ruleGroup = document.createElement('div');
+    ruleGroup.className = 'policy-form-group';
+    var ruleLabel = document.createElement('label');
+    ruleLabel.className = 'policy-form-label';
+    ruleLabel.htmlFor = 'policy-form-rule';
+    ruleLabel.textContent = 'Rule';
+    ruleGroup.appendChild(ruleLabel);
+    var ruleInput = document.createElement('textarea');
+    ruleInput.className = 'policy-form-textarea';
+    ruleInput.id = 'policy-form-rule';
+    ruleInput.placeholder = 'Describe what this policy enforces...';
+    ruleInput.value = existing ? existing.rule : '';
+    ruleGroup.appendChild(ruleInput);
+    form.appendChild(ruleGroup);
+
+    var btns = document.createElement('div');
+    btns.className = 'policy-form-btns';
+    var saveBtn = document.createElement('button');
+    saveBtn.className = 'policy-form-save';
+    saveBtn.textContent = isNew ? 'Create Policy' : 'Save Changes';
+    saveBtn.onclick = function() { savePolicyForm(isNew, existing ? existing.id : null); };
+    btns.appendChild(saveBtn);
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'policy-form-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = function() { editingPolicyId = null; renderCustomPolicies(); };
+    btns.appendChild(cancelBtn);
+    form.appendChild(btns);
+
+    container.appendChild(form);
+
+    // Focus the name input after render
+    setTimeout(function() { nameInput.focus(); }, 30);
+    return;
+  }
+
+  // Policy list
+  if (customPolicies.length === 0) {
+    var emptyWrap = document.createElement('div');
+    emptyWrap.className = 'policy-empty';
+    emptyWrap.textContent = 'No custom policies defined';
+    var hint = document.createElement('div');
+    hint.className = 'policy-empty-hint';
+    hint.textContent = 'Custom policies let you define rules that will be enforced on agent behavior.';
+    emptyWrap.appendChild(hint);
+    container.appendChild(emptyWrap);
+  } else {
+    var list = document.createElement('div');
+    list.className = 'custom-policies-list';
+
+    customPolicies.forEach(function(policy) {
+      var item = document.createElement('div');
+      item.className = 'policy-item' + (policy.enabled ? '' : ' disabled-policy');
+
+      var nameEl = document.createElement('div');
+      nameEl.className = 'policy-name';
+      nameEl.textContent = policy.name;
+      item.appendChild(nameEl);
+
+      var ruleEl = document.createElement('div');
+      ruleEl.className = 'policy-rule';
+      ruleEl.textContent = policy.rule;
+      item.appendChild(ruleEl);
+
+      var actions = document.createElement('div');
+      actions.className = 'policy-actions';
+
+      // Toggle
+      var toggle = document.createElement('div');
+      toggle.className = 'policy-toggle-mini' + (policy.enabled ? ' on' : '');
+      toggle.title = policy.enabled ? 'Disable' : 'Enable';
+      toggle.setAttribute('role', 'switch');
+      toggle.tabIndex = 0;
+      toggle.setAttribute('aria-checked', policy.enabled ? 'true' : 'false');
+      toggle.setAttribute('aria-label', (policy.enabled ? 'Disable ' : 'Enable ') + policy.name);
+      toggle.onclick = function() { toggleCustomPolicy(policy.id); };
+      toggle.onkeydown = function(event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          toggleCustomPolicy(policy.id);
+        }
+      };
+      actions.appendChild(toggle);
+
+      // Edit
+      var editBtn = document.createElement('button');
+      editBtn.className = 'policy-action-btn';
+      editBtn.title = 'Edit';
+      editBtn.innerHTML = '&#9998;';
+      editBtn.onclick = function() { editingPolicyId = policy.id; renderCustomPolicies(); };
+      actions.appendChild(editBtn);
+
+      // Delete
+      var delBtn = document.createElement('button');
+      delBtn.className = 'policy-action-btn delete';
+      delBtn.title = 'Delete';
+      delBtn.innerHTML = '&#10005;';
+      delBtn.onclick = function() { deleteCustomPolicy(policy.id); };
+      actions.appendChild(delBtn);
+
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+
+    container.appendChild(list);
+  }
+
+  // Add button
+  var addBtn = document.createElement('button');
+  addBtn.className = 'add-policy-btn';
+  addBtn.onclick = function() { editingPolicyId = 'new'; renderCustomPolicies(); };
+  var plusIcon = document.createElement('span');
+  plusIcon.className = 'plus-icon';
+  plusIcon.textContent = '+';
+  addBtn.appendChild(plusIcon);
+  var addLabel = document.createElement('span');
+  addLabel.textContent = 'Add Policy';
+  addBtn.appendChild(addLabel);
+  container.appendChild(addBtn);
+}
+
+function savePolicyForm(isNew, existingId) {
+  var name = (document.getElementById('policy-form-name').value || '').trim();
+  var rule = (document.getElementById('policy-form-rule').value || '').trim();
+  if (!name || !rule) return;
+
+  if (isNew) {
+    customPolicies.push({
+      id: generatePolicyId(),
+      name: name,
+      rule: rule,
+      enabled: true
+    });
+  } else {
+    var idx = customPolicies.findIndex(function(p) { return p.id === existingId; });
+    if (idx >= 0) {
+      customPolicies[idx].name = name;
+      customPolicies[idx].rule = rule;
+    }
+  }
+
+  saveCustomPolicies();
+  editingPolicyId = null;
+  renderCustomPolicies();
+}
+
+function toggleCustomPolicy(id) {
+  var idx = customPolicies.findIndex(function(p) { return p.id === id; });
+  if (idx >= 0) {
+    customPolicies[idx].enabled = !customPolicies[idx].enabled;
+    saveCustomPolicies();
+    renderCustomPolicies();
+  }
+}
+
+function deleteCustomPolicy(id) {
+  customPolicies = customPolicies.filter(function(p) { return p.id !== id; });
+  saveCustomPolicies();
+  renderCustomPolicies();
+}
+
+// Init custom policies
+loadCustomPolicies();
+renderCustomPolicies();
+
 // Auto-select view on load
 setView(currentView);
 refresh();
