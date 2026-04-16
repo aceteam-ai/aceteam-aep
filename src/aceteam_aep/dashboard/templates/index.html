@@ -1474,7 +1474,8 @@
       <h2>Policy Tester</h2>
       <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px;">
         Evaluate a natural-language policy against arbitrary text, without
-        running an agent. Pick one of the rules defined above, paste in a
+        running an agent. The tester uses the API key you saved via SETUP
+        to ask the LLM whether the text complies. Pick a rule, paste a
         sample, and see whether it passes or gets flagged.
       </p>
       <div class="tester-row">
@@ -2360,14 +2361,24 @@
       }).then(function (res) {
         if (!res.ok) {
           resultEl.className = 'tester-result';
-          resultEl.textContent = (res.body && res.body.error) || 'Evaluation failed';
+          if (res.body && res.body.error === 'api_key_required') {
+            resultEl.textContent = 'Save an API key via the SETUP button first — the tester uses it to ask the LLM whether the text complies.';
+          } else if (res.body && res.body.error === 'upstream_error') {
+            resultEl.textContent = 'Upstream LLM returned ' + res.body.status + ': ' + (res.body.detail || '').slice(0, 200);
+          } else {
+            resultEl.textContent = (res.body && res.body.error) || 'Evaluation failed';
+          }
           return;
         }
         var passes = !!res.body.passes;
         resultEl.className = 'tester-result ' + (passes ? 'passed' : 'violated');
-        resultEl.textContent = passes
+        var base = passes
           ? 'PASSED — text complies with "' + res.body.policy_name + '"'
           : 'VIOLATED — text breaks "' + res.body.policy_name + '" (' + res.body.severity + ' severity)';
+        if (res.body.raw_answer) {
+          base += '  (model: ' + res.body.raw_answer.trim().slice(0, 8) + ')';
+        }
+        resultEl.textContent = base;
       }).catch(function () {
         resultEl.className = 'tester-result';
         resultEl.textContent = 'Request failed. Is the proxy running?';

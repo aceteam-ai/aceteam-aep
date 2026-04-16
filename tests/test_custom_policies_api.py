@@ -175,34 +175,137 @@ class TestCustomPoliciesAPI:
         )
         assert client.post("/dashboard/api/api-key", json={}).status_code == 400
 
-    def test_policy_test_endpoint_returns_violation(self) -> None:
-        """Stub the CustomPolicy's __call__ so we don't need the PAW compiler online."""
-        from aceteam_aep.safety.custom import CustomPolicy
+    def test_policy_test_endpoint_calls_llm_with_byok_key(self) -> None:
+        """The tester judges the rule via the BYOK key against the target LLM.
+
+        Mocks httpx.AsyncClient so we don't need a live API, but verifies the
+        saved key is forwarded in the Authorization header and that Y/N
+        answers map to passes/violated respectively.
+        """
+        import json as _json
+        from unittest.mock import AsyncMock
+
+        import httpx
 
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
+        client.post("/dashboard/api/api-key", json={"api_key": "sk-test-abcdef"})
         created = client.post(
             "/dashboard/api/custom-policies",
             json={"name": "Block foo", "rule": "must not contain foo", "enabled": True},
         ).json()
         policy_id = created["id"]
 
-        async def fake_call(self, text):  # noqa: ANN001
-            return "foo" not in text
+        def _mk_response(answer: str) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                content=_json.dumps(
+                    {
+                        "choices": [{"message": {"role": "assistant", "content": answer}}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    }
+                ).encode(),
+                headers={"content-type": "application/json"},
+                request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+            )
 
-        with patch.object(CustomPolicy, "__call__", fake_call):
+        # Pass case
+        with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=_mk_response("Y"))
+            mock_client_cls.return_value = mock_client
+
             passing = client.post(
                 "/dashboard/api/policy-test",
                 json={"policy_id": policy_id, "text": "hello world"},
-            ).json()
-            assert passing["passes"] is True
-            assert passing["policy_name"] == "Block foo"
+            )
+            assert passing.status_code == 200
+            assert passing.json()["passes"] is True
+            assert passing.json()["policy_name"] == "Block foo"
+
+            headers_sent = mock_client.post.call_args.kwargs["headers"]
+            assert headers_sent["Authorization"] == "Bearer sk-test-abcdef"
+            body_sent = mock_client.post.call_args.kwargs["json"]
+            assert body_sent["messages"][0]["role"] == "system"
+            assert "must not contain foo" in body_sent["messages"][0]["content"]
+            assert body_sent["messages"][1]["content"] == "hello world"
+
+        # Violation case
+        with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=_mk_response("N"))
+            mock_client_cls.return_value = mock_client
 
             failing = client.post(
                 "/dashboard/api/policy-test",
                 json={"policy_id": policy_id, "text": "hello foo"},
-            ).json()
-            assert failing["passes"] is False
+            )
+            assert failing.status_code == 200
+            assert failing.json()["passes"] is False
+
+    def test_policy_test_endpoint_requires_api_key(self) -> None:
+        """Without a BYOK key saved, the tester short-circuits with 400."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+        created = client.post(
+            "/dashboard/api/custom-policies",
+            json={"name": "Block foo", "rule": "no foo", "enabled": True},
+        ).json()
+        resp = client.post(
+            "/dashboard/api/policy-test",
+            json={"policy_id": created["id"], "text": "hi"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "api_key_required"
+
+    def test_policy_test_endpoint_uses_anthropic_when_target_matches(self) -> None:
+        """Anthropic-style target → /v1/messages + x-api-key header."""
+        import json as _json
+        from unittest.mock import AsyncMock
+
+        import httpx
+
+        app = create_proxy_app(
+            detectors=[_NoopDetector()],
+            dashboard=True,
+            target_base_url="https://api.anthropic.com",
+        )
+        client = TestClient(app)
+        client.post("/dashboard/api/api-key", json={"api_key": "sk-ant-xyz"})
+        created = client.post(
+            "/dashboard/api/custom-policies",
+            json={"name": "Rule", "rule": "r", "enabled": True},
+        ).json()
+
+        response = httpx.Response(
+            status_code=200,
+            content=_json.dumps(
+                {"content": [{"type": "text", "text": "Y"}]}
+            ).encode(),
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        )
+
+        with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=response)
+            mock_client_cls.return_value = mock_client
+
+            client.post(
+                "/dashboard/api/policy-test",
+                json={"policy_id": created["id"], "text": "x"},
+            )
+            url = mock_client.post.call_args.args[0]
+            headers_sent = mock_client.post.call_args.kwargs["headers"]
+            assert url.endswith("/v1/messages")
+            assert headers_sent["x-api-key"] == "sk-ant-xyz"
+            assert "Authorization" not in headers_sent
 
     def test_policy_test_endpoint_validates_input(self) -> None:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)

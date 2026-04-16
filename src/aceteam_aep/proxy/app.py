@@ -122,6 +122,78 @@ def _extract_usage(data: dict[str, Any]) -> tuple[str, int, int]:
     return model, input_tokens, output_tokens
 
 
+def _policy_eval_spec(rule: str) -> str:
+    """Prompt the policy tester sends to the LLM. Matches the local PAW spec
+    so that Y/N judgements are equivalent whether evaluation runs in-process
+    or via a hosted model."""
+    return (
+        "Determine whether the text follows the rule:\n\n"
+        + rule
+        + "\n\nYour answer must be a single character, either "
+        + '"Y" (yes, the text complies with the rule) '
+        + 'or "N" (no, the text violates the rule).'
+    )
+
+
+async def _evaluate_policy_via_llm(
+    *, rule: str, text: str, api_key: str, target_base_url: str
+) -> tuple[bool, str]:
+    """Ask the hosted LLM whether ``text`` complies with ``rule``.
+
+    Returns ``(passes, raw_answer)``. Routes to /v1/messages for
+    Anthropic-style targets and /v1/chat/completions otherwise; uses
+    a small, cheap judge model and caps output to a single token.
+    """
+    spec = _policy_eval_spec(rule)
+    base = target_base_url.rstrip("/")
+    is_anthropic = "anthropic" in base.lower()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if is_anthropic:
+            resp = await client.post(
+                f"{base}/v1/messages",
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 2,
+                    "system": spec,
+                    "messages": [{"role": "user", "content": text}],
+                },
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw = "".join(
+                b.get("text", "")
+                for b in data.get("content", [])
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            resp = await client.post(
+                f"{base}/v1/chat/completions",
+                json={
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 2,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "system", "content": spec},
+                        {"role": "user", "content": text},
+                    ],
+                },
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            choices = data.get("choices", [])
+            raw = (choices[0].get("message", {}) or {}).get("content", "") if choices else ""
+    return raw.strip().upper().startswith("Y"), raw
+
+
 def _ensure_openai_stream_usage(body: dict[str, Any], path: str) -> None:
     """Ask OpenAI-compatible chat completion streams to include token usage in SSE.
 
@@ -1008,8 +1080,8 @@ def create_proxy_app(
 
     # Policy tester — evaluate a single custom policy against arbitrary text,
     # so users can sanity-check a rule from the dashboard without wiring up an
-    # agent. Mirrors programasweights.com/browser but against policies that
-    # already live in this process.
+    # agent. Uses the BYOK key + target LLM as a judge (no local PAW runtime
+    # required), so the API key the user enters is actually exercised here.
     async def policy_test_handler(request: Request) -> Response:
         body, json_err = await _read_json_body(request)
         if json_err is not None:
@@ -1028,8 +1100,30 @@ def create_proxy_app(
         policy = state.custom_policy_store.get(policy_id)
         if policy is None:
             return JSONResponse({"error": "custom policy not found"}, status_code=404)
+        if not state.api_key:
+            return JSONResponse(
+                {
+                    "error": "api_key_required",
+                    "detail": "Save an API key via SETUP before running the policy tester.",
+                },
+                status_code=400,
+            )
         try:
-            passes = await policy(text)
+            passes, raw_answer = await _evaluate_policy_via_llm(
+                rule=policy.rule,
+                text=text,
+                api_key=state.api_key,
+                target_base_url=state.target_base_url,
+            )
+        except httpx.HTTPStatusError as exc:
+            return JSONResponse(
+                {
+                    "error": "upstream_error",
+                    "status": exc.response.status_code,
+                    "detail": exc.response.text[:500],
+                },
+                status_code=502,
+            )
         except Exception as exc:
             log.warning("Policy test failed for %s: %s", policy.name, exc)
             return JSONResponse(
@@ -1043,6 +1137,7 @@ def create_proxy_app(
                 "passes": passes,
                 "severity": policy.severity,
                 "applies_to": policy.applies_to,
+                "raw_answer": raw_answer,
             }
         )
 
