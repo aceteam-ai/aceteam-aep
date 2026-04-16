@@ -27,7 +27,7 @@ class TestCustomPoliciesAPI:
 
         listed = client.get("/aep/api/custom-policies").json()
         names = {p["name"] for p in listed["policies"]}
-        assert names == {"English only", "Monetary policy", "No fun"}
+        assert names == {"English only", "US SSN pattern (input)"}
         assert all(p["enabled"] is False for p in listed["policies"])
 
         create = client.post(

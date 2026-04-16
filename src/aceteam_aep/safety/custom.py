@@ -165,7 +165,6 @@ class CustomPolicy(BaseModel):
     severity: CustomPolicySeverity = "high"
     """Maps to :attr:`SafetySignal.severity` when this policy is violated."""
 
-
     @cached_property
     def _paw(self) -> AsyncPawFunction:
         """
@@ -176,7 +175,9 @@ class CustomPolicy(BaseModel):
         return AsyncPawFunction(
             "Determine whether the text follows the rule:\n\n"
             + self.rule
-            + '\n\nYour answer must be a single character, either "Y" or "N".'
+            + "\n\nYour answer must be a single character, either "
+            + '"Y" (yes, the text complies with the rule) '
+            + 'or "N" (no, the text violates the rule).'
         )
 
     def eager(self) -> Self:
@@ -222,26 +223,20 @@ def default_custom_policies() -> tuple[CustomPolicy, ...]:
                 "This rule is violated if the substantive content of a message is not in English."
             ),
             enabled=False,
+            applies_to="both",
+            severity="low",
         ),
         CustomPolicy(
-            id=_stable_id("monetary-policy"),
-            name="Monetary policy",
+            id=_stable_id("ssn"),
+            name="Social Security Number",
             rule=(
-                "Monetary amounts must always be expressed in US dollars ($, USD, or US$). "
+                "Must not contain a U.S. Social Security Number (SSN) in the format XXX-XX-XXXX. "
                 "Empty or whitespace-only text is compliant. "
-                "This rule is violated if other currencies (such as EUR, GBP, ¥, ₹) appear."
+                "This rule is violated if at least 1 SSN is found."
             ),
             enabled=False,
-        ),
-        CustomPolicy(
-            id=_stable_id("no-fun"),
-            name="No fun",
-            rule=(
-                "Humor, jokes, sarcasm, witty wordplay, or comedy are not allowed. "
-                "Empty or whitespace-only text is compliant. "
-                "This rule is violated if there is any attempt at humor."
-            ),
-            enabled=False,
+            applies_to="input",
+            severity="high",
         ),
     )
 
