@@ -1802,27 +1802,35 @@ function renderAttestation(attest) {
   }
   details.innerHTML = html;
 }
-// ── Custom Policies (frontend-only, localStorage) ──
+// ── Custom Policies (proxy API) ──
 var customPolicies = [];
 var editingPolicyId = null; // null = not editing, 'new' = adding, string = editing existing
 
 function loadCustomPolicies() {
-  try {
-    var raw = localStorage.getItem('safeclaw-custom-policies');
-    customPolicies = raw ? JSON.parse(raw) : [];
-  } catch (e) { customPolicies = []; }
-}
-
-function saveCustomPolicies() {
-  localStorage.setItem('safeclaw-custom-policies', JSON.stringify(customPolicies));
-}
-
-function generatePolicyId() {
-  return 'cp_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+  fetch('api/custom-policies')
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      customPolicies = data.policies || [];
+      renderCustomPolicies();
+    })
+    .catch(function() {
+      customPolicies = [];
+      var container = document.getElementById('custom-policies-container');
+      if (!container) return;
+      container.textContent = '';
+      var err = document.createElement('div');
+      err.className = 'policy-empty';
+      err.textContent = 'Custom policies could not be loaded from the server.';
+      container.appendChild(err);
+    });
 }
 
 function renderCustomPolicies() {
   var container = document.getElementById('custom-policies-container');
+  if (!container) return;
   container.textContent = '';
 
   // Show form if editing
@@ -1981,49 +1989,88 @@ function savePolicyForm(isNew, existingId) {
   if (!name || !rule) return;
 
   if (isNew) {
-    customPolicies.push({
-      id: generatePolicyId(),
-      name: name,
-      rule: rule,
-      enabled: true
-    });
-  } else {
-    var idx = customPolicies.findIndex(function(p) { return p.id === existingId; });
-    if (idx >= 0) {
-      customPolicies[idx].name = name;
-      customPolicies[idx].rule = rule;
-    }
+    fetch('api/custom-policies', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, rule: rule, enabled: true})
+    })
+      .then(function(r) {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
+      .then(function() {
+        editingPolicyId = null;
+        loadCustomPolicies();
+      })
+      .catch(function() {
+        alert('Failed to create custom policy');
+      });
+    return;
   }
 
-  saveCustomPolicies();
-  editingPolicyId = null;
-  renderCustomPolicies();
+  var existing = customPolicies.find(function(p) { return p.id === existingId; });
+  if (!existing) return;
+
+  fetch('api/custom-policies/' + encodeURIComponent(existingId), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name, rule: rule, enabled: existing.enabled})
+  })
+    .then(function(r) {
+      if (!r.ok) throw new Error();
+      return r.json();
+    })
+    .then(function() {
+      editingPolicyId = null;
+      loadCustomPolicies();
+    })
+    .catch(function() {
+      alert('Failed to save custom policy');
+    });
 }
 
 function toggleCustomPolicy(id) {
-  var idx = customPolicies.findIndex(function(p) { return p.id === id; });
-  if (idx >= 0) {
-    customPolicies[idx].enabled = !customPolicies[idx].enabled;
-    saveCustomPolicies();
-    renderCustomPolicies();
-  }
+  var p = customPolicies.find(function(x) { return x.id === id; });
+  if (!p) return;
+  fetch('api/custom-policies/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: p.name, rule: p.rule, enabled: !p.enabled})
+  })
+    .then(function(r) {
+      if (!r.ok) throw new Error();
+      return r.json();
+    })
+    .then(function() {
+      loadCustomPolicies();
+    })
+    .catch(function() {
+      alert('Failed to update policy');
+      loadCustomPolicies();
+    });
 }
 
 function deleteCustomPolicy(id) {
-  customPolicies = customPolicies.filter(function(p) { return p.id !== id; });
-  saveCustomPolicies();
-  renderCustomPolicies();
+  fetch('api/custom-policies/' + encodeURIComponent(id), {method: 'DELETE'})
+    .then(function(r) {
+      if (r.status === 204) return;
+      throw new Error();
+    })
+    .then(function() {
+      if (editingPolicyId === id) editingPolicyId = null;
+      loadCustomPolicies();
+    })
+    .catch(function() {
+      alert('Failed to delete custom policy');
+    });
 }
-
-// Init custom policies
-loadCustomPolicies();
-renderCustomPolicies();
 
 // Auto-select view on load
 setView(currentView);
 refresh();
 setInterval(refresh, 2000);
 fetchPolicy();
+loadCustomPolicies();
 setInterval(fetchPolicy, 5000);
 </script>
 </body>
