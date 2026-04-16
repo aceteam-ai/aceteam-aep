@@ -6,7 +6,7 @@ import threading
 import uuid
 from collections.abc import Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +16,9 @@ if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
 
 log = logging.getLogger(__name__)
+
+CustomPolicyAppliesTo = Literal["input", "output", "both"]
+CustomPolicySeverity = Literal["low", "medium", "high"]
 
 # Llama backends enforce a small context window; chunk user text so each PAW
 # call stays within limits (see programasweights ValueError on token overflow).
@@ -156,6 +159,12 @@ class CustomPolicy(BaseModel):
     name: str
     rule: str
     enabled: bool = True
+    applies_to: CustomPolicyAppliesTo = "both"
+    """Whether the rule is evaluated on user messages, assistant output, or both."""
+
+    severity: CustomPolicySeverity = "high"
+    """Maps to :attr:`SafetySignal.severity` when this policy is violated."""
+
 
     @cached_property
     def _paw(self) -> AsyncPawFunction:
@@ -288,16 +297,23 @@ class CustomSafetyDetector(SafetyDetector):
         call_id: str,
         **kwargs,
     ) -> Sequence[SafetySignal]:
+        def _sources_for_policy(p: CustomPolicy) -> tuple[tuple[str, str], ...]:
+            if p.applies_to == "input":
+                return (("input", input_text),)
+            if p.applies_to == "output":
+                return (("output", output_text),)
+            return (("output", output_text), ("input", input_text))
+
         async def _check_one(policy: CustomPolicy) -> Sequence[SafetySignal]:
             signals: list[SafetySignal] = []
             try:
-                for text, source in ((output_text, "output"), (input_text, "input")):
+                for source, text in _sources_for_policy(policy):
                     is_safe = await policy(text)
                     if not is_safe:
                         signals.append(
                             SafetySignal(
                                 signal_type="custom_safety",
-                                severity="high",
+                                severity=policy.severity,
                                 call_id=call_id,
                                 detail=f"{source} violates {policy.name}",
                             )
@@ -319,6 +335,8 @@ class CustomSafetyDetector(SafetyDetector):
 
 __all__ = [
     "CustomPolicy",
+    "CustomPolicyAppliesTo",
+    "CustomPolicySeverity",
     "CustomPolicyStore",
     "CustomSafetyDetector",
     "default_custom_policies",

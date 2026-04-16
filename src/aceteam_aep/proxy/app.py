@@ -54,15 +54,21 @@ async def _read_json_body(request: Request) -> tuple[Any | None, Response | None
 
 
 def _parse_custom_policy_write_fields(body: Any) -> dict[str, Any] | JSONResponse:
-    """Require a JSON object with exactly ``name``, ``rule``, and ``enabled``."""
+    """Require ``name``, ``rule``, and ``enabled``; optional ``applies_to``, ``severity``."""
     if not isinstance(body, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-    fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
-    if set(fields.keys()) != {"name", "rule", "enabled"}:
-        return JSONResponse(
-            {"error": "name, rule, and enabled are required"},
-            status_code=400,
-        )
+    required = ("name", "rule", "enabled")
+    for k in required:
+        if k not in body:
+            return JSONResponse(
+                {"error": "name, rule, and enabled are required"},
+                status_code=400,
+            )
+    fields = {k: body[k] for k in required}
+    if "applies_to" in body:
+        fields["applies_to"] = body["applies_to"]
+    if "severity" in body:
+        fields["severity"] = body["severity"]
     return fields
 
 
@@ -932,16 +938,24 @@ def create_proxy_app(
             state.custom_policy_store.delete(policy_id)
             return Response(status_code=204)
 
-        # PUT — replace name, rule, enabled (id fixed from URL)
+        # PUT — replace policy fields (id fixed from URL). Omitted ``applies_to`` /
+        # ``severity`` keep the previous values so toggles can send only name/rule/enabled.
         body, json_err = await _read_json_body(request)
         if json_err is not None:
             return json_err
+        existing_before = state.custom_policy_store.get(policy_id)
+        if existing_before is None:
+            return JSONResponse({"error": "custom policy not found"}, status_code=404)
         fields = _parse_custom_policy_write_fields(body)
         if isinstance(fields, JSONResponse):
             return fields
-        if state.custom_policy_store.get(policy_id) is None:
-            return JSONResponse({"error": "custom policy not found"}, status_code=404)
-        updated = _custom_policy_from_write_fields(fields, policy_id=policy_id)
+        payload = dict(fields)
+        if isinstance(body, dict):
+            if "applies_to" not in body:
+                payload["applies_to"] = existing_before.applies_to
+            if "severity" not in body:
+                payload["severity"] = existing_before.severity
+        updated = _custom_policy_from_write_fields(payload, policy_id=policy_id)
         if isinstance(updated, JSONResponse):
             return updated
         state.custom_policy_store.upsert(updated)
