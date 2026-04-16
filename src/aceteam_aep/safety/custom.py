@@ -101,7 +101,7 @@ class CustomPolicy(BaseModel):
     >>> await foo_policy("foo bar")
     True
     >>> await foo_policy("boo far")
-    True
+    False
     ```
     """
 
