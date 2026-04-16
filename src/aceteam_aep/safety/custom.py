@@ -19,7 +19,7 @@ paw_lock = threading.Lock()
 
 class AsyncPawFunction:
     """
-    A virtual programasweights PawFunction that begins compiling asyncronously
+    A virtual programasweights PawFunction that begins compiling asynchronously
     when initialized.
     Compilation runs in a worker thread so the asyncio event loop can serve
     other traffic while compile/download/load runs.
