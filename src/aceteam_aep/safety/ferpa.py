@@ -15,8 +15,9 @@ Designed for CSU, UC, and K-12 systems adopting AI workflows.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
-from .base import SafetySignal
+from .base import SafetyDetector, SafetySignal
 
 # FERPA-specific patterns (education records context)
 _FERPA_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
@@ -65,7 +66,8 @@ _FERPA_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
         "Enrollment record with student identifiers",
         "medium",
     ),
-    # Financial aid records (bidirectional — "student awarded Pell Grant" or "Pell Grant for student")
+    # Financial aid records (bidirectional)
+    # e.g. "student awarded Pell Grant" or "Pell Grant for student"
     (
         re.compile(
             r"\b(?:financial\s+aid|fafsa|pell\s+grant|scholarship|loan)\b"
@@ -104,7 +106,7 @@ _FERPA_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 
-class FerpaDetector:
+class FerpaDetector(SafetyDetector):
     """Detect FERPA-protected education records in text.
 
     Scans for student IDs, grades, transcripts, financial aid records,
@@ -115,8 +117,13 @@ class FerpaDetector:
     name = "ferpa"
 
     def check(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-    ) -> list[SafetySignal]:
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> Sequence[SafetySignal]:
         signals: list[SafetySignal] = []
         combined = f"{input_text} {output_text}"
 

@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from .base import SafetySignal
+from .base import SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def _merge_span_signals(
     )
 
 
-class PiiDetector:
+class PiiDetector(SafetyDetector):
     """Detects PII in text using a small local transformer NER model.
 
     Model is lazy-loaded on first check() call. Falls back to regex if
@@ -111,7 +111,7 @@ class PiiDetector:
         input_text: str,
         output_text: str,
         call_id: str,
-        **kwargs: object,
+        **kwargs,
     ) -> Sequence[PiiSafetySignal]:
         if not self._load_attempted:
             self._load()

@@ -12,10 +12,14 @@ version will use the Trust Engine's ensemble-of-judges approach
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Sequence
 from typing import Literal
 
-from .base import SafetySignal
+from .base import SafetyDetector, SafetySignal
+
+logger = logging.getLogger(__name__)
 
 _THREAT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bnmap\b", re.IGNORECASE), "port scanning (nmap)"),
@@ -44,7 +48,7 @@ _THREAT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-class AgentThreatDetector:
+class AgentThreatDetector(SafetyDetector):
     """Detect when an AI agent attempts network attacks or system exploitation.
 
     Scans both input and output text for known dangerous patterns such as
@@ -63,7 +67,13 @@ class AgentThreatDetector:
         scan_input: bool = False,
         scan_output: bool = True,
     ) -> None:
-        assert scan_input or scan_output
+        if not (scan_input or scan_output):
+            logger.warning(
+                f"{self.__class__.__name__}: scan_input and scan_output are both False, "
+                "so this detector will not detect anything"
+            )
+            scan_input = True
+            scan_output = True
         self._scan_input = scan_input
         self._scan_output = scan_output
         self._patterns = _THREAT_PATTERNS
@@ -75,7 +85,7 @@ class AgentThreatDetector:
         output_text: str,
         call_id: str,
         **kwargs: object,
-    ) -> list[SafetySignal]:
+    ) -> Sequence[SafetySignal]:
         signals: list[SafetySignal] = []
         texts: list[tuple[str, Literal["input", "output"]]] = []
         if self._scan_input:
