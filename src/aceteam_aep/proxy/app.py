@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -28,6 +29,7 @@ from ..safety.agent_threat import AgentThreatDetector
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.content import ContentSafetyDetector
 from ..safety.cost_anomaly import CostAnomalyDetector
+from ..safety.custom import CustomPolicy
 from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
@@ -99,6 +101,7 @@ class ProxyState:
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
         self.safety_enabled = True
+        self.custom_policies: dict[str, CustomPolicy] = {}
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -617,7 +620,10 @@ def create_proxy_app(
         # Debug: log the response
         if debug:
             log.debug(
-                "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, status=%d, body=%s",
+                (
+                    "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, "
+                    "status=%d, body=%s"
+                ),
                 call_id,
                 request.method,
                 path,
@@ -799,11 +805,111 @@ def create_proxy_app(
             media_type="application/json",
         )
 
+    def _normalize_policy_id(policy_id: str) -> str | None:
+        try:
+            return str(uuid.UUID(policy_id))
+        except ValueError:
+            return None
+
+    # Custom policies CRUD (collection + item routes below).
+    async def custom_policies_collection_handler(request: Request) -> Response:
+        if request.method == "GET":
+            policies = [p.model_dump() for p in state.custom_policies.values()]
+            return Response(
+                json.dumps({"policies": policies}),
+                media_type="application/json",
+            )
+
+        try:
+            body = await request.json()
+        except Exception:
+            return Response(
+                '{"error": "invalid JSON"}', status_code=400, media_type="application/json"
+            )
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+        fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
+        if set(fields.keys()) != {"name", "rule", "enabled"}:
+            return JSONResponse(
+                {"error": "name, rule, and enabled are required"},
+                status_code=400,
+            )
+        try:
+            policy = CustomPolicy.model_validate(fields)
+        except ValidationError as exc:
+            return JSONResponse(
+                {"error": "validation failed", "detail": exc.errors()},
+                status_code=422,
+            )
+        state.custom_policies[policy.id] = policy
+        return Response(
+            json.dumps(policy.model_dump()),
+            status_code=201,
+            media_type="application/json",
+        )
+
+    async def custom_policy_item_handler(request: Request) -> Response:
+        raw_id = request.path_params["policy_id"]
+        policy_id = _normalize_policy_id(raw_id)
+        if policy_id is None:
+            return JSONResponse({"error": "invalid policy id"}, status_code=400)
+
+        if request.method == "GET":
+            policy = state.custom_policies.get(policy_id)
+            if policy is None:
+                return JSONResponse({"error": "custom policy not found"}, status_code=404)
+            return Response(json.dumps(policy.model_dump()), media_type="application/json")
+
+        if request.method == "DELETE":
+            if policy_id not in state.custom_policies:
+                return JSONResponse({"error": "custom policy not found"}, status_code=404)
+            del state.custom_policies[policy_id]
+            return Response(status_code=204)
+
+        # PUT — replace name, rule, enabled (id fixed from URL)
+        try:
+            body = await request.json()
+        except Exception:
+            return Response(
+                '{"error": "invalid JSON"}', status_code=400, media_type="application/json"
+            )
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+        fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
+        if set(fields.keys()) != {"name", "rule", "enabled"}:
+            return JSONResponse(
+                {"error": "name, rule, and enabled are required"},
+                status_code=400,
+            )
+        if policy_id not in state.custom_policies:
+            return JSONResponse({"error": "custom policy not found"}, status_code=404)
+        try:
+            updated = CustomPolicy.model_validate({**fields, "id": policy_id})
+        except ValidationError as exc:
+            return JSONResponse(
+                {"error": "validation failed", "detail": exc.errors()},
+                status_code=422,
+            )
+        state.custom_policies[policy_id] = updated
+        return Response(json.dumps(updated.model_dump()), media_type="application/json")
+
     routes.extend(
         [
             Route("/aep/api/feedback", feedback_handler, methods=["POST"]),
             Route("/aep/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
             Route("/aep/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
+            Route(
+                "/aep/api/custom-policies/{policy_id}",
+                custom_policy_item_handler,
+                methods=["GET", "PUT", "DELETE"],
+            ),
+            Route(
+                "/aep/api/custom-policies",
+                custom_policies_collection_handler,
+                methods=["GET", "POST"],
+            ),
         ]
     )
 
