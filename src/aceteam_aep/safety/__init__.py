@@ -15,12 +15,15 @@ from .agent_threat import AgentThreatDetector  # noqa: E402
 from .base import DetectorRegistry, SafetyDetector, SafetySignal  # noqa: E402
 from .content import ContentSafetyDetector  # noqa: E402
 from .cost_anomaly import CostAnomalyDetector  # noqa: E402
+from .custom import CustomPolicyStore, CustomSafetyDetector  # noqa: E402
 from .pii import PiiDetector  # noqa: E402
 
 __all__ = [
     "AgentThreatDetector",
     "ContentSafetyDetector",
     "CostAnomalyDetector",
+    "CustomPolicyStore",
+    "CustomSafetyDetector",
     "DetectorRegistry",
     "PiiDetector",
     "SafetyDetector",

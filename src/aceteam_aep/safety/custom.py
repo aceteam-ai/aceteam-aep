@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Self
 
@@ -16,6 +16,17 @@ if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
 
 log = logging.getLogger(__name__)
+
+# Llama backends enforce a small context window; chunk user text so each PAW
+# call stays within limits (see programasweights ValueError on token overflow).
+_CUSTOM_POLICY_CHUNK_CHARS = 4096
+
+
+def _iter_policy_text_chunks(text: str, max_chars: int) -> list[str]:
+    """Split ``text`` into fixed-size slices for model calls; empty → one slice."""
+    if not text:
+        return [""]
+    return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
 def _retrieve_eager_task_exception(task: asyncio.Task[object]) -> None:
@@ -170,23 +181,55 @@ class CustomPolicy(BaseModel):
         return self
 
     async def __call__(self, text: str) -> bool:
-        return (await self._paw(text)).strip().upper().startswith("Y")
+        for piece in _iter_policy_text_chunks(text, _CUSTOM_POLICY_CHUNK_CHARS):
+            raw = await self._paw(piece)
+            if not raw.strip().upper().startswith("Y"):
+                return False
+        return True
+
+
+class CustomPolicyStore:
+    """Authoritative collection of custom policies keyed by id.
+
+    Shared by the proxy HTTP API and :class:`CustomSafetyDetector` so CRUD and
+    safety checks use the same data without passing raw dicts around.
+    """
+
+    def __init__(self, initial: Iterable[CustomPolicy] = ()) -> None:
+        self._by_id: dict[str, CustomPolicy] = {}
+        for policy in initial:
+            if policy.id in self._by_id:
+                raise ValueError(f"Policy ID {policy.id} already exists")
+            self._by_id[policy.id] = policy
+
+    def upsert(self, policy: CustomPolicy) -> None:
+        self._by_id[policy.id] = policy
+
+    def delete(self, policy_id: str) -> None:
+        del self._by_id[policy_id]
+
+    def get(self, policy_id: str) -> CustomPolicy | None:
+        return self._by_id.get(policy_id)
+
+    def all(self) -> list[CustomPolicy]:
+        return list(self._by_id.values())
 
 
 class CustomSafetyDetector(SafetyDetector):
     """Custom safety detector that can evaluate arbitrary rules defined in
     natural language.
 
-    Policies can be added and removed dynamically.
+    Policies can be added and removed dynamically via the :class:`CustomPolicyStore`.
     """
 
     name = "custom_safety"
 
-    def __init__(
-        self,
-        policies: Sequence[CustomPolicy],
-    ) -> None:
-        self._policies = policies
+    def __init__(self, store: CustomPolicyStore) -> None:
+        self._store = store
+
+    @property
+    def store(self) -> CustomPolicyStore:
+        return self._store
 
     async def check(
         self,
@@ -217,7 +260,7 @@ class CustomSafetyDetector(SafetyDetector):
 
         signals: list[SafetySignal] = []
 
-        chunks = await asyncio.gather(*(_check_one(policy) for policy in self._policies))
+        chunks = await asyncio.gather(*(_check_one(policy) for policy in self._store.all()))
         for chunk in chunks:
             signals.extend(chunk)
         return signals
@@ -225,4 +268,6 @@ class CustomSafetyDetector(SafetyDetector):
 
 __all__ = [
     "CustomPolicy",
+    "CustomPolicyStore",
+    "CustomSafetyDetector",
 ]
