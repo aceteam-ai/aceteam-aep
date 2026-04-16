@@ -1301,6 +1301,7 @@
 
   <!-- ===== DEVELOPER VIEW ===== -->
   <div id="view-dev">
+    <div id="dev-session-info" class="session-info"></div>
     <div class="grid">
       <div class="card">
         <div class="card-label">Total Cost</div>
@@ -1795,16 +1796,21 @@
       return h + 'h ' + m + 'm';
     }
 
-    function updateCisoView(data) {
-      // Session info
-      var sessionEl = document.getElementById('ciso-session-info');
+    function updateSessionInfo(data) {
+      var devEl = document.getElementById('dev-session-info');
+      var cisoEl = document.getElementById('ciso-session-info');
+      var text = '';
       if (data.session_started) {
         var started = new Date(data.session_started);
         var elapsed = Date.now() - started.getTime();
         var startTime = started.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        sessionEl.textContent = 'Session started: ' + startTime + ' (' + formatDuration(elapsed) + ')';
+        text = 'Session started: ' + startTime + ' (' + formatDuration(elapsed) + ')';
       }
+      if (devEl) devEl.textContent = text;
+      if (cisoEl) cisoEl.textContent = text;
+    }
 
+    function updateCisoView(data) {
       // Aggregate signal counts by type
       var piiCount = 0, threatCount = 0, toxicCount = 0, anomalyCount = 0;
       (data.signals || []).forEach(function (s) {
@@ -2015,6 +2021,7 @@
         renderAttestation(data.attestation);
         renderBudget(data.budget);
         renderSpans(document.getElementById('spans'), data.spans, lastSignals);
+        updateSessionInfo(data);
         // Executive view
         updateCisoView(data);
       } catch (e) { }
