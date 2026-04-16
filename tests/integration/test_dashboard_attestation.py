@@ -54,7 +54,7 @@ def test_dashboard_attestation_data(tmp_path):
         base_url = f"http://localhost:{port}"
         for _ in range(30):
             try:
-                r = httpx.get(f"{base_url}/aep/api/state", timeout=1)
+                r = httpx.get(f"{base_url}/dashboard/api/state", timeout=1)
                 if r.status_code == 200:
                     break
             except httpx.ConnectError:
@@ -70,7 +70,7 @@ def test_dashboard_attestation_data(tmp_path):
         }
 
         # 3. Check state before any calls — attestation should be enabled but empty
-        state = httpx.get(f"{base_url}/aep/api/state", timeout=5).json()
+        state = httpx.get(f"{base_url}/dashboard/api/state", timeout=5).json()
         assert state["attestation"]["enabled"] is True
         assert state["attestation"]["signer_id"] == "proxy:dashboard-test"
         assert state["attestation"]["chain_height"] == 0
@@ -89,7 +89,7 @@ def test_dashboard_attestation_data(tmp_path):
         assert r.status_code == 200
 
         # 5. Check state after call — chain should have 1 entry
-        state = httpx.get(f"{base_url}/aep/api/state", timeout=5).json()
+        state = httpx.get(f"{base_url}/dashboard/api/state", timeout=5).json()
         assert state["attestation"]["chain_height"] == 1
         assert state["attestation"]["latest_hash"] is not None
         assert state["attestation"]["latest_hash"].startswith("sha256:")
@@ -113,11 +113,11 @@ def test_dashboard_attestation_data(tmp_path):
         assert r2.status_code == 200
         assert r2.headers["x-aep-chain-height"] == "1"
 
-        state = httpx.get(f"{base_url}/aep/api/state", timeout=5).json()
+        state = httpx.get(f"{base_url}/dashboard/api/state", timeout=5).json()
         assert state["attestation"]["chain_height"] == 2
 
         # 8. Dashboard HTML loads
-        dash = httpx.get(f"{base_url}/aep/", timeout=5)
+        dash = httpx.get(f"{base_url}/dashboard/", timeout=5)
         assert dash.status_code == 200
         assert "attestation-section" in dash.text
         assert "Attestation (Signed Verdicts)" in dash.text
@@ -143,7 +143,7 @@ def test_dashboard_no_attestation_without_signing(tmp_path):
         base_url = f"http://localhost:{port}"
         for _ in range(30):
             try:
-                r = httpx.get(f"{base_url}/aep/api/state", timeout=1)
+                r = httpx.get(f"{base_url}/dashboard/api/state", timeout=1)
                 if r.status_code == 200:
                     break
             except httpx.ConnectError:
@@ -152,7 +152,7 @@ def test_dashboard_no_attestation_without_signing(tmp_path):
             proc.kill()
             raise RuntimeError("Proxy failed to start")
 
-        state = httpx.get(f"{base_url}/aep/api/state", timeout=5).json()
+        state = httpx.get(f"{base_url}/dashboard/api/state", timeout=5).json()
         assert state["attestation"] is None
 
     finally:

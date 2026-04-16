@@ -199,7 +199,7 @@ class TestOpenClawStyleE2E:
             ],
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 3
         assert state["cost"] > 0
         assert len(state["spans"]) == 3
@@ -245,7 +245,7 @@ class TestOpenClawStyleE2E:
             ],
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 2
         assert len(state["spans"]) == 2
 
@@ -273,7 +273,7 @@ class TestOpenClawStyleE2E:
         det.mode = "pass"
         _make_call(client, messages=[{"role": "user", "content": "Summarize"}])
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 4
         assert state["action"] == "pass"  # latest call was safe
 
@@ -318,7 +318,7 @@ class TestOpenClawStyleE2E:
             },
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 3
 
         # Governance contexts
@@ -353,7 +353,7 @@ class TestOpenClawStyleE2E:
             response=_chat_response(model="gpt-4o-mini", input_tokens=20, output_tokens=40),
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 2
         models = {s["executor"] for s in state["spans"]}
         assert "gpt-4o" in models
@@ -387,11 +387,11 @@ class TestOpenClawStyleE2E:
 
         assert resp.status_code == 500
         # Dashboard should still work
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert "cost" in state
 
     def test_full_session_state_contract(self) -> None:
-        """Verify the complete /aep/api/state schema for dashboard consumption."""
+        """Verify the complete /dashboard/api/state schema for dashboard consumption."""
         det = ScenarioDetector()
         app = create_proxy_app(detectors=[det], dashboard=True)
         client = TestClient(app)
@@ -402,7 +402,7 @@ class TestOpenClawStyleE2E:
             headers={"X-AEP-Entity": "org:demo"},
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
 
         # Top-level fields
         assert isinstance(state["cost"], (int, float))
@@ -445,7 +445,7 @@ class TestOpenClawStyleE2E:
             det.mode = "flag" if i % 10 == 0 else "pass"
             _make_call(client, messages=[{"role": "user", "content": f"Call {i}"}])
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 50
         assert len(state["spans"]) == 50
         assert state["cost"] > 0

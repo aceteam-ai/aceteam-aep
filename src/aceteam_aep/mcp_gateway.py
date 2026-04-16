@@ -108,7 +108,7 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
                     "block_on": sorted(state.policy.block_on),
                     "flag_on": sorted(state.policy.flag_on),
                 },
-                "dashboard_url": "http://localhost:8899/aep/",
+                "dashboard_url": "http://localhost:8899/dashboard/",
             },
             indent=2,
         )

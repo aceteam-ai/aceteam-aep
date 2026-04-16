@@ -36,7 +36,7 @@ def _start_proxy(port: int, extra_args: list[str] | None = None):
     base_url = f"http://localhost:{port}"
     for _ in range(30):
         try:
-            r = httpx.get(f"{base_url}/aep/api/state", timeout=1)
+            r = httpx.get(f"{base_url}/dashboard/api/state", timeout=1)
             if r.status_code == 200:
                 return proc, base_url
         except httpx.ConnectError:
@@ -71,7 +71,7 @@ def _call(base_url: str, prompt: str) -> httpx.Response:
 
 def _toggle_safety(base_url: str, enabled: bool) -> dict:
     r = httpx.post(
-        f"{base_url}/aep/api/safety",
+        f"{base_url}/dashboard/api/safety",
         json={"enabled": enabled},
         timeout=5,
     )
@@ -80,7 +80,7 @@ def _toggle_safety(base_url: str, enabled: bool) -> dict:
 
 
 def _get_safety_state(base_url: str) -> dict:
-    r = httpx.get(f"{base_url}/aep/api/safety", timeout=5)
+    r = httpx.get(f"{base_url}/dashboard/api/safety", timeout=5)
     assert r.status_code == 200
     return r.json()
 
@@ -130,7 +130,7 @@ def test_safety_toggle_on_off_on():
 
 
 def test_policy_hot_swap():
-    """Hot-swap policy at runtime via /aep/api/safety."""
+    """Hot-swap policy at runtime via /dashboard/api/safety."""
     if not os.environ.get("OPENAI_API_KEY"):
         __import__("pytest").skip("OPENAI_API_KEY not set")
 
@@ -144,7 +144,7 @@ def test_policy_hot_swap():
 
         # Swap to passthrough policy (all pass, nothing blocked)
         r = httpx.post(
-            f"{base_url}/aep/api/safety",
+            f"{base_url}/dashboard/api/safety",
             json={
                 "policy": {
                     "default_action": "pass",
@@ -165,7 +165,7 @@ def test_policy_hot_swap():
 
         # Swap back to strict policy
         r = httpx.post(
-            f"{base_url}/aep/api/safety",
+            f"{base_url}/dashboard/api/safety",
             json={
                 "policy": {
                     "default_action": "flag",
@@ -203,7 +203,7 @@ def test_disable_detector_via_policy():
         assert r.status_code == 400
 
         r = httpx.post(
-            f"{proxy}/aep/api/safety",
+            f"{proxy}/dashboard/api/safety",
             json={
                 "policy": {
                     "default_action": "flag",
@@ -241,7 +241,7 @@ def test_confidence_headers_on_blocked():
         assert r.status_code == 400
 
         # Check proxy state for signals with scores
-        state = httpx.get(f"{base_url}/aep/api/state", timeout=5).json()
+        state = httpx.get(f"{base_url}/dashboard/api/state", timeout=5).json()
         signals = state.get("signals", [])
         assert len(signals) > 0, "Expected safety signals on blocked call"
 

@@ -83,7 +83,7 @@ class TestSafetyToggle:
         client = TestClient(app)
 
         # Disable safety
-        toggle = client.post("/aep/api/safety", json={"enabled": False})
+        toggle = client.post("/dashboard/api/safety", json={"enabled": False})
         assert toggle.status_code == 200
         assert toggle.json()["safety_enabled"] is False
 
@@ -95,11 +95,11 @@ class TestSafetyToggle:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["safety_enabled"] is True
 
-        client.post("/aep/api/safety", json={"enabled": False})
-        state = client.get("/aep/api/state").json()
+        client.post("/dashboard/api/safety", json={"enabled": False})
+        state = client.get("/dashboard/api/state").json()
         assert state["safety_enabled"] is False
 
     def test_reenable_safety_blocks_again(self) -> None:
@@ -107,12 +107,12 @@ class TestSafetyToggle:
         client = TestClient(app)
 
         # Off → passes
-        client.post("/aep/api/safety", json={"enabled": False})
+        client.post("/dashboard/api/safety", json={"enabled": False})
         resp = _make_call(client)
         assert resp.status_code == 200
 
         # On again → blocks
-        client.post("/aep/api/safety", json={"enabled": True})
+        client.post("/dashboard/api/safety", json={"enabled": True})
         resp = _make_call(client)
         assert resp.status_code == 400
 
@@ -121,12 +121,12 @@ class TestSafetyToggle:
         client = TestClient(app)
 
         # Default policy
-        state = client.post("/aep/api/safety", json={}).json()
+        state = client.post("/dashboard/api/safety", json={}).json()
         assert state["policy"]["default_action"] == "flag"
 
         # Swap to block policy
         resp = client.post(
-            "/aep/api/safety",
+            "/dashboard/api/safety",
             json={"policy": {"default_action": "block", "block_on": ["high", "medium"]}},
         )
         assert resp.status_code == 200

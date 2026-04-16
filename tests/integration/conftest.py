@@ -50,7 +50,7 @@ def aep_proxy():
     base_url = f"http://localhost:{port}"
     for _ in range(30):
         try:
-            r = httpx.get(f"{base_url}/aep/api/state", timeout=1)
+            r = httpx.get(f"{base_url}/dashboard/api/state", timeout=1)
             if r.status_code == 200:
                 break
         except httpx.ConnectError:
@@ -67,5 +67,5 @@ def aep_proxy():
 
 def get_proxy_state(base_url: str) -> dict:
     """Fetch current proxy state."""
-    r = httpx.get(f"{base_url}/aep/api/state", timeout=5)
+    r = httpx.get(f"{base_url}/dashboard/api/state", timeout=5)
     return r.json()

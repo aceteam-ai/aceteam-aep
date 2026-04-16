@@ -10,7 +10,7 @@ The gateway runs a single process on one port with three interfaces:
 | Path | What it does |
 |------|-------------|
 | `/v1/*` | OpenAI-compatible reverse proxy with safety enforcement |
-| `/aep/` | Dashboard — cost, signals, policy controls, setup wizard |
+| `/dashboard/` | Dashboard — cost, signals, policy controls, setup wizard |
 | `/mcp/` | MCP tools for Claude Code and any MCP client |
 
 ## Installation
@@ -35,7 +35,7 @@ The gateway prints three URLs on startup:
   SafeClaw Gateway
   ───────────────────────────────────
   LLM Proxy:  http://localhost:8899/v1
-  Dashboard:  http://localhost:8899/aep/
+  Dashboard:  http://localhost:8899/dashboard/
   MCP:        http://localhost:8899/mcp/
 ```
 
@@ -49,7 +49,7 @@ export OPENAI_API_KEY=sk-your-key
 openclaw run "analyze these financial statements"
 ```
 
-Open **http://localhost:8899/aep/** — every LLM call appears in real-time with cost, safety signals, and enforcement decisions.
+Open **http://localhost:8899/dashboard/** — every LLM call appears in real-time with cost, safety signals, and enforcement decisions.
 
 The proxy intercepts **both directions**:
 - **Incoming requests** — blocks dangerous prompts before they reach the API
@@ -104,7 +104,7 @@ Think **WireGuard + Tailscale**. WireGuard is a minimal wire protocol. Tailscale
 **Layer 1 — AEP Proxy (free, zero code changes)**
 - Sees all LLM traffic (input, output, tool calls, cost)
 - Runs safety detectors, enforces PASS/FLAG/BLOCK
-- Dashboard at `/aep/`
+- Dashboard at `/dashboard/`
 - Works with any language, any framework
 
 **Layer 2 — AEP SDK (application-level context)**

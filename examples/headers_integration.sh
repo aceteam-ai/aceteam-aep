@@ -59,4 +59,4 @@ curl -s "$PROXY/v1/chat/completions" \
 echo ""
 
 echo "=== Dashboard ==="
-echo "Open http://localhost:8080/aep/ to see all calls in real-time"
+echo "Open http://localhost:8080/dashboard/ to see all calls in real-time"

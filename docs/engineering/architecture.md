@@ -7,7 +7,7 @@ The AEP Gateway (SafeClaw) is a unified process serving three endpoints on a sin
 | Path | Protocol | Purpose |
 |------|----------|---------|
 | `/v1/*` | OpenAI-compatible HTTP | LLM reverse proxy with safety enforcement |
-| `/aep/*` | HTTP + HTML | Dashboard, safety API, policy controls |
+| `/dashboard/*` | HTTP + HTML | Dashboard, safety API, policy controls |
 | `/mcp/*` | MCP Streamable HTTP | Tool access for Claude Code and MCP clients |
 
 All three surfaces share one `ProxyState` — cost tracking, safety signals, decisions, and policy are live across every interface simultaneously.
@@ -21,7 +21,7 @@ All three surfaces share one `ProxyState` — cost tracking, safety signals, dec
 - Enforces PASS/FLAG/BLOCK decisions
 - Tracks cost per call via `CostTracker`
 - Optionally signs verdicts (Ed25519 + Merkle chain via `attestation.py`)
-- Serves the dashboard at `/aep/` and state API at `/aep/api/*`
+- Serves the dashboard at `/dashboard/` and state API at `/dashboard/api/*`
 
 ### Dashboard (`dashboard/templates/index.html`)
 
@@ -144,27 +144,27 @@ Dimensions are toggleable per policy YAML. The external judge service (AdaExtrac
 
 ## Runtime Safety Toggle
 
-`POST /aep/api/safety` enables/disables safety at runtime without restart:
+`POST /dashboard/api/safety` enables/disables safety at runtime without restart:
 
 ```bash
 # Safety off
-curl -X POST localhost:8899/aep/api/safety -d '{"enabled": false}'
+curl -X POST localhost:8899/dashboard/api/safety -d '{"enabled": false}'
 
 # Hot-swap policy
-curl -X POST localhost:8899/aep/api/safety -d '{"policy": {"default_action": "block"}}'
+curl -X POST localhost:8899/dashboard/api/safety -d '{"policy": {"default_action": "block"}}'
 
 # Check state
-curl localhost:8899/aep/api/safety
+curl localhost:8899/dashboard/api/safety
 ```
 
 The dashboard has a master toggle switch in the header. Per-detector and per-category checkboxes allow fine-grained control without restart.
 
 ## Signal Feedback Loop
 
-Operators mark flagged signals as confirmed (true positive) or dismissed (false positive) via the dashboard review buttons or `POST /aep/api/feedback`:
+Operators mark flagged signals as confirmed (true positive) or dismissed (false positive) via the dashboard review buttons or `POST /dashboard/api/feedback`:
 
 ```
-POST /aep/api/feedback → JSONL store → analyze FP rate → recommend threshold → apply to YAML
+POST /dashboard/api/feedback → JSONL store → analyze FP rate → recommend threshold → apply to YAML
 ```
 
 The system uses the 90th percentile of dismissed scores (capped below the lowest confirmed score) to suggest thresholds. Requires 5+ verdicts per detector.
@@ -207,7 +207,7 @@ Pre-built image: `ghcr.io/aceteam-ai/aep-proxy:latest`
 - Python 3.12 slim base
 - Safety models pre-downloaded (~235MB)
 - Binds to `0.0.0.0:8899`
-- Healthcheck on `/aep/`
+- Healthcheck on `/dashboard/`
 - Entrypoint: `aceteam-aep proxy`
 
 Published on tag push via GitHub Actions.

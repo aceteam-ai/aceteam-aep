@@ -160,6 +160,10 @@ class ProxyState:
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
         self.safety_enabled = True
+        # Runtime BYOK API key, set via POST /dashboard/api/api-key and used as
+        # the Authorization header when forwarding /v1/* requests that don't
+        # already carry one (e.g. the in-dashboard playground).
+        self.api_key: str | None = None
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -476,6 +480,15 @@ def create_proxy_app(
         for key in ("x-api-key", "anthropic-version"):
             if request.headers.get(key):
                 forward_headers[key] = request.headers[key]
+        # Fall back to runtime BYOK key when caller didn't set auth headers
+        # (e.g. the in-dashboard playground fetches /v1/chat/completions
+        # from the browser without exposing the raw key to JS).
+        if state.api_key and "Authorization" not in forward_headers:
+            if "anthropic" in state.target_base_url or path == "/v1/messages":
+                forward_headers.setdefault("x-api-key", state.api_key)
+                forward_headers.setdefault("anthropic-version", "2023-06-01")
+            else:
+                forward_headers["Authorization"] = f"Bearer {state.api_key}"
         # Strip X-AEP-* headers so they don't leak to the LLM provider
         forward_headers = strip_aep_headers(forward_headers)
 
@@ -732,17 +745,18 @@ def create_proxy_app(
         # Look up endpoints by path to avoid fragile positional indices
         dash_endpoints = {r.path: r.endpoint for r in dashboard_app.routes}  # type: ignore[union-attr]
 
-        async def _redirect_aep_trailing_slash(_request: Request) -> RedirectResponse:
-            # Relative URLs like `api/state` resolve to /aep/api/state only when the
-            # page URL ends with /aep/; otherwise the browser resolves `api/state` to /api/state.
-            return RedirectResponse(url="/aep/", status_code=307)
+        async def _redirect_dashboard_trailing_slash(_request: Request) -> RedirectResponse:
+            # Relative URLs like `api/state` resolve to /dashboard/api/state only when
+            # the page URL ends with /dashboard/; otherwise the browser resolves
+            # `api/state` to /api/state.
+            return RedirectResponse(url="/dashboard/", status_code=307)
 
         routes.extend(
             [
-                Route("/aep", _redirect_aep_trailing_slash, methods=["GET"]),
-                Route("/aep/", dash_endpoints["/"]),
-                Route("/aep/ciso", dash_endpoints["/ciso"]),
-                Route("/aep/api/state", dash_endpoints["/api/state"]),
+                Route("/dashboard", _redirect_dashboard_trailing_slash, methods=["GET"]),
+                Route("/dashboard/", dash_endpoints["/"]),
+                Route("/dashboard/ciso", dash_endpoints["/ciso"]),
+                Route("/dashboard/api/state", dash_endpoints["/api/state"]),
             ]
         )
 
@@ -752,7 +766,7 @@ def create_proxy_app(
 
     _feedback_store = FeedbackStore("aep-feedback.jsonl")
 
-    # Feedback API — POST /aep/api/feedback
+    # Feedback API — POST /dashboard/api/feedback
     async def feedback_handler(request: Request) -> Response:
         """Record a signal verdict (confirmed/dismissed) from an operator."""
         try:
@@ -779,7 +793,7 @@ def create_proxy_app(
             media_type="application/json",
         )
 
-    # Feedback summary API — GET /aep/api/feedback/summary
+    # Feedback summary API — GET /dashboard/api/feedback/summary
     async def feedback_summary_handler(request: Request) -> Response:
         """Return feedback analysis and threshold recommendations."""
         from ..feedback import recommend_thresholds
@@ -814,7 +828,7 @@ def create_proxy_app(
             media_type="application/json",
         )
 
-    # Safety toggle API — GET/POST /aep/api/safety
+    # Safety toggle API — GET/POST /dashboard/api/safety
     async def safety_toggle_handler(request: Request) -> Response:
         """Toggle safety on/off or swap the enforcement policy at runtime.
 
@@ -961,20 +975,103 @@ def create_proxy_app(
         state.custom_policy_store.upsert(updated)
         return Response(json.dumps(updated.model_dump()), media_type="application/json")
 
+    # BYOK API key management — GET returns a hint, POST sets the key, DELETE clears.
+    # The raw key is only held in process memory (never written to disk) and is used
+    # as the fallback Authorization header when a /v1/* request arrives without one.
+    async def api_key_handler(request: Request) -> Response:
+        def _hint(key: str | None) -> dict[str, Any]:
+            if not key:
+                return {"set": False, "hint": None}
+            visible = key[:7] if len(key) > 7 else key[:3]
+            return {"set": True, "hint": f"{visible}..."}
+
+        if request.method == "GET":
+            return JSONResponse(_hint(state.api_key))
+
+        if request.method == "DELETE":
+            state.api_key = None
+            return JSONResponse(_hint(None))
+
+        body, json_err = await _read_json_body(request)
+        if json_err is not None:
+            return json_err
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        key = body.get("api_key")
+        if not isinstance(key, str) or not key.strip():
+            return JSONResponse(
+                {"error": "api_key must be a non-empty string"}, status_code=400
+            )
+        state.api_key = key.strip()
+        log.info("BYOK API key updated (len=%d)", len(state.api_key))
+        return JSONResponse(_hint(state.api_key))
+
+    # Policy tester — evaluate a single custom policy against arbitrary text,
+    # so users can sanity-check a rule from the dashboard without wiring up an
+    # agent. Mirrors programasweights.com/browser but against policies that
+    # already live in this process.
+    async def policy_test_handler(request: Request) -> Response:
+        body, json_err = await _read_json_body(request)
+        if json_err is not None:
+            return json_err
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        raw_id = body.get("policy_id")
+        text = body.get("text", "")
+        if not isinstance(raw_id, str) or not isinstance(text, str):
+            return JSONResponse(
+                {"error": "policy_id (string) and text (string) required"}, status_code=400
+            )
+        policy_id = _normalize_policy_id(raw_id)
+        if policy_id is None:
+            return JSONResponse({"error": "invalid policy id"}, status_code=400)
+        policy = state.custom_policy_store.get(policy_id)
+        if policy is None:
+            return JSONResponse({"error": "custom policy not found"}, status_code=404)
+        try:
+            passes = await policy(text)
+        except Exception as exc:
+            log.warning("Policy test failed for %s: %s", policy.name, exc)
+            return JSONResponse(
+                {"error": "policy evaluation failed", "detail": str(exc)},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "policy_id": policy.id,
+                "policy_name": policy.name,
+                "passes": passes,
+                "severity": policy.severity,
+                "applies_to": policy.applies_to,
+            }
+        )
+
     routes.extend(
         [
-            Route("/aep/api/feedback", feedback_handler, methods=["POST"]),
-            Route("/aep/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
-            Route("/aep/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
+            Route("/dashboard/api/feedback", feedback_handler, methods=["POST"]),
             Route(
-                "/aep/api/custom-policies/{policy_id}",
+                "/dashboard/api/feedback/summary", feedback_summary_handler, methods=["GET"]
+            ),
+            Route("/dashboard/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
+            Route(
+                "/dashboard/api/custom-policies/{policy_id}",
                 custom_policy_item_handler,
                 methods=["GET", "PUT", "DELETE"],
             ),
             Route(
-                "/aep/api/custom-policies",
+                "/dashboard/api/custom-policies",
                 custom_policies_collection_handler,
                 methods=["GET", "POST"],
+            ),
+            Route(
+                "/dashboard/api/api-key",
+                api_key_handler,
+                methods=["GET", "POST", "DELETE"],
+            ),
+            Route(
+                "/dashboard/api/policy-test",
+                policy_test_handler,
+                methods=["POST"],
             ),
         ]
     )

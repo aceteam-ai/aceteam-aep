@@ -1,6 +1,6 @@
 """aep top — terminal dashboard for the AEP safety proxy.
 
-Like htop, but for AI agent safety. Polls /aep/api/state and renders
+Like htop, but for AI agent safety. Polls /dashboard/api/state and renders
 a live terminal UI showing calls, cost, signals, and enforcement.
 
 Usage:
@@ -21,7 +21,7 @@ import httpx
 
 def _fetch_state(base_url: str) -> dict | None:
     try:
-        resp = httpx.get(f"{base_url}/aep/api/state", timeout=3.0)
+        resp = httpx.get(f"{base_url}/dashboard/api/state", timeout=3.0)
         if resp.status_code == 200:
             return resp.json()
     except Exception:

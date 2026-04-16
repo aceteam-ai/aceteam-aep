@@ -781,7 +781,7 @@
       letter-spacing: 0.8px;
     }
 
-    /* ── Policies (natural-language rules; API: /aep/api/custom-policies) ── */
+    /* ── Policies (natural-language rules; API: /dashboard/api/custom-policies) ── */
     .policies-list {
       display: flex;
       flex-direction: column;
@@ -1287,6 +1287,94 @@
       font-size: 12px;
       margin-bottom: 8px;
     }
+
+    /* ── Policy Tester (evaluate a custom policy against text in-browser) ── */
+    .tester-row {
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .tester-select,
+    .tester-input {
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 9px 12px;
+      border-radius: var(--radius);
+      font-family: var(--font-data);
+      font-size: 13px;
+    }
+
+    .tester-select {
+      min-width: 200px;
+    }
+
+    .tester-input {
+      flex: 1;
+      min-width: 220px;
+      resize: vertical;
+      min-height: 60px;
+    }
+
+    .tester-btn {
+      background: var(--accent-cyan);
+      color: var(--bg-deep);
+      border: none;
+      padding: 0 22px;
+      border-radius: 20px;
+      font-family: var(--font-label);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: opacity 0.15s;
+    }
+
+    .tester-btn:hover { opacity: 0.9; }
+    .tester-btn:disabled { opacity: 0.4; cursor: wait; }
+
+    .tester-result {
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-family: var(--font-data);
+      font-size: 13px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-inset);
+      color: var(--text-muted);
+    }
+
+    .tester-result.passed {
+      border-color: rgba(46, 213, 115, 0.45);
+      color: var(--accent-green);
+    }
+
+    .tester-result.violated {
+      border-color: rgba(255, 71, 87, 0.45);
+      color: var(--accent-red);
+    }
+
+    /* ── Header settings (open setup wizard after first run) ── */
+    .settings-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 4px 12px;
+      border-radius: 14px;
+      font-family: var(--font-label);
+      font-size: 11px;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+      margin-left: 10px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .settings-btn:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
   </style>
 </head>
 
@@ -1341,6 +1429,9 @@
       <button id="btn-dev" class="active" onclick="setView('dev')">Developer</button>
       <button id="btn-ciso" onclick="setView('ciso')">Executive</button>
     </div>
+    <button class="settings-btn" id="settings-btn" onclick="openSetup()" title="API key &amp; agent setup">
+      <span id="settings-btn-label">SETUP</span>
+    </button>
   </h1>
 
   <!-- ===== DEVELOPER VIEW ===== -->
@@ -1377,6 +1468,22 @@
     <div class="section" id="policies-section" style="animation-delay: 0.22s;">
       <h2>Policies</h2>
       <div id="policies-container"></div>
+    </div>
+
+    <div class="section" id="policy-tester-section" style="animation-delay: 0.24s;">
+      <h2>Policy Tester</h2>
+      <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px;">
+        Evaluate a natural-language policy against arbitrary text, without
+        running an agent. Pick one of the rules defined above, paste in a
+        sample, and see whether it passes or gets flagged.
+      </p>
+      <div class="tester-row">
+        <select class="tester-select" id="tester-policy"></select>
+        <textarea class="tester-input" id="tester-text"
+          placeholder="Enter text to evaluate against the selected policy…"></textarea>
+        <button class="tester-btn" id="tester-run" onclick="runPolicyTest()">Test</button>
+      </div>
+      <div class="tester-result" id="tester-result">Pick a policy and enter text, then press Test.</div>
     </div>
 
     <div class="section">
@@ -1503,16 +1610,36 @@
     var collapsedGroups = {};
     var safetyEnabled = true;
 
-    // Setup wizard — show on first visit
+    // Setup wizard — the proxy tells us whether a BYOK key is already stored.
+    // (Previously we relied on localStorage, which left users stranded behind a
+    // cookie/localStorage clear whenever they wanted to update a key.)
+    function refreshKeyHint(info) {
+      var label = document.getElementById('settings-btn-label');
+      if (!label) return;
+      label.textContent = info && info.set ? 'KEY: ' + info.hint : 'SETUP';
+    }
+
     function checkFirstRun() {
-      if (localStorage.getItem('safeclaw-setup-done')) return;
-      fetch('api/state').then(function (r) { return r.json(); }).then(function (state) {
-        if (state.calls > 0) {
-          localStorage.setItem('safeclaw-setup-done', '1');
-          return;
+      fetch('api/api-key').then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (info) {
+        refreshKeyHint(info);
+        if (!info.set) {
+          document.getElementById('setup-overlay').style.display = 'flex';
         }
-        document.getElementById('setup-overlay').style.display = 'flex';
       }).catch(function () { });
+    }
+
+    function openSetup() {
+      document.getElementById('setup-step-1').classList.add('active');
+      document.getElementById('setup-step-2').classList.remove('active');
+      document.getElementById('setup-byok').style.display = 'none';
+      document.getElementById('setup-aceteam').style.display = 'none';
+      document.getElementById('setup-api-key').value = '';
+      var options = document.querySelectorAll('.setup-option');
+      for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
+      document.getElementById('setup-overlay').style.display = 'flex';
     }
 
     function selectSetupOption(option, evt) {
@@ -1524,11 +1651,28 @@
     }
 
     function saveApiKey() {
-      var key = document.getElementById('setup-api-key').value.trim();
+      var input = document.getElementById('setup-api-key');
+      var btn = input.parentElement.querySelector('.setup-btn');
+      var key = input.value.trim();
       if (!key) return;
-      localStorage.setItem('safeclaw-api-key-hint', key.substring(0, 8) + '...');
-      document.getElementById('setup-step-1').classList.remove('active');
-      document.getElementById('setup-step-2').classList.add('active');
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+      fetch('api/api-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key })
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (info) {
+        refreshKeyHint(info);
+        input.value = '';
+        document.getElementById('setup-step-1').classList.remove('active');
+        document.getElementById('setup-step-2').classList.add('active');
+      }).catch(function () {
+        alert('Failed to save API key. Is the proxy running?');
+      }).then(function () {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save & Continue'; }
+      });
     }
 
     function copySetupText(elementId) {
@@ -1541,7 +1685,6 @@
     }
 
     function closeSetup() {
-      localStorage.setItem('safeclaw-setup-done', '1');
       document.getElementById('setup-overlay').style.display = 'none';
     }
 
@@ -2119,7 +2262,7 @@
       }
       details.innerHTML = html;
     }
-    // ── Policies (proxy API: /aep/api/custom-policies)
+    // ── Policies (proxy API: /dashboard/api/custom-policies)
     var policies = [];
     var editingPolicyId = null; // null = not editing, 'new' = adding, string = editing existing
 
@@ -2157,6 +2300,7 @@
         .then(function (data) {
           policies = data.policies || [];
           renderPolicies();
+          renderTesterPolicies();
         })
         .catch(function () {
           policies = [];
@@ -2167,7 +2311,69 @@
           err.className = 'policy-empty';
           err.textContent = 'Policies could not be loaded from the server.';
           container.appendChild(err);
+          renderTesterPolicies();
         });
+    }
+
+    function renderTesterPolicies() {
+      var sel = document.getElementById('tester-policy');
+      if (!sel) return;
+      var prev = sel.value;
+      sel.textContent = '';
+      if (policies.length === 0) {
+        var opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No policies defined — add one above';
+        sel.appendChild(opt);
+        sel.disabled = true;
+        return;
+      }
+      sel.disabled = false;
+      policies.forEach(function (p) {
+        var o = document.createElement('option');
+        o.value = p.id;
+        o.textContent = p.name + (p.enabled ? '' : ' (disabled)');
+        sel.appendChild(o);
+      });
+      if (prev) sel.value = prev;
+    }
+
+    function runPolicyTest() {
+      var sel = document.getElementById('tester-policy');
+      var text = document.getElementById('tester-text').value;
+      var resultEl = document.getElementById('tester-result');
+      var btn = document.getElementById('tester-run');
+      if (!sel || !sel.value) {
+        resultEl.className = 'tester-result';
+        resultEl.textContent = 'Select a policy first.';
+        return;
+      }
+      resultEl.className = 'tester-result';
+      resultEl.textContent = 'Evaluating…';
+      btn.disabled = true;
+      fetch('api/policy-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy_id: sel.value, text: text })
+      }).then(function (r) {
+        return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+      }).then(function (res) {
+        if (!res.ok) {
+          resultEl.className = 'tester-result';
+          resultEl.textContent = (res.body && res.body.error) || 'Evaluation failed';
+          return;
+        }
+        var passes = !!res.body.passes;
+        resultEl.className = 'tester-result ' + (passes ? 'passed' : 'violated');
+        resultEl.textContent = passes
+          ? 'PASSED — text complies with "' + res.body.policy_name + '"'
+          : 'VIOLATED — text breaks "' + res.body.policy_name + '" (' + res.body.severity + ' severity)';
+      }).catch(function () {
+        resultEl.className = 'tester-result';
+        resultEl.textContent = 'Request failed. Is the proxy running?';
+      }).then(function () {
+        btn.disabled = false;
+      });
     }
 
     function renderPolicies() {

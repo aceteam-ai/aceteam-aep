@@ -29,7 +29,7 @@ class TestFeedbackAPI:
         client = TestClient(app)
 
         resp = client.post(
-            "/aep/api/feedback",
+            "/dashboard/api/feedback",
             json={
                 "signal_type": "pii",
                 "score": 0.72,
@@ -54,7 +54,7 @@ class TestFeedbackAPI:
         client = TestClient(app)
 
         resp = client.post(
-            "/aep/api/feedback",
+            "/dashboard/api/feedback",
             json={"signal_type": "pii", "verdict": "maybe"},
         )
         assert resp.status_code == 400
@@ -65,7 +65,7 @@ class TestFeedbackAPI:
             app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
 
-        resp = client.post("/aep/api/feedback", json={"signal_type": "pii"})
+        resp = client.post("/dashboard/api/feedback", json={"signal_type": "pii"})
         assert resp.status_code == 400
 
     def test_feedback_summary(self, tmp_path: Path) -> None:
@@ -79,16 +79,16 @@ class TestFeedbackAPI:
 
         for score in [0.3, 0.35, 0.4, 0.45, 0.5]:
             client.post(
-                "/aep/api/feedback",
+                "/dashboard/api/feedback",
                 json={"signal_type": "pii", "score": score, "verdict": "dismissed"},
             )
         for score in [0.8, 0.9]:
             client.post(
-                "/aep/api/feedback",
+                "/dashboard/api/feedback",
                 json={"signal_type": "pii", "score": score, "verdict": "confirmed"},
             )
 
-        resp = client.get("/aep/api/feedback/summary?min_verdicts=5")
+        resp = client.get("/dashboard/api/feedback/summary?min_verdicts=5")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_verdicts"] == 7
