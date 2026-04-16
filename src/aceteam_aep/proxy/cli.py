@@ -17,17 +17,24 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aceteam_aep.safety import SafetyDetector
 
 log = logging.getLogger(__name__)
 
 
-def _load_detector(path: str) -> object:
+def _load_detector(path: str) -> SafetyDetector:
     """Load a detector from a ``module:class`` path string."""
     if ":" not in path:
         raise ValueError(f"Invalid detector path '{path}'. Expected format: 'module:ClassName'")
     module_path, class_name = path.rsplit(":", 1)
     mod = importlib.import_module(module_path)
     cls = getattr(mod, class_name)
+    if not hasattr(cls, "check"):
+        raise ValueError(f"Detector '{path}' does not have a 'check' method")
     return cls()
 
 
@@ -72,7 +79,10 @@ def _resolve_policy(args: argparse.Namespace) -> object | None:
     return None
 
 
-def _build_detectors(args: argparse.Namespace, policy: object | None = None) -> list[object] | None:
+def _build_detectors(
+    args: argparse.Namespace,
+    policy: object | None = None,
+) -> Sequence[SafetyDetector] | None:
     """Build detector list from CLI args and policy."""
     from ..safety.cost_anomaly import CostAnomalyDetector
 
@@ -83,10 +93,10 @@ def _build_detectors(args: argparse.Namespace, policy: object | None = None) -> 
     if custom:
         from .app import _default_proxy_detectors
 
-        detectors = _default_proxy_detectors()
-        for path in custom:
-            detectors.append(_load_detector(path))
-        return detectors
+        return (
+            *(_default_proxy_detectors()),
+            *(_load_detector(path) for path in custom),
+        )
 
     # If policy has detector overrides, build from policy
     if policy is not None and hasattr(policy, "overrides") and policy.overrides:  # type: ignore[union-attr]
@@ -155,7 +165,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     debug_msg = ""
     if debug:
-        debug_msg = f"  Debug:      ON ⚠️  (warning: exposes private data in logs)\n"
+        debug_msg = "  Debug:      ON ⚠️  (warning: exposes private data in logs)\n"
 
     print(
         f"\n"
@@ -307,9 +317,11 @@ def _run_connect(args: argparse.Namespace) -> None:
         try:
             creds = json.loads(cred_file.read_text())
             if creds.get("api_key"):
-                key_hint = creds["api_key"][:8] + "..." if len(creds.get("api_key", "")) > 8 else "***"
+                key_hint = (
+                    creds["api_key"][:8] + "..." if len(creds.get("api_key", "")) > 8 else "***"
+                )
                 print(f"  Already connected (key: {key_hint})")
-                print(f"  Use --force to reconnect.\n")
+                print("  Use --force to reconnect.\n")
                 return
         except Exception:
             pass
@@ -322,7 +334,7 @@ def _run_connect(args: argparse.Namespace) -> None:
         # Interactive: open browser for auth
         aceteam_url = args.url or "https://aceteam.ai"
         auth_url = f"{aceteam_url}/settings/api-keys"
-        print(f"  Opening AceTeam to generate an API key...")
+        print("  Opening AceTeam to generate an API key...")
         print(f"  URL: {auth_url}\n")
 
         try:
@@ -365,13 +377,13 @@ def _run_connect(args: argparse.Namespace) -> None:
         r = httpx.get(f"http://localhost:{proxy_port}/aep/api/state", timeout=2)
         if r.status_code == 200:
             print(f"  ✓ Proxy detected on port {proxy_port}")
-            print(f"  ℹ Restart the proxy to activate AceTeam features")
+            print("  ℹ Restart the proxy to activate AceTeam features")
     except Exception:
         pass
 
-    print(f"\n  Connected to AceTeam!")
-    print(f"  • Workflows and 40+ node types now available")
-    print(f"  • $5 free credit for LLM calls")
+    print("\n  Connected to AceTeam!")
+    print("  • Workflows and 40+ node types now available")
+    print("  • $5 free credit for LLM calls")
     print(f"  • Restart proxy to activate: aceteam-aep proxy --port {proxy_port}\n")
 
 
@@ -813,20 +825,14 @@ def main() -> None:
         "setup",
         help="Interactive setup — detect runtime, configure proxy, write Claude Code config",
     )
-    setup_parser.add_argument(
-        "--port", type=int, default=8899, help="Proxy port (default: 8899)"
-    )
+    setup_parser.add_argument("--port", type=int, default=8899, help="Proxy port (default: 8899)")
     setup_parser.add_argument(
         "--no-container",
         action="store_true",
         help="Skip container detection, use native proxy",
     )
-    setup_parser.add_argument(
-        "--no-shell", action="store_true", help="Don't modify shell profile"
-    )
-    setup_parser.add_argument(
-        "--no-browser", action="store_true", help="Don't open browser"
-    )
+    setup_parser.add_argument("--no-shell", action="store_true", help="Don't modify shell profile")
+    setup_parser.add_argument("--no-browser", action="store_true", help="Don't open browser")
     setup_parser.add_argument(
         "--print-config",
         action="store_true",
@@ -839,12 +845,8 @@ def main() -> None:
         help="Connect the local proxy to an AceTeam account",
     )
     connect_parser.add_argument("--api-key", help="AceTeam API key (act_...)")
-    connect_parser.add_argument(
-        "--url", default="https://aceteam.ai", help="AceTeam URL"
-    )
-    connect_parser.add_argument(
-        "--port", type=int, default=8899, help="Proxy port"
-    )
+    connect_parser.add_argument("--url", default="https://aceteam.ai", help="AceTeam URL")
+    connect_parser.add_argument("--port", type=int, default=8899, help="Proxy port")
     connect_parser.add_argument(
         "--force", action="store_true", help="Overwrite existing credentials"
     )
@@ -860,9 +862,7 @@ def main() -> None:
     top_parser.add_argument(
         "--port", type=int, default=None, help="Proxy port (shorthand for --url)"
     )
-    top_parser.add_argument(
-        "--once", action="store_true", help="Print snapshot and exit"
-    )
+    top_parser.add_argument("--once", action="store_true", help="Print snapshot and exit")
     top_parser.add_argument(
         "--refresh", type=float, default=2.0, help="Refresh interval in seconds (default: 2)"
     )
