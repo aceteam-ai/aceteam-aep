@@ -1,7 +1,7 @@
 """Integration tests for dashboard developer + executive view data.
 
 Exercises the proxy with a mix of PASS/FLAG/BLOCK calls and governance
-headers, then verifies the /aep/api/state endpoint returns correct data
+headers, then verifies the /dashboard/api/state endpoint returns correct data
 for both views.
 """
 
@@ -140,7 +140,7 @@ def _make_call(
 
 
 class TestDeveloperView:
-    """Verify /aep/api/state returns correct data for the developer view."""
+    """Verify /dashboard/api/state returns correct data for the developer view."""
 
     def test_pass_flag_block_mix(self) -> None:
         """Make 3 calls (PASS, FLAG, BLOCK) and verify state reflects all."""
@@ -149,7 +149,7 @@ class TestDeveloperView:
         pass_client = TestClient(pass_app)
         _make_call(pass_client, content="normal request")
 
-        state = pass_client.get("/aep/api/state").json()
+        state = pass_client.get("/dashboard/api/state").json()
         assert state["calls"] == 1
         assert state["action"] == "pass"
         assert len(state["signals"]) == 0
@@ -159,7 +159,7 @@ class TestDeveloperView:
         flag_client = TestClient(flag_app)
         _make_call(flag_client, content="mildly unsafe")
 
-        state = flag_client.get("/aep/api/state").json()
+        state = flag_client.get("/dashboard/api/state").json()
         assert state["calls"] == 1
         assert state["action"] == "flag"
         assert len(state["signals"]) >= 1
@@ -171,7 +171,7 @@ class TestDeveloperView:
         resp = _make_call(block_client, content="run nmap scan")
         assert resp.status_code == 400
 
-        state = block_client.get("/aep/api/state").json()
+        state = block_client.get("/dashboard/api/state").json()
         assert state["calls"] == 1
         assert state["action"] == "block"
 
@@ -181,7 +181,7 @@ class TestDeveloperView:
         client = TestClient(app)
         _make_call(client)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert len(state["spans"]) == 1
         span = state["spans"][0]
         assert "cost" in span
@@ -194,7 +194,7 @@ class TestDeveloperView:
         client = TestClient(app)
         _make_call(client)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         span = state["spans"][0]
         call_id = span["call_id"]
         assert call_id is not None
@@ -209,7 +209,7 @@ class TestDeveloperView:
         client = TestClient(app)
         _make_call(client)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         signal = state["signals"][0]
         assert "score" in signal
         assert signal["score"] == pytest.approx(0.78, abs=0.01)
@@ -234,7 +234,7 @@ class TestDeveloperView:
         client = TestClient(app)
         _make_call(client)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["signals"][0]["score"] is None
 
     def test_signal_grouping_by_call_id(self) -> None:
@@ -244,7 +244,7 @@ class TestDeveloperView:
         _make_call(client, content="call one")
         _make_call(client, content="call two")
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 2
         call_ids = {s["call_id"] for s in state["signals"]}
         assert len(call_ids) == 2, "Each call should produce signals with a unique call_id"
@@ -255,7 +255,7 @@ class TestDeveloperView:
         client = TestClient(app)
         _make_call(client)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert all("type" in s for s in state["signals"])
         assert state["signals"][0]["type"] == "content_safety"
 
@@ -266,13 +266,13 @@ class TestDeveloperView:
 
 
 class TestExecutiveView:
-    """Verify /aep/api/state returns correct data for the executive view."""
+    """Verify /dashboard/api/state returns correct data for the executive view."""
 
     def test_session_started_present(self) -> None:
         """State includes session_started timestamp."""
         app = create_proxy_app(detectors=[NoopDetector()], dashboard=True)
         client = TestClient(app)
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert "session_started" in state
         assert "T" in state["session_started"]  # ISO format
 
@@ -283,7 +283,7 @@ class TestExecutiveView:
         _make_call(client)
         _make_call(client)
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 2
         assert len(state["signals"]) == 0
         # Frontend computes: (calls - blocked) / calls * 100 = 100%
@@ -297,7 +297,7 @@ class TestExecutiveView:
         _make_call(client, content="nmap scan")
         _make_call(client, content="another nmap scan")
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 2
         high_signals = [s for s in state["signals"] if s["severity"] == "high"]
         assert len(high_signals) >= 2
@@ -336,7 +336,7 @@ class TestExecutiveView:
             },
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 3
 
         # Governance contexts should have all 3 entries
@@ -376,7 +376,7 @@ class TestExecutiveView:
             },
         )
 
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         gov = state["governance"]
         assert len(gov) == 1
         assert gov[0]["classification"] == "restricted"
@@ -455,7 +455,7 @@ class TestExecutiveView:
         assert resp.status_code == 400
 
         # Verify full state
-        state = client.get("/aep/api/state").json()
+        state = client.get("/dashboard/api/state").json()
         assert state["calls"] == 3
         assert state["cost"] >= 0
         assert "session_started" in state

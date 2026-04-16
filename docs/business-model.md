@@ -166,7 +166,7 @@ export OPENAI_BASE_URL=http://localhost:8080/v1
 openclaw run "analyze these financial statements"
 
 # Terminal 3: Watch the dashboard
-open http://localhost:8080/aep/
+open http://localhost:8080/dashboard/
 ```
 
 **What attendees see:**

@@ -42,14 +42,14 @@ You'll see:
   ─────────────────────────────────
   Listening:  http://localhost:8080
   Target:     https://api.openai.com
-  Dashboard:  http://localhost:8080/aep/
+  Dashboard:  http://localhost:8080/dashboard/
 
   Usage:
     export OPENAI_BASE_URL=http://localhost:8080/v1
     openclaw run "your task here"
 ```
 
-Open **http://localhost:8080/aep/** in your browser. You'll see an empty dashboard — it'll light up as soon as calls flow through.
+Open **http://localhost:8080/dashboard/** in your browser. You'll see an empty dashboard — it'll light up as soon as calls flow through.
 
 ---
 
@@ -315,7 +315,7 @@ Your Agent (OpenClaw, LangChain, Python, curl)
 │  → Run output safety checks              │
 │  → BLOCK if PII/toxic (before agent)     │
 │  → Track cost + spans                    │
-│  → Serve dashboard at /aep/              │
+│  → Serve dashboard at /dashboard/              │
 └─────────────────┬───────────────────────┘
                   │
                   ▼
@@ -353,4 +353,4 @@ First run downloads ~300MB of HuggingFace models. They're cached after that. Use
 OpenClaw hardcodes its API base URL. You need to edit the model config — see Option C above.
 
 **Dashboard not updating:**
-The dashboard polls `/aep/api/state` every 2 seconds. If calls aren't appearing, verify your agent is actually pointing at `localhost:8080`.
+The dashboard polls `/dashboard/api/state` every 2 seconds. If calls aren't appearing, verify your agent is actually pointing at `localhost:8080`.

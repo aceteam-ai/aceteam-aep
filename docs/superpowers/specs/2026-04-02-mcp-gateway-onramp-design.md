@@ -22,7 +22,7 @@ Claude Code / OpenClaw / SafeClaw / Any Agent
     │      one process, one port      │
     │                                 │
     │  /v1/*     → LLM proxy          │  ← safety detectors, cost tracking
-    │  /aep/*    → dashboard + API    │  ← toggle, signals, policy, setup
+    │  /dashboard/*    → dashboard + API    │  ← toggle, signals, policy, setup
     │  /mcp/*    → MCP endpoint       │  ← tiered tools (local → connected → platform)
     │                                 │
     │  ┌─────────┐  ┌──────────────┐  │
@@ -39,9 +39,9 @@ Claude Code / OpenClaw / SafeClaw / Any Agent
 | Path | What | Available |
 |------|------|-----------|
 | `/v1/chat/completions` | LLM proxy (OpenAI-compatible) | Always |
-| `/aep/` | Dashboard (developer + executive + setup wizard) | Always |
-| `/aep/api/state` | Proxy state (cost, signals, spans) | Always |
-| `/aep/api/safety` | Safety toggle + policy swap | Always |
+| `/dashboard/` | Dashboard (developer + executive + setup wizard) | Always |
+| `/dashboard/api/state` | Proxy state (cost, signals, spans) | Always |
+| `/dashboard/api/safety` | Safety toggle + policy swap | Always |
 | `/mcp/` | MCP endpoint (streamable-http) | Always |
 
 ## Getting Started
@@ -82,7 +82,7 @@ $ podman run -p 8899:8899 ghcr.io/aceteam-ai/aep-proxy
 
   SafeClaw Gateway
   ─────────────────────────────────────
-  Dashboard:    http://localhost:8899/aep/
+  Dashboard:    http://localhost:8899/dashboard/
   LLM Proxy:    http://localhost:8899/v1
   MCP Endpoint: http://localhost:8899/mcp/
 
@@ -278,7 +278,7 @@ def create_proxy_app(state: ProxyState, ...):
 ### New vs Existing Tools
 
 Of the 4 Tier 1 tools, 2 exist in `mcp.py` (`check_safety`, `get_safety_status`) and 2 are net-new:
-- `set_safety_policy` — backs onto existing `POST /aep/api/safety` handler logic
+- `set_safety_policy` — backs onto existing `POST /dashboard/api/safety` handler logic
 - `get_cost_summary` — reads from `ProxyState.cost_tracker` and `_call_costs`
 
 ### Auth Model

@@ -104,6 +104,29 @@ class TestProxyForwarding:
             call_kwargs = mock_client.request.call_args
             assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-real-key"
 
+    def test_uses_dashboard_byok_key_when_header_missing(self) -> None:
+        """When a /v1/* request has no Authorization header, the proxy should
+        fall back to the BYOK key set via POST /dashboard/api/api-key."""
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
+        client = TestClient(app)
+
+        client.post("/dashboard/api/api-key", json={"api_key": "sk-byok-from-dashboard"})
+
+        with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.request = AsyncMock(return_value=_mock_upstream(_openai_response()))
+            mock_client_cls.return_value = mock_client
+
+            client.post("/v1/chat/completions", json=_openai_request())
+
+            call_kwargs = mock_client.request.call_args
+            assert (
+                call_kwargs.kwargs["headers"]["Authorization"]
+                == "Bearer sk-byok-from-dashboard"
+            )
+
 
 class TestProxySafetyBlocking:
     """Test that the proxy blocks unsafe content."""
@@ -198,24 +221,24 @@ class TestProxyState:
 class TestProxyDashboard:
     """Test that the dashboard is mounted on the proxy."""
 
-    def test_dashboard_at_aep_path(self) -> None:
+    def test_dashboard_at_dashboard_path(self) -> None:
         app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
         client = TestClient(app)
-        resp = client.get("/aep/")
+        resp = client.get("/dashboard/")
         assert resp.status_code == 200
         assert "AEP Dashboard" in resp.text
 
-    def test_dashboard_redirects_aep_without_trailing_slash(self) -> None:
+    def test_dashboard_redirects_without_trailing_slash(self) -> None:
         app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
         client = TestClient(app, follow_redirects=False)
-        resp = client.get("/aep")
+        resp = client.get("/dashboard")
         assert resp.status_code == 307
-        assert resp.headers.get("location") == "/aep/"
+        assert resp.headers.get("location") == "/dashboard/"
 
-    def test_dashboard_api_at_aep_path(self) -> None:
+    def test_dashboard_api_at_dashboard_path(self) -> None:
         app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
         client = TestClient(app)
-        resp = client.get("/aep/api/state")
+        resp = client.get("/dashboard/api/state")
         assert resp.status_code == 200
         data = resp.json()
         assert "cost" in data

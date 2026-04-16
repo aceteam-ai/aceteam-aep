@@ -155,7 +155,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     dashboard_msg = ""
     if dashboard:
-        dashboard_msg = f"  Dashboard:  http://localhost:{port}/aep/\n"
+        dashboard_msg = f"  Dashboard:  http://localhost:{port}/dashboard/\n"
 
     mcp_msg = ""
     try:
@@ -278,7 +278,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
     try:
         import httpx
 
-        resp = httpx.get(f"http://localhost:{port}/aep/api/state", timeout=2.0)
+        resp = httpx.get(f"http://localhost:{port}/dashboard/api/state", timeout=2.0)
         if resp.status_code == 200:
             state = resp.json()
             _print_wrap_summary(state)
@@ -374,7 +374,7 @@ def _run_connect(args: argparse.Namespace) -> None:
     try:
         import httpx
 
-        r = httpx.get(f"http://localhost:{proxy_port}/aep/api/state", timeout=2)
+        r = httpx.get(f"http://localhost:{proxy_port}/dashboard/api/state", timeout=2)
         if r.status_code == 200:
             print(f"  ✓ Proxy detected on port {proxy_port}")
             print("  ℹ Restart the proxy to activate AceTeam features")
@@ -651,7 +651,7 @@ def _run_setup(args: argparse.Namespace) -> None:
         print(f"    export OPENAI_BASE_URL=http://localhost:{port}/v1")
 
     # Step 5: Open dashboard
-    dashboard_url = f"http://localhost:{port}/aep/"
+    dashboard_url = f"http://localhost:{port}/dashboard/"
     print(f"\n  {'─' * 35}")
     print(f"  Dashboard:  {dashboard_url}")
     print(f"  LLM Proxy:  http://localhost:{port}/v1")

@@ -25,13 +25,13 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
 
-        listed = client.get("/aep/api/custom-policies").json()
+        listed = client.get("/dashboard/api/custom-policies").json()
         names = {p["name"] for p in listed["policies"]}
         assert names == {"English only", "US SSN pattern (input)"}
         assert all(p["enabled"] is False for p in listed["policies"])
 
         create = client.post(
-            "/aep/api/custom-policies",
+            "/dashboard/api/custom-policies",
             json={"name": "Block foo", "rule": "no foo", "enabled": True},
         )
         assert create.status_code == 201
@@ -43,23 +43,23 @@ class TestCustomPoliciesAPI:
         assert body["applies_to"] == "both"
         assert body["severity"] == "high"
 
-        listed = client.get("/aep/api/custom-policies").json()
+        listed = client.get("/dashboard/api/custom-policies").json()
         assert len(listed["policies"]) == 4
         assert any(p["id"] == policy_id for p in listed["policies"])
 
-        one = client.get(f"/aep/api/custom-policies/{policy_id}")
+        one = client.get(f"/dashboard/api/custom-policies/{policy_id}")
         assert one.status_code == 200
         assert one.json() == body
 
         put = client.put(
-            f"/aep/api/custom-policies/{policy_id}",
+            f"/dashboard/api/custom-policies/{policy_id}",
             json={"name": "Block foo", "rule": "no foo", "enabled": False},
         )
         assert put.status_code == 200
         assert put.json()["enabled"] is False
 
         put2 = client.put(
-            f"/aep/api/custom-policies/{policy_id}",
+            f"/dashboard/api/custom-policies/{policy_id}",
             json={"name": "Renamed", "rule": "updated rule", "enabled": True},
         )
         assert put2.status_code == 200
@@ -67,33 +67,33 @@ class TestCustomPoliciesAPI:
         assert put2.json()["rule"] == "updated rule"
         assert put2.json()["enabled"] is True
 
-        deleted = client.delete(f"/aep/api/custom-policies/{policy_id}")
+        deleted = client.delete(f"/dashboard/api/custom-policies/{policy_id}")
         assert deleted.status_code == 204
 
-        assert client.get(f"/aep/api/custom-policies/{policy_id}").status_code == 404
+        assert client.get(f"/dashboard/api/custom-policies/{policy_id}").status_code == 404
 
     def test_put_requires_all_fields(self) -> None:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         r = client.post(
-            "/aep/api/custom-policies",
+            "/dashboard/api/custom-policies",
             json={"name": "x", "rule": "y", "enabled": True},
         )
         pid = r.json()["id"]
-        bad = client.put(f"/aep/api/custom-policies/{pid}", json={"enabled": False})
+        bad = client.put(f"/dashboard/api/custom-policies/{pid}", json={"enabled": False})
         assert bad.status_code == 400
 
     def test_invalid_uuid(self) -> None:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
-        assert client.get("/aep/api/custom-policies/not-a-uuid").status_code == 400
+        assert client.get("/dashboard/api/custom-policies/not-a-uuid").status_code == 400
 
     def test_create_rejects_client_id(self) -> None:
         """POST ignores any client-supplied id; server issues UUID via CustomPolicy."""
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         r = client.post(
-            "/aep/api/custom-policies",
+            "/dashboard/api/custom-policies",
             json={
                 "id": "00000000-0000-0000-0000-000000000001",
                 "name": "x",
@@ -108,7 +108,7 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         r = client.post(
-            "/aep/api/custom-policies",
+            "/dashboard/api/custom-policies",
             json={
                 "name": "Out only",
                 "rule": "no secrets",
@@ -127,7 +127,7 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         r = client.post(
-            "/aep/api/custom-policies",
+            "/dashboard/api/custom-policies",
             json={
                 "name": "Scoped",
                 "rule": "r",
@@ -138,13 +138,90 @@ class TestCustomPoliciesAPI:
         )
         pid = r.json()["id"]
         put = client.put(
-            f"/aep/api/custom-policies/{pid}",
+            f"/dashboard/api/custom-policies/{pid}",
             json={"name": "Renamed", "rule": "new", "enabled": False},
         )
         assert put.status_code == 200
         b = put.json()
         assert b["applies_to"] == "input"
         assert b["severity"] == "medium"
+
+    def test_api_key_endpoint_roundtrip(self) -> None:
+        """POST stores the BYOK key in memory; GET returns a hint, DELETE clears it."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        assert client.get("/dashboard/api/api-key").json() == {"set": False, "hint": None}
+
+        saved = client.post(
+            "/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}
+        ).json()
+        assert saved["set"] is True
+        assert saved["hint"].startswith("sk-abc1")
+
+        hint = client.get("/dashboard/api/api-key").json()
+        assert hint["set"] is True
+        assert hint["hint"] == saved["hint"]
+
+        cleared = client.delete("/dashboard/api/api-key").json()
+        assert cleared == {"set": False, "hint": None}
+
+    def test_api_key_rejects_empty_and_non_string(self) -> None:
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+        assert client.post("/dashboard/api/api-key", json={"api_key": ""}).status_code == 400
+        assert (
+            client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
+        )
+        assert client.post("/dashboard/api/api-key", json={}).status_code == 400
+
+    def test_policy_test_endpoint_returns_violation(self) -> None:
+        """Stub the CustomPolicy's __call__ so we don't need the PAW compiler online."""
+        from aceteam_aep.safety.custom import CustomPolicy
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+        created = client.post(
+            "/dashboard/api/custom-policies",
+            json={"name": "Block foo", "rule": "must not contain foo", "enabled": True},
+        ).json()
+        policy_id = created["id"]
+
+        async def fake_call(self, text):  # noqa: ANN001
+            return "foo" not in text
+
+        with patch.object(CustomPolicy, "__call__", fake_call):
+            passing = client.post(
+                "/dashboard/api/policy-test",
+                json={"policy_id": policy_id, "text": "hello world"},
+            ).json()
+            assert passing["passes"] is True
+            assert passing["policy_name"] == "Block foo"
+
+            failing = client.post(
+                "/dashboard/api/policy-test",
+                json={"policy_id": policy_id, "text": "hello foo"},
+            ).json()
+            assert failing["passes"] is False
+
+    def test_policy_test_endpoint_validates_input(self) -> None:
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+        # Missing fields
+        assert client.post("/dashboard/api/policy-test", json={}).status_code == 400
+        # Bogus id
+        bad = client.post(
+            "/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"}
+        )
+        assert bad.status_code == 400
+        # Valid uuid but unknown policy
+        from uuid import uuid4
+
+        missing = client.post(
+            "/dashboard/api/policy-test",
+            json={"policy_id": str(uuid4()), "text": "x"},
+        )
+        assert missing.status_code == 404
 
     def test_rejects_multiple_custom_safety_detectors(self) -> None:
         store = CustomPolicyStore()
