@@ -1003,6 +1003,16 @@ def create_proxy_app(
                 {"error": "api_key must be a non-empty string"}, status_code=400
             )
         state.api_key = key.strip()
+        base_url = body.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            candidate = base_url.strip().rstrip("/")
+            if not (candidate.startswith("http://") or candidate.startswith("https://")):
+                return JSONResponse(
+                    {"error": "base_url must start with http:// or https://"},
+                    status_code=400,
+                )
+            state.target_base_url = candidate
+            log.info("Upstream base URL updated to %s", candidate)
         log.info("BYOK API key updated (len=%d)", len(state.api_key))
         return JSONResponse(_hint(state.api_key))
 

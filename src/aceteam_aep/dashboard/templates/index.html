@@ -1159,9 +1159,15 @@
 
     .setup-options {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, 1fr);
       gap: 12px;
       margin-bottom: 20px;
+    }
+
+    @media (max-width: 640px) {
+      .setup-options {
+        grid-template-columns: 1fr;
+      }
     }
 
     .setup-option {
@@ -1390,6 +1396,10 @@
             <h3>I have API keys</h3>
             <p>OpenAI, Anthropic, or local</p>
           </div>
+          <div class="setup-option" onclick="selectSetupOption('tokenrouter', event)">
+            <h3>Use TokenRouter</h3>
+            <p>Route via palebluedot.ai</p>
+          </div>
           <div class="setup-option" onclick="selectSetupOption('aceteam', event)">
             <h3>Use AceTeam</h3>
             <p>$5 free credit, no key needed</p>
@@ -1397,6 +1407,7 @@
         </div>
         <div id="setup-byok" style="display:none;">
           <input class="setup-input" id="setup-api-key" type="password" placeholder="sk-... or paste your API key">
+          <input class="setup-input" id="setup-base-url" type="text" placeholder="Base URL (optional) — e.g. https://open.palebluedot.ai/v1">
           <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
         </div>
         <div id="setup-aceteam" style="display:none;">
@@ -1637,6 +1648,7 @@
       document.getElementById('setup-byok').style.display = 'none';
       document.getElementById('setup-aceteam').style.display = 'none';
       document.getElementById('setup-api-key').value = '';
+      document.getElementById('setup-base-url').value = '';
       var options = document.querySelectorAll('.setup-option');
       for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
       document.getElementById('setup-overlay').style.display = 'flex';
@@ -1646,26 +1658,41 @@
       var options = document.querySelectorAll('.setup-option');
       for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
       if (evt && evt.currentTarget) { evt.currentTarget.classList.add('selected'); }
-      document.getElementById('setup-byok').style.display = option === 'byok' ? 'block' : 'none';
+      var showByok = option === 'byok' || option === 'tokenrouter';
+      document.getElementById('setup-byok').style.display = showByok ? 'block' : 'none';
       document.getElementById('setup-aceteam').style.display = option === 'aceteam' ? 'block' : 'none';
+      var baseUrl = document.getElementById('setup-base-url');
+      var apiKey = document.getElementById('setup-api-key');
+      if (option === 'tokenrouter') {
+        baseUrl.value = 'https://open.palebluedot.ai/v1';
+        apiKey.placeholder = 'TokenRouter API key';
+      } else if (option === 'byok') {
+        baseUrl.value = '';
+        apiKey.placeholder = 'sk-... or paste your API key';
+      }
     }
 
     function saveApiKey() {
       var input = document.getElementById('setup-api-key');
+      var baseUrlInput = document.getElementById('setup-base-url');
       var btn = input.parentElement.querySelector('.setup-btn');
       var key = input.value.trim();
+      var baseUrl = baseUrlInput.value.trim();
       if (!key) return;
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+      var payload = { api_key: key };
+      if (baseUrl) payload.base_url = baseUrl;
       fetch('api/api-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: key })
+        body: JSON.stringify(payload)
       }).then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       }).then(function (info) {
         refreshKeyHint(info);
         input.value = '';
+        baseUrlInput.value = '';
         document.getElementById('setup-step-1').classList.remove('active');
         document.getElementById('setup-step-2').classList.add('active');
       }).catch(function () {
