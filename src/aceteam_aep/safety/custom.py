@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import uuid
+from collections.abc import Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Self
 
 from pydantic import BaseModel, Field
 
+from .base import SafetyDetector, SafetySignal
+
 if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
+
+log = logging.getLogger(__name__)
 
 
 def _retrieve_eager_task_exception(task: asyncio.Task[object]) -> None:
@@ -165,6 +171,56 @@ class CustomPolicy(BaseModel):
 
     async def __call__(self, text: str) -> bool:
         return (await self._paw(text)).strip().upper().startswith("Y")
+
+
+class CustomSafetyDetector(SafetyDetector):
+    """Custom safety detector that can evaluate arbitrary rules defined in
+    natural language.
+
+    Policies can be added and removed dynamically.
+    """
+
+    name = "custom_safety"
+
+    def __init__(
+        self,
+        policies: Sequence[CustomPolicy],
+    ) -> None:
+        self._policies = policies
+
+    async def check(
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> Sequence[SafetySignal]:
+        async def _check_one(policy: CustomPolicy) -> Sequence[SafetySignal]:
+            signals: list[SafetySignal] = []
+            try:
+                for text, source in ((output_text, "output"), (input_text, "input")):
+                    is_safe = await policy(text)
+                    if not is_safe:
+                        signals.append(
+                            SafetySignal(
+                                signal_type="custom_safety",
+                                severity="high",
+                                call_id=call_id,
+                                detail=f"{source} violates {policy.name}",
+                            )
+                        )
+            except Exception:
+                log.warning("Custom safety check failed for %s", policy.name, exc_info=True)
+                pass
+            return signals
+
+        signals: list[SafetySignal] = []
+
+        chunks = await asyncio.gather(*(_check_one(policy) for policy in self._policies))
+        for chunk in chunks:
+            signals.extend(chunk)
+        return signals
 
 
 __all__ = [

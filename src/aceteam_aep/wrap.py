@@ -28,7 +28,6 @@ Supports:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import uuid
@@ -48,6 +47,7 @@ from .safety.base import DetectorRegistry, SafetySignal
 from .safety.cost_anomaly import CostAnomalyDetector
 from .spans import Span, SpanTracker
 from .types import Usage
+from .utils.async_bridge import run_coro_sync
 
 log = logging.getLogger(__name__)
 
@@ -344,7 +344,7 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
 
         # Pre-flight: check input before sending to LLM
         input_text = _extract_input_text(kwargs.get("messages", []))
-        asyncio.run(session.preflight_check(input_text=input_text, call_id=call_id))
+        run_coro_sync(session.preflight_check(input_text=input_text, call_id=call_id))
 
         result = original_create(*args, **kwargs)
 
@@ -359,7 +359,7 @@ def _wrap_openai(client: Any, session: AepSession) -> Any:
                 if msg and hasattr(msg, "content") and msg.content:
                     output_text += msg.content
             input_text = _extract_input_text(kwargs.get("messages", []))
-            asyncio.run(
+            run_coro_sync(
                 session._record_call(
                     model=model,
                     input_tokens=input_tokens,
@@ -435,7 +435,7 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
 
         # Pre-flight: check input before sending to LLM
         input_text = _extract_input_text(kwargs.get("messages", []))
-        asyncio.run(session.preflight_check(input_text=input_text, call_id=call_id))
+        run_coro_sync(session.preflight_check(input_text=input_text, call_id=call_id))
 
         result = original_create(*args, **kwargs)
 
@@ -449,7 +449,7 @@ def _wrap_anthropic(client: Any, session: AepSession) -> Any:
                 if hasattr(block, "text"):
                     output_text += block.text
             input_text = _extract_input_text(kwargs.get("messages", []))
-            asyncio.run(
+            run_coro_sync(
                 session._record_call(
                     model=model,
                     input_tokens=input_tokens,
