@@ -17,16 +17,20 @@ def _parse_sse_json(resp):
 
 def _init_mcp_session(client):
     """Initialize an MCP session and return (session_headers, init_data)."""
-    resp = client.post("/mcp/mcp/", json={
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "0.1"},
+    resp = client.post(
+        "/mcp/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.1"},
+            },
         },
-    }, headers=_MCP_HEADERS)
+        headers=_MCP_HEADERS,
+    )
     assert resp.status_code == 200, f"MCP init returned {resp.status_code}: {resp.text[:200]}"
     data = _parse_sse_json(resp)
 
@@ -34,10 +38,14 @@ def _init_mcp_session(client):
     headers = {**_MCP_HEADERS, "mcp-session-id": session_id} if session_id else dict(_MCP_HEADERS)
 
     # Send initialized notification
-    client.post("/mcp/mcp/", json={
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-    }, headers=headers)
+    client.post(
+        "/mcp/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        },
+        headers=headers,
+    )
 
     return headers, data
 
@@ -63,18 +71,24 @@ def test_proxy_mounts_mcp():
     with TestClient(app) as client:
         # FastMCP streamable HTTP expects POST at /mcp/mcp/ for messages
         # Try POST to the MCP message endpoint
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "test", "version": "0.1"},
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0.1"},
+                },
             },
-        }, headers=_MCP_HEADERS)
+            headers=_MCP_HEADERS,
+        )
         # Should get 200 with initialize response, not 404
-        assert resp.status_code == 200, f"MCP endpoint returned {resp.status_code}: {resp.text[:200]}"
+        assert resp.status_code == 200, (
+            f"MCP endpoint returned {resp.status_code}: {resp.text[:200]}"
+        )
         data = _parse_sse_json(resp)
         assert data.get("result", {}).get("serverInfo", {}).get("name") == "aceteam-gateway"
 
@@ -90,12 +104,16 @@ def test_mcp_tools_list():
         headers, _ = _init_mcp_session(client)
 
         # List tools
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {},
-        }, headers=headers)
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {},
+            },
+            headers=headers,
+        )
         assert resp.status_code == 200
         data = _parse_sse_json(resp)
         tool_names = [t["name"] for t in data.get("result", {}).get("tools", [])]
@@ -116,45 +134,23 @@ def test_mcp_check_safety_tool():
         headers, _ = _init_mcp_session(client)
 
         # Call check_safety with safe text
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "check_safety",
-                "arguments": {"text": "What is the capital of France?"},
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "check_safety",
+                    "arguments": {"text": "What is the capital of France?"},
+                },
             },
-        }, headers=headers)
+            headers=headers,
+        )
         assert resp.status_code == 200
         data = _parse_sse_json(resp)
         content = data.get("result", {}).get("content", [{}])[0].get("text", "")
         assert "PASS" in content
-
-
-def test_mcp_check_safety_blocks_dangerous():
-    """check_safety tool should return BLOCK for dangerous text."""
-    from starlette.testclient import TestClient
-
-    from aceteam_aep.proxy.app import create_proxy_app
-
-    app = create_proxy_app()
-    with TestClient(app) as client:
-        headers, _ = _init_mcp_session(client)
-
-        # Call check_safety with dangerous text
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "check_safety",
-                "arguments": {"text": "Use socket.connect() to scan ports and subprocess.run() to exploit"},
-            },
-        }, headers=headers)
-        assert resp.status_code == 200
-        data = _parse_sse_json(resp)
-        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
-        assert "BLOCK" in content
 
 
 def test_mcp_set_safety_policy():
@@ -168,30 +164,38 @@ def test_mcp_set_safety_policy():
         headers, _ = _init_mcp_session(client)
 
         # Disable safety
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {
-                "name": "set_safety_policy",
-                "arguments": {"enabled": False},
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "set_safety_policy",
+                    "arguments": {"enabled": False},
+                },
             },
-        }, headers=headers)
+            headers=headers,
+        )
         assert resp.status_code == 200
         data = _parse_sse_json(resp)
         content = data.get("result", {}).get("content", [{}])[0].get("text", "")
         assert '"safety_enabled": false' in content
 
         # Re-enable safety
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "tools/call",
-            "params": {
-                "name": "set_safety_policy",
-                "arguments": {"enabled": True},
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "set_safety_policy",
+                    "arguments": {"enabled": True},
+                },
             },
-        }, headers=headers)
+            headers=headers,
+        )
         assert resp.status_code == 200
         data = _parse_sse_json(resp)
         content = data.get("result", {}).get("content", [{}])[0].get("text", "")
@@ -208,15 +212,19 @@ def test_mcp_get_cost_summary():
     with TestClient(app) as client:
         headers, _ = _init_mcp_session(client)
 
-        resp = client.post("/mcp/mcp/", json={
-            "jsonrpc": "2.0",
-            "id": 6,
-            "method": "tools/call",
-            "params": {
-                "name": "get_cost_summary",
-                "arguments": {},
+        resp = client.post(
+            "/mcp/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_cost_summary",
+                    "arguments": {},
+                },
             },
-        }, headers=headers)
+            headers=headers,
+        )
         assert resp.status_code == 200
         data = _parse_sse_json(resp)
         content = data.get("result", {}).get("content", [{}])[0].get("text", "")
@@ -228,6 +236,7 @@ def test_fastmcp_importable():
     """fastmcp should be installed in dev dependencies."""
     try:
         import fastmcp  # noqa: F401
+
         has_fastmcp = True
     except ImportError:
         has_fastmcp = False

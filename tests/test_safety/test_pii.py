@@ -1,7 +1,5 @@
 """Tests for PII detector — uses real model if available, regex fallback otherwise."""
 
-from __future__ import annotations
-
 import pytest
 
 from aceteam_aep.safety.pii import PiiDetector
@@ -25,9 +23,7 @@ def test_detects_email(detector: PiiDetector) -> None:
 
 
 def test_clean_text_no_signal(detector: PiiDetector) -> None:
-    signals = detector.check(
-        input_text="", output_text="The weather is nice today.", call_id="t3"
-    )
+    signals = detector.check(input_text="", output_text="The weather is nice today.", call_id="t3")
     pii_signals = [s for s in signals if s.signal_type == "pii"]
     # Model may detect some false positives, regex should not
     # Allow either 0 signals or only low-confidence ones
@@ -35,9 +31,7 @@ def test_clean_text_no_signal(detector: PiiDetector) -> None:
 
 
 def test_detects_phone_number(detector: PiiDetector) -> None:
-    signals = detector.check(
-        input_text="", output_text="Call me at (555) 123-4567", call_id="t4"
-    )
+    signals = detector.check(input_text="", output_text="Call me at (555) 123-4567", call_id="t4")
     assert any(s.signal_type == "pii" for s in signals)
 
 

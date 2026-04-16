@@ -12,9 +12,14 @@ version will use the Trust Engine's ensemble-of-judges approach
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Sequence
+from typing import Literal
 
-from .base import SafetySignal
+from .base import SafetyDetector, SafetySignal
+
+logger = logging.getLogger(__name__)
 
 _THREAT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bnmap\b", re.IGNORECASE), "port scanning (nmap)"),
@@ -43,7 +48,7 @@ _THREAT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-class AgentThreatDetector:
+class AgentThreatDetector(SafetyDetector):
     """Detect when an AI agent attempts network attacks or system exploitation.
 
     Scans both input and output text for known dangerous patterns such as
@@ -56,14 +61,38 @@ class AgentThreatDetector:
 
     name = "agent_threat"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        scan_input: bool = False,
+        scan_output: bool = True,
+    ) -> None:
+        if not (scan_input or scan_output):
+            logger.warning(
+                f"{self.__class__.__name__}: scan_input and scan_output are both False, "
+                "so this detector will not detect anything"
+            )
+            scan_input = True
+            scan_output = True
+        self._scan_input = scan_input
+        self._scan_output = scan_output
         self._patterns = _THREAT_PATTERNS
 
     def check(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-    ) -> list[SafetySignal]:
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs: object,
+    ) -> Sequence[SafetySignal]:
         signals: list[SafetySignal] = []
-        for text, source in [(input_text, "input"), (output_text, "output")]:
+        texts: list[tuple[str, Literal["input", "output"]]] = []
+        if self._scan_input:
+            texts.append((input_text, "input"))
+        if self._scan_output:
+            texts.append((output_text, "output"))
+        for text, source in texts:
             if not text:
                 continue
             for pattern, desc in self._patterns:

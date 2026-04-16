@@ -45,11 +45,12 @@ import json
 import logging
 import os
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
-from .base import SafetySignal
+from .base import SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -417,7 +418,7 @@ def _call_judge(config: JudgeConfig, input_text: str, output_text: str) -> Judge
 # ---------------------------------------------------------------------------
 
 
-class TrustEngineDetector:
+class TrustEngineDetector(SafetyDetector):
     """Multi-perspective safety detector with calibrated confidence.
 
     Two modes:
@@ -484,7 +485,7 @@ class TrustEngineDetector:
 
         self._last_dimension_results: list[DimensionResult] = []
         self._last_judge_results: list[JudgeResult] = []
-        self._last_latency_ms: int = 0
+        self._last_latency_ms: float = 0
 
     def check(
         self,
@@ -492,8 +493,8 @@ class TrustEngineDetector:
         input_text: str,
         output_text: str,
         call_id: str,
-        **kwargs: object,
-    ) -> list[SafetySignal]:
+        **kwargs,
+    ) -> Sequence[SafetySignal]:
         """Evaluate using configured mode. Returns signals if P(safe) is low."""
 
         cached = self._cache.get(input_text, output_text)
@@ -511,15 +512,12 @@ class TrustEngineDetector:
         self._cache.put(input_text, output_text, signals)
         return signals
 
-    def _eval_judge_service(
-        self, input_text: str, output_text: str
-    ) -> float:
+    def _eval_judge_service(self, input_text: str, output_text: str) -> float:
         """Call external R-Judge Flask service."""
         import httpx
 
         categories = [
-            n for n in self._dimensions
-            if n in ("finance", "iot", "software", "web", "program")
+            n for n in self._dimensions if n in ("finance", "iot", "software", "web", "program")
         ] or None
 
         try:

@@ -17,10 +17,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "openai>=1.65.0,<2.0.0",
     "anthropic>=0.45.0,<1.0.0",
     "google-genai>=1.0.0,<2.0.0",
     "httpx>=0.28.0",
+    "openai>=1.65.0,<2.0.0",
+    "overrides>=7.7.0",
     "pydantic>=2.11.0",
 ]
 
@@ -35,14 +36,16 @@ mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
 feedback = ["lancedb>=0.30"]
 top = ["rich>=13.0"]
-all = ["aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events]"]
+all = [
+    "aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events]",
+]
 dev = [
     "aceteam-aep[all]",
     "httpx>=0.28",
+    "pyright>=1.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.11",
-    "pyright>=1.1",
 ]
 
 [project.scripts]
@@ -65,7 +68,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["UP047"]  # Allow TypeVar over PEP 695 type params for compatibility
+ignore = ["UP047"]                         # Allow TypeVar over PEP 695 type params for compatibility
 
 [tool.pyright]
 pythonVersion = "3.12"
