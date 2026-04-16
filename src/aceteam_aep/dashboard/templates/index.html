@@ -1,2077 +1,2615 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AEP Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg-deep: #080c14;
-    --bg-surface: #0f1520;
-    --bg-raised: #151d2b;
-    --bg-inset: #0a0f18;
-    --border: #1e2a3e;
-    --border-subtle: #172030;
-    --text-primary: #d0d8e8;
-    --text-muted: #8a9bb4;
-    --text-dim: #627890;
-    --accent-cyan: #00d4ff;
-    --accent-cyan-dim: rgba(0, 212, 255, 0.12);
-    --accent-amber: #ffb347;
-    --accent-amber-dim: rgba(255, 179, 71, 0.12);
-    --accent-red: #ff4757;
-    --accent-red-dim: rgba(255, 71, 87, 0.12);
-    --accent-green: #2ed573;
-    --accent-green-dim: rgba(46, 213, 115, 0.12);
-    --accent-lavender: #b8a0e0;
-    --accent-sky: #6bc5e8;
-    --accent-peach: #e8a87c;
-    --font-data: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
-    --font-label: 'Instrument Sans', -apple-system, sans-serif;
-    --radius: 6px;
-    --radius-lg: 10px;
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    background: var(--bg-deep);
-    color: var(--text-primary);
-    font-family: var(--font-data);
-    font-size: 13px;
-    padding: 28px 32px;
-    background-image:
-      repeating-linear-gradient(90deg, rgba(0,212,255,0.02) 0px, rgba(0,212,255,0.02) 1px, transparent 1px, transparent 40px),
-      repeating-linear-gradient(0deg, rgba(0,212,255,0.02) 0px, rgba(0,212,255,0.02) 1px, transparent 1px, transparent 40px);
-    min-height: 100vh;
-  }
-
-  /* ── Header ── */
-  h1 {
-    font-family: var(--font-label);
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-bottom: 28px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    letter-spacing: 0.3px;
-    animation: fadeSlideIn 0.4s ease-out;
-  }
-  h1 span.live {
-    color: var(--accent-cyan);
-    font-family: var(--font-data);
-    font-weight: 500;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  /* ── View Toggle ── */
-  .view-toggle {
-    margin-left: auto;
-    display: flex;
-    gap: 0;
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    overflow: hidden;
-    background: var(--bg-surface);
-  }
-  .view-toggle button {
-    background: transparent;
-    color: var(--text-muted);
-    border: none;
-    padding: 7px 18px;
-    font-size: 11px;
-    cursor: pointer;
-    font-family: var(--font-label);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    transition: all 0.2s;
-  }
-  .view-toggle button.active {
-    background: var(--accent-cyan);
-    color: var(--bg-deep);
-    box-shadow: 0 0 12px rgba(0,212,255,0.25);
-  }
-  .view-toggle button:hover:not(.active) {
-    background: var(--bg-raised);
-    color: var(--text-primary);
-  }
-
-  /* ── Grid / Cards ── */
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 24px; }
-  .grid-4 { grid-template-columns: repeat(4, 1fr); }
-
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    padding: 20px 22px;
-    position: relative;
-    overflow: hidden;
-    animation: fadeSlideIn 0.5s ease-out both;
-  }
-  .card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(0,212,255,0.15), transparent);
-  }
-  .card:nth-child(1) { animation-delay: 0.05s; }
-  .card:nth-child(2) { animation-delay: 0.1s; }
-  .card:nth-child(3) { animation-delay: 0.15s; }
-  .card:nth-child(4) { animation-delay: 0.2s; }
-
-  .card-label {
-    font-family: var(--font-label);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--accent-sky);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin-bottom: 10px;
-  }
-  .card-value { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .card-value.small { font-size: 22px; }
-
-  .cost { color: var(--accent-cyan); }
-  .calls { color: var(--text-primary); }
-  .green { color: var(--accent-green); }
-
-  /* ── Badges ── */
-  .badge {
-    display: inline-block;
-    padding: 4px 14px;
-    border-radius: 20px;
-    font-family: var(--font-label);
-    font-weight: 700;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  .badge-sm { padding: 2px 8px; font-size: 9px; border-radius: 10px; letter-spacing: 0.8px; }
-  .badge-pass { background: var(--accent-green-dim); color: var(--accent-green); box-shadow: 0 0 8px rgba(46,213,115,0.15); }
-  .badge-flag { background: var(--accent-amber-dim); color: var(--accent-amber); box-shadow: 0 0 8px rgba(255,179,71,0.15); }
-  .badge-block { background: var(--accent-red-dim); color: var(--accent-red); box-shadow: 0 0 8px rgba(255,71,87,0.15); }
-
-  /* ── Sections ── */
-  .section {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    padding: 22px 24px;
-    margin-bottom: 14px;
-    animation: fadeSlideIn 0.5s ease-out both;
-  }
-  .section:nth-of-type(1) { animation-delay: 0.15s; }
-  .section:nth-of-type(2) { animation-delay: 0.2s; }
-  .section:nth-of-type(3) { animation-delay: 0.25s; }
-  .section:nth-of-type(4) { animation-delay: 0.3s; }
-  .section:nth-of-type(5) { animation-delay: 0.35s; }
-
-  .section h2 {
-    font-family: var(--font-label);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent-sky);
-    margin-bottom: 14px;
-    text-transform: uppercase;
-    letter-spacing: 1.8px;
-    padding-left: 12px;
-    border-left: 2px solid var(--accent-cyan);
-  }
-
-  /* ── Signals ── */
-  .signal {
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    margin-bottom: 6px;
-    font-size: 13px;
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    transition: background 0.15s;
-  }
-  .signal-high {
-    background: var(--accent-red-dim);
-    border-left: 3px solid var(--accent-red);
-    box-shadow: inset 4px 0 12px -4px rgba(255,71,87,0.1);
-  }
-  .signal-medium {
-    background: var(--accent-amber-dim);
-    border-left: 3px solid var(--accent-amber);
-    box-shadow: inset 4px 0 12px -4px rgba(255,179,71,0.1);
-  }
-  .signal-low {
-    background: var(--accent-cyan-dim);
-    border-left: 3px solid var(--accent-cyan);
-    box-shadow: inset 4px 0 12px -4px rgba(0,212,255,0.1);
-  }
-  .sev {
-    font-family: var(--font-label);
-    font-weight: 700;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    min-width: 52px;
-  }
-  .sev-high { color: var(--accent-red); }
-  .sev-medium { color: var(--accent-amber); }
-  .sev-low { color: var(--accent-cyan); }
-  .score-badge { font-size: 11px; color: var(--accent-lavender); font-weight: 400; }
-
-  /* ── Call Timeline / Spans ── */
-  .span-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0 3px;
-  }
-  .span-table td {
-    padding: 8px 14px;
-    font-size: 13px;
-    background: var(--bg-inset);
-    vertical-align: middle;
-  }
-  .span-table tr:nth-child(even) td { background: rgba(15,21,32,0.6); }
-  .span-table tr:hover td { background: var(--bg-raised); }
-  .span-table td:first-child { border-radius: var(--radius) 0 0 var(--radius); }
-  .span-table td:last-child { border-radius: 0 var(--radius) var(--radius) 0; text-align: right; }
-  .span-model { color: var(--accent-cyan); font-weight: 500; }
-  .span-time { color: var(--accent-sky); font-size: 11px; white-space: nowrap; }
-  .span-dur { color: var(--accent-lavender); font-variant-numeric: tabular-nums; }
-  .span-cost { color: var(--accent-amber); font-size: 12px; opacity: 0.9; }
-  .span-status { text-align: center; }
-
-  .empty { color: var(--text-muted); font-style: italic; font-size: 13px; }
-
-  /* ── Pulse / Live Indicator ── */
-  .pulse { animation: glowPulse 2.5s ease-in-out infinite; }
-  @keyframes glowPulse {
-    0%, 100% { opacity: 1; text-shadow: 0 0 6px rgba(0,212,255,0.4); }
-    50% { opacity: 0.5; text-shadow: 0 0 2px rgba(0,212,255,0.1); }
-  }
-
-  /* ── Entrance animation ── */
-  @keyframes fadeSlideIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* ── Reduced Motion ── */
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AEP Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Instrument+Sans:wght@400;600;700&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --bg-deep: #080c14;
+      --bg-surface: #0f1520;
+      --bg-raised: #151d2b;
+      --bg-inset: #0a0f18;
+      --border: #1e2a3e;
+      --border-subtle: #172030;
+      --text-primary: #d0d8e8;
+      --text-muted: #8a9bb4;
+      --text-dim: #627890;
+      --accent-cyan: #00d4ff;
+      --accent-cyan-dim: rgba(0, 212, 255, 0.12);
+      --accent-amber: #ffb347;
+      --accent-amber-dim: rgba(255, 179, 71, 0.12);
+      --accent-red: #ff4757;
+      --accent-red-dim: rgba(255, 71, 87, 0.12);
+      --accent-green: #2ed573;
+      --accent-green-dim: rgba(46, 213, 115, 0.12);
+      --accent-lavender: #b8a0e0;
+      --accent-sky: #6bc5e8;
+      --accent-peach: #e8a87c;
+      --font-data: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+      --font-label: 'Instrument Sans', -apple-system, sans-serif;
+      --radius: 6px;
+      --radius-lg: 10px;
     }
-  }
 
-  /* ── Footer ── */
-  .footer {
-    margin-top: 32px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-subtle);
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-family: var(--font-label);
-    letter-spacing: 0.5px;
-  }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
 
-  /* ── Bars ── */
-  .bar-container { height: 6px; background: var(--bg-inset); border-radius: 3px; overflow: hidden; margin-top: 8px; }
-  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
-  .bar-green { background: linear-gradient(90deg, var(--accent-green), #34e87f); }
-  .bar-yellow { background: linear-gradient(90deg, var(--accent-amber), #ffc46b); }
-  .bar-red { background: linear-gradient(90deg, var(--accent-red), #ff6b7a); }
+    body {
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      font-family: var(--font-data);
+      font-size: 13px;
+      padding: 28px 32px;
+      background-image:
+        repeating-linear-gradient(90deg, rgba(0, 212, 255, 0.02) 0px, rgba(0, 212, 255, 0.02) 1px, transparent 1px, transparent 40px),
+        repeating-linear-gradient(0deg, rgba(0, 212, 255, 0.02) 0px, rgba(0, 212, 255, 0.02) 1px, transparent 1px, transparent 40px);
+      min-height: 100vh;
+    }
 
-  /* ── Metrics ── */
-  .metric-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-  .metric-label { color: var(--accent-sky); font-size: 13px; }
-  .metric-value { color: var(--text-primary); font-size: 13px; font-weight: 700; }
-  .metric-value.good { color: var(--accent-green); }
-  .metric-value.warn { color: var(--accent-amber); }
-  .metric-value.bad { color: var(--accent-red); }
+    /* ── Header ── */
+    h1 {
+      font-family: var(--font-label);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 28px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      letter-spacing: 0.3px;
+      animation: fadeSlideIn 0.4s ease-out;
+    }
 
-  /* ── Compliance ── */
-  .compliance-item {
-    padding: 12px 16px;
-    background: var(--bg-inset);
-    border-radius: var(--radius);
-    margin-bottom: 6px;
-    border: 1px solid var(--border-subtle);
-  }
-  .compliance-status { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-  .dot-green { background: var(--accent-green); box-shadow: 0 0 6px rgba(46,213,115,0.4); }
-  .dot-yellow { background: var(--accent-amber); box-shadow: 0 0 6px rgba(255,179,71,0.4); }
-  .dot-red { background: var(--accent-red); box-shadow: 0 0 6px rgba(255,71,87,0.4); }
-  .hidden { display: none; }
+    h1 span.live {
+      color: var(--accent-cyan);
+      font-family: var(--font-data);
+      font-weight: 500;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
 
-  /* ── Filter Bar ── */
-  .filter-bar { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-  .filter-btn {
-    background: var(--bg-inset);
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-    padding: 5px 12px;
-    border-radius: 16px;
-    font-size: 10px;
-    cursor: pointer;
-    font-family: var(--font-label);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    transition: all 0.15s;
-  }
-  .filter-btn.active {
-    background: var(--accent-cyan-dim);
-    color: var(--accent-cyan);
-    border-color: rgba(0,212,255,0.3);
-  }
-  .filter-btn:hover:not(.active) {
-    background: var(--bg-raised);
-    color: var(--text-primary);
-    border-color: var(--border);
-  }
+    /* ── View Toggle ── */
+    .view-toggle {
+      margin-left: auto;
+      display: flex;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+      background: var(--bg-surface);
+    }
 
-  /* ── Call Groups ── */
-  .call-group { margin-bottom: 10px; }
-  .call-group-header {
-    font-family: var(--font-label);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--accent-cyan);
-    padding: 4px 0;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: color 0.15s;
-  }
-  .call-group-header:hover { color: #44e0ff; }
-  .call-group-arrow { font-size: 10px; transition: transform 0.2s; }
-  .call-group-arrow.collapsed { transform: rotate(-90deg); }
-  .call-group-body { margin-left: 4px; }
+    .view-toggle button {
+      background: transparent;
+      color: var(--text-muted);
+      border: none;
+      padding: 7px 18px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: var(--font-label);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      transition: all 0.2s;
+    }
 
-  /* ── Zero State ── */
-  .zero-state { text-align: center; padding: 44px 20px; }
-  .zero-state-icon { font-size: 48px; margin-bottom: 14px; }
-  .zero-state-text { font-family: var(--font-label); font-size: 16px; color: var(--accent-green); font-weight: 700; }
-  .zero-state-sub { font-size: 13px; color: var(--accent-sky); margin-top: 6px; }
+    .view-toggle button.active {
+      background: var(--accent-cyan);
+      color: var(--bg-deep);
+      box-shadow: 0 0 12px rgba(0, 212, 255, 0.25);
+    }
 
-  /* ── Entity Rows ── */
-  .entity-row {
-    padding: 10px 14px;
-    background: var(--bg-inset);
-    border-radius: var(--radius);
-    margin-bottom: 4px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .entity-name { color: var(--text-primary); font-size: 13px; }
-  .entity-detail { color: var(--accent-peach); font-size: 12px; }
-  .entity-cost { color: var(--accent-cyan); font-size: 13px; font-weight: 700; }
+    .view-toggle button:hover:not(.active) {
+      background: var(--bg-raised);
+      color: var(--text-primary);
+    }
 
-  .session-info { font-size: 12px; color: var(--accent-sky); margin-bottom: 16px; font-family: var(--font-label); }
+    /* ── Grid / Cards ── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
 
-  /* ── Confidence ── */
-  .confidence-pct { font-size: 12px; font-weight: 700; margin-left: auto; }
-  .confidence-high { color: var(--accent-red); }
-  .confidence-med { color: var(--accent-amber); }
-  .confidence-low { color: var(--accent-green); }
+    .grid-4 {
+      grid-template-columns: repeat(4, 1fr);
+    }
 
-  /* ── Review Buttons ── */
-  .review-btns { display: flex; gap: 4px; margin-left: 8px; }
-  .review-btn {
-    padding: 3px 10px;
-    font-size: 10px;
-    border-radius: 12px;
-    border: none;
-    cursor: pointer;
-    font-family: var(--font-label);
-    font-weight: 600;
-    letter-spacing: 0.3px;
-    transition: opacity 0.15s, transform 0.1s;
-  }
-  .review-btn:hover { opacity: 0.85; transform: scale(1.02); }
-  .review-btn-confirm { background: var(--accent-red); color: #fff; }
-  .review-btn-dismiss { background: var(--accent-green); color: #fff; }
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 20px 22px;
+      position: relative;
+      overflow: hidden;
+      animation: fadeSlideIn 0.5s ease-out both;
+    }
 
-  /* ── Safety Toggle ── */
-  .safety-toggle { display: flex; align-items: center; gap: 8px; margin-left: 16px; }
-  .toggle-switch {
-    position: relative;
-    width: 40px; height: 20px;
-    background: var(--accent-red);
-    border-radius: 10px;
-    cursor: pointer;
-    transition: background 0.3s, box-shadow 0.3s;
-    box-shadow: 0 0 8px rgba(255,71,87,0.25);
-  }
-  .toggle-switch.on {
-    background: var(--accent-green);
-    box-shadow: 0 0 8px rgba(46,213,115,0.25);
-  }
-  .toggle-switch::after {
-    content: '';
-    position: absolute;
-    top: 2px; left: 2px;
-    width: 16px; height: 16px;
-    background: #fff;
-    border-radius: 50%;
-    transition: transform 0.3s;
-  }
-  .toggle-switch.on::after { transform: translateX(20px); }
-  .toggle-label {
-    font-family: var(--font-label);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-primary);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-  }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.15), transparent);
+    }
 
-  /* ── Policy Controls ── */
-  .policy-controls { display: flex; flex-wrap: wrap; gap: 8px; }
-  .detector-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--bg-inset);
-    padding: 7px 14px;
-    border-radius: 20px;
-    cursor: pointer;
-    user-select: none;
-    border: 1px solid var(--border);
-    transition: border-color 0.2s, background 0.2s;
-  }
-  .detector-toggle:hover { border-color: var(--accent-cyan); background: var(--bg-raised); }
-  .detector-toggle.disabled { opacity: 0.35; }
-  .detector-toggle input[type="checkbox"] { accent-color: var(--accent-cyan); cursor: pointer; width: 13px; height: 13px; }
-  .detector-toggle label {
-    font-family: var(--font-label);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-primary);
-    cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-  }
-  .detector-toggle.disabled label { text-decoration: line-through; color: var(--text-muted); }
-  .category-divider {
-    width: 100%;
-    font-family: var(--font-label);
-    font-size: 9px;
-    font-weight: 600;
-    color: var(--accent-peach);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin: 6px 0 2px;
-  }
+    .card:nth-child(1) {
+      animation-delay: 0.05s;
+    }
 
-  /* ── Custom Policies ── */
-  .custom-policies-list { display: flex; flex-direction: column; gap: 6px; }
-  .policy-item {
-    background: var(--bg-inset);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius);
-    padding: 14px 18px;
-    display: grid;
-    grid-template-columns: 1fr auto;
-    grid-template-rows: auto auto;
-    gap: 4px 16px;
-    align-items: center;
-    transition: border-color 0.2s, background 0.2s;
-    position: relative;
-  }
-  .policy-item:hover { border-color: var(--border); background: rgba(15,21,32,0.8); }
-  .policy-item.disabled-policy { opacity: 0.45; }
-  .policy-item.disabled-policy:hover { opacity: 0.6; }
-  .policy-name {
-    font-family: var(--font-label);
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: 0.2px;
-  }
-  .policy-rule {
-    font-size: 12px;
-    color: var(--text-muted);
-    grid-column: 1;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .policy-actions {
-    grid-row: 1 / 3;
-    grid-column: 2;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .policy-toggle-mini {
-    position: relative;
-    width: 34px; height: 18px;
-    background: var(--accent-red);
-    border-radius: 9px;
-    cursor: pointer;
-    transition: background 0.3s, box-shadow 0.3s;
-    box-shadow: 0 0 6px rgba(255,71,87,0.2);
-    flex-shrink: 0;
-  }
-  .policy-toggle-mini.on {
-    background: var(--accent-green);
-    box-shadow: 0 0 6px rgba(46,213,115,0.2);
-  }
-  .policy-toggle-mini::after {
-    content: '';
-    position: absolute;
-    top: 2px; left: 2px;
-    width: 14px; height: 14px;
-    background: #fff;
-    border-radius: 50%;
-    transition: transform 0.25s;
-  }
-  .policy-toggle-mini.on::after { transform: translateX(16px); }
-  .policy-action-btn {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    width: 28px; height: 28px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-    flex-shrink: 0;
-  }
-  .policy-action-btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); background: var(--accent-cyan-dim); }
-  .policy-action-btn.delete:hover { border-color: var(--accent-red); color: var(--accent-red); background: var(--accent-red-dim); }
+    .card:nth-child(2) {
+      animation-delay: 0.1s;
+    }
 
-  .add-policy-btn {
-    background: var(--bg-inset);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
-    padding: 14px 18px;
-    color: var(--text-dim);
-    font-family: var(--font-label);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    letter-spacing: 0.4px;
-    transition: all 0.2s;
-  }
-  .add-policy-btn:hover {
-    border-color: var(--accent-cyan);
-    color: var(--accent-cyan);
-    background: rgba(0,212,255,0.04);
-  }
-  .add-policy-btn .plus-icon {
-    width: 22px; height: 22px;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    font-weight: 300;
-  }
+    .card:nth-child(3) {
+      animation-delay: 0.15s;
+    }
 
-  /* Policy form (inline) */
-  .policy-form {
-    background: var(--bg-raised);
-    border: 1px solid var(--accent-cyan);
-    border-radius: var(--radius-lg);
-    padding: 20px 22px;
-    box-shadow: 0 0 20px rgba(0,212,255,0.06), 0 8px 32px rgba(0,0,0,0.2);
-    animation: fadeSlideIn 0.25s ease-out;
-  }
-  .policy-form-title {
-    font-family: var(--font-label);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent-cyan);
-    text-transform: uppercase;
-    letter-spacing: 1.2px;
-    margin-bottom: 14px;
-  }
-  .policy-form-group { margin-bottom: 12px; }
-  .policy-form-label {
-    font-family: var(--font-label);
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 5px;
-    display: block;
-  }
-  .policy-form-input {
-    width: 100%;
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-    padding: 9px 14px;
-    border-radius: var(--radius);
-    font-family: var(--font-data);
-    font-size: 13px;
-    transition: border-color 0.2s;
-  }
-  .policy-form-input:focus { border-color: var(--accent-cyan); outline: none; box-shadow: 0 0 0 2px rgba(0,212,255,0.08); }
-  .policy-form-textarea {
-    width: 100%;
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-    padding: 9px 14px;
-    border-radius: var(--radius);
-    font-family: var(--font-data);
-    font-size: 12px;
-    line-height: 1.6;
-    min-height: 64px;
-    resize: vertical;
-    transition: border-color 0.2s;
-  }
-  .policy-form-textarea:focus { border-color: var(--accent-cyan); outline: none; box-shadow: 0 0 0 2px rgba(0,212,255,0.08); }
-  .policy-form-btns { display: flex; gap: 8px; margin-top: 4px; }
-  .policy-form-save {
-    background: var(--accent-cyan);
-    color: var(--bg-deep);
-    border: none;
-    padding: 7px 18px;
-    border-radius: 16px;
-    font-family: var(--font-label);
-    font-size: 11px;
-    font-weight: 700;
-    cursor: pointer;
-    letter-spacing: 0.3px;
-    transition: opacity 0.15s, box-shadow 0.15s;
-    box-shadow: 0 0 10px rgba(0,212,255,0.15);
-  }
-  .policy-form-save:hover { opacity: 0.9; box-shadow: 0 0 16px rgba(0,212,255,0.25); }
-  .policy-form-save:disabled { opacity: 0.35; cursor: not-allowed; }
-  .policy-form-cancel {
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-    padding: 7px 18px;
-    border-radius: 16px;
-    font-family: var(--font-label);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .policy-form-cancel:hover { color: var(--text-primary); border-color: var(--text-muted); }
+    .card:nth-child(4) {
+      animation-delay: 0.2s;
+    }
 
-  .policy-empty {
-    text-align: center;
-    padding: 28px 16px;
-    color: var(--text-dim);
-    font-family: var(--font-label);
-    font-size: 13px;
-    letter-spacing: 0.2px;
-  }
-  .policy-empty-hint {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 6px;
-    opacity: 0.7;
-  }
+    .card-label {
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-sky);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-bottom: 10px;
+    }
 
-  /* ── Setup Overlay ── */
-  .setup-overlay {
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(8,12,20,0.92);
-    backdrop-filter: blur(8px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-  .setup-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 36px;
-    max-width: 560px;
-    width: 90%;
-    box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 40px rgba(0,212,255,0.04);
-  }
-  .setup-card h2 {
-    font-family: var(--font-label);
-    color: var(--text-primary);
-    font-size: 18px;
-    margin-bottom: 16px;
-  }
-  .setup-card p { color: var(--text-muted); font-size: 14px; margin-bottom: 16px; }
-  .setup-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
-  .setup-option {
-    background: var(--bg-inset);
-    border: 2px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px;
-    cursor: pointer;
-    text-align: center;
-    transition: border-color 0.2s, background 0.2s;
-  }
-  .setup-option:hover { border-color: var(--accent-cyan); background: var(--bg-raised); }
-  .setup-option.selected { border-color: var(--accent-cyan); background: var(--accent-cyan-dim); }
-  .setup-option h3 { font-family: var(--font-label); color: var(--text-primary); font-size: 14px; margin-bottom: 4px; }
-  .setup-option p { color: var(--text-muted); font-size: 12px; margin: 0; }
-  .setup-input {
-    width: 100%;
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    font-family: var(--font-data);
-    font-size: 13px;
-    margin-bottom: 8px;
-    transition: border-color 0.2s;
-  }
-  .setup-input:focus { border-color: var(--accent-cyan); outline: none; box-shadow: 0 0 0 2px rgba(0,212,255,0.1); }
-  .setup-btn {
-    background: var(--accent-cyan);
-    color: var(--bg-deep);
-    border: none;
-    padding: 9px 22px;
-    border-radius: 20px;
-    font-family: var(--font-label);
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    letter-spacing: 0.3px;
-    transition: opacity 0.15s, box-shadow 0.15s;
-    box-shadow: 0 0 12px rgba(0,212,255,0.2);
-  }
-  .setup-btn:hover { opacity: 0.9; box-shadow: 0 0 20px rgba(0,212,255,0.3); }
-  .setup-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .setup-code {
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px 16px;
-    font-family: var(--font-data);
-    font-size: 12px;
-    color: var(--accent-cyan);
-    position: relative;
-    margin-bottom: 8px;
-    word-break: break-all;
-  }
-  .setup-copy {
-    position: absolute; top: 8px; right: 8px;
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    padding: 3px 10px;
-    border-radius: 10px;
-    font-size: 10px;
-    font-family: var(--font-label);
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .setup-copy:hover { background: var(--border); color: var(--text-primary); }
-  .setup-step { display: none; }
-  .setup-step.active { display: block; }
-  .setup-detected { color: var(--accent-green); font-size: 12px; margin-bottom: 8px; }
-</style>
+    .card-value {
+      font-size: 30px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .card-value.small {
+      font-size: 22px;
+    }
+
+    .cost {
+      color: var(--accent-cyan);
+    }
+
+    .calls {
+      color: var(--text-primary);
+    }
+
+    .green {
+      color: var(--accent-green);
+    }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-family: var(--font-label);
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .badge-sm {
+      padding: 2px 8px;
+      font-size: 9px;
+      border-radius: 10px;
+      letter-spacing: 0.8px;
+    }
+
+    .badge-pass {
+      background: var(--accent-green-dim);
+      color: var(--accent-green);
+      box-shadow: 0 0 8px rgba(46, 213, 115, 0.15);
+    }
+
+    .badge-flag {
+      background: var(--accent-amber-dim);
+      color: var(--accent-amber);
+      box-shadow: 0 0 8px rgba(255, 179, 71, 0.15);
+    }
+
+    .badge-block {
+      background: var(--accent-red-dim);
+      color: var(--accent-red);
+      box-shadow: 0 0 8px rgba(255, 71, 87, 0.15);
+    }
+
+    /* ── Sections ── */
+    .section {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 22px 24px;
+      margin-bottom: 14px;
+      animation: fadeSlideIn 0.5s ease-out both;
+    }
+
+    .section:nth-of-type(1) {
+      animation-delay: 0.15s;
+    }
+
+    .section:nth-of-type(2) {
+      animation-delay: 0.2s;
+    }
+
+    .section:nth-of-type(3) {
+      animation-delay: 0.25s;
+    }
+
+    .section:nth-of-type(4) {
+      animation-delay: 0.3s;
+    }
+
+    .section:nth-of-type(5) {
+      animation-delay: 0.35s;
+    }
+
+    .section h2 {
+      font-family: var(--font-label);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-sky);
+      margin-bottom: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1.8px;
+      padding-left: 12px;
+      border-left: 2px solid var(--accent-cyan);
+    }
+
+    /* ── Signals ── */
+    .signal {
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      margin-bottom: 6px;
+      font-size: 13px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      transition: background 0.15s;
+    }
+
+    .signal-high {
+      background: var(--accent-red-dim);
+      border-left: 3px solid var(--accent-red);
+      box-shadow: inset 4px 0 12px -4px rgba(255, 71, 87, 0.1);
+    }
+
+    .signal-medium {
+      background: var(--accent-amber-dim);
+      border-left: 3px solid var(--accent-amber);
+      box-shadow: inset 4px 0 12px -4px rgba(255, 179, 71, 0.1);
+    }
+
+    .signal-low {
+      background: var(--accent-cyan-dim);
+      border-left: 3px solid var(--accent-cyan);
+      box-shadow: inset 4px 0 12px -4px rgba(0, 212, 255, 0.1);
+    }
+
+    .sev {
+      font-family: var(--font-label);
+      font-weight: 700;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      min-width: 52px;
+    }
+
+    .sev-high {
+      color: var(--accent-red);
+    }
+
+    .sev-medium {
+      color: var(--accent-amber);
+    }
+
+    .sev-low {
+      color: var(--accent-cyan);
+    }
+
+    .score-badge {
+      font-size: 11px;
+      color: var(--accent-lavender);
+      font-weight: 400;
+    }
+
+    /* ── Call Timeline / Spans ── */
+    .span-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 3px;
+    }
+
+    .span-table td {
+      padding: 8px 14px;
+      font-size: 13px;
+      background: var(--bg-inset);
+      vertical-align: middle;
+    }
+
+    .span-table tr:nth-child(even) td {
+      background: rgba(15, 21, 32, 0.6);
+    }
+
+    .span-table tr:hover td {
+      background: var(--bg-raised);
+    }
+
+    .span-table td:first-child {
+      border-radius: var(--radius) 0 0 var(--radius);
+    }
+
+    .span-table td:last-child {
+      border-radius: 0 var(--radius) var(--radius) 0;
+      text-align: right;
+    }
+
+    .span-model {
+      color: var(--accent-cyan);
+      font-weight: 500;
+    }
+
+    .span-time {
+      color: var(--accent-sky);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .span-dur {
+      color: var(--accent-lavender);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .span-cost {
+      color: var(--accent-amber);
+      font-size: 12px;
+      opacity: 0.9;
+    }
+
+    .span-status {
+      text-align: center;
+    }
+
+    .empty {
+      color: var(--text-muted);
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    /* ── Pulse / Live Indicator ── */
+    .pulse {
+      animation: glowPulse 2.5s ease-in-out infinite;
+    }
+
+    @keyframes glowPulse {
+
+      0%,
+      100% {
+        opacity: 1;
+        text-shadow: 0 0 6px rgba(0, 212, 255, 0.4);
+      }
+
+      50% {
+        opacity: 0.5;
+        text-shadow: 0 0 2px rgba(0, 212, 255, 0.1);
+      }
+    }
+
+    /* ── Entrance animation ── */
+    @keyframes fadeSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* ── Reduced Motion ── */
+    @media (prefers-reduced-motion: reduce) {
+
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 32px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-subtle);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-family: var(--font-label);
+      letter-spacing: 0.5px;
+    }
+
+    /* ── Bars ── */
+    .bar-container {
+      height: 6px;
+      background: var(--bg-inset);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .bar-green {
+      background: linear-gradient(90deg, var(--accent-green), #34e87f);
+    }
+
+    .bar-yellow {
+      background: linear-gradient(90deg, var(--accent-amber), #ffc46b);
+    }
+
+    .bar-red {
+      background: linear-gradient(90deg, var(--accent-red), #ff6b7a);
+    }
+
+    /* ── Metrics ── */
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+
+    .metric-label {
+      color: var(--accent-sky);
+      font-size: 13px;
+    }
+
+    .metric-value {
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .metric-value.good {
+      color: var(--accent-green);
+    }
+
+    .metric-value.warn {
+      color: var(--accent-amber);
+    }
+
+    .metric-value.bad {
+      color: var(--accent-red);
+    }
+
+    /* ── Compliance ── */
+    .compliance-item {
+      padding: 12px 16px;
+      background: var(--bg-inset);
+      border-radius: var(--radius);
+      margin-bottom: 6px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .compliance-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .dot-green {
+      background: var(--accent-green);
+      box-shadow: 0 0 6px rgba(46, 213, 115, 0.4);
+    }
+
+    .dot-yellow {
+      background: var(--accent-amber);
+      box-shadow: 0 0 6px rgba(255, 179, 71, 0.4);
+    }
+
+    .dot-red {
+      background: var(--accent-red);
+      box-shadow: 0 0 6px rgba(255, 71, 87, 0.4);
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    /* ── Filter Bar ── */
+    .filter-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .filter-btn {
+      background: var(--bg-inset);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 5px 12px;
+      border-radius: 16px;
+      font-size: 10px;
+      cursor: pointer;
+      font-family: var(--font-label);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      transition: all 0.15s;
+    }
+
+    .filter-btn.active {
+      background: var(--accent-cyan-dim);
+      color: var(--accent-cyan);
+      border-color: rgba(0, 212, 255, 0.3);
+    }
+
+    .filter-btn:hover:not(.active) {
+      background: var(--bg-raised);
+      color: var(--text-primary);
+      border-color: var(--border);
+    }
+
+    /* ── Call Groups ── */
+    .call-group {
+      margin-bottom: 10px;
+    }
+
+    .call-group-header {
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      padding: 4px 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: color 0.15s;
+    }
+
+    .call-group-header:hover {
+      color: #44e0ff;
+    }
+
+    .call-group-arrow {
+      font-size: 10px;
+      transition: transform 0.2s;
+    }
+
+    .call-group-arrow.collapsed {
+      transform: rotate(-90deg);
+    }
+
+    .call-group-body {
+      margin-left: 4px;
+    }
+
+    /* ── Zero State ── */
+    .zero-state {
+      text-align: center;
+      padding: 44px 20px;
+    }
+
+    .zero-state-icon {
+      font-size: 48px;
+      margin-bottom: 14px;
+    }
+
+    .zero-state-text {
+      font-family: var(--font-label);
+      font-size: 16px;
+      color: var(--accent-green);
+      font-weight: 700;
+    }
+
+    .zero-state-sub {
+      font-size: 13px;
+      color: var(--accent-sky);
+      margin-top: 6px;
+    }
+
+    /* ── Entity Rows ── */
+    .entity-row {
+      padding: 10px 14px;
+      background: var(--bg-inset);
+      border-radius: var(--radius);
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .entity-name {
+      color: var(--text-primary);
+      font-size: 13px;
+    }
+
+    .entity-detail {
+      color: var(--accent-peach);
+      font-size: 12px;
+    }
+
+    .entity-cost {
+      color: var(--accent-cyan);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .session-info {
+      font-size: 12px;
+      color: var(--accent-sky);
+      margin-bottom: 16px;
+      font-family: var(--font-label);
+    }
+
+    /* ── Confidence ── */
+    .confidence-pct {
+      font-size: 12px;
+      font-weight: 700;
+      margin-left: auto;
+    }
+
+    .confidence-high {
+      color: var(--accent-red);
+    }
+
+    .confidence-med {
+      color: var(--accent-amber);
+    }
+
+    .confidence-low {
+      color: var(--accent-green);
+    }
+
+    /* ── Review Buttons ── */
+    .review-btns {
+      display: flex;
+      gap: 4px;
+      margin-left: 8px;
+    }
+
+    .review-btn {
+      padding: 3px 10px;
+      font-size: 10px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-label);
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+
+    .review-btn:hover {
+      opacity: 0.85;
+      transform: scale(1.02);
+    }
+
+    .review-btn-confirm {
+      background: var(--accent-red);
+      color: #fff;
+    }
+
+    .review-btn-dismiss {
+      background: var(--accent-green);
+      color: #fff;
+    }
+
+    /* ── Safety Toggle ── */
+    .safety-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 16px;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 40px;
+      height: 20px;
+      background: var(--accent-red);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.3s, box-shadow 0.3s;
+      box-shadow: 0 0 8px rgba(255, 71, 87, 0.25);
+    }
+
+    .toggle-switch.on {
+      background: var(--accent-green);
+      box-shadow: 0 0 8px rgba(46, 213, 115, 0.25);
+    }
+
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+
+    .toggle-switch.on::after {
+      transform: translateX(20px);
+    }
+
+    .toggle-label {
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-primary);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    /* ── Policy Controls ── */
+    .policy-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .detector-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-inset);
+      padding: 7px 14px;
+      border-radius: 20px;
+      cursor: pointer;
+      user-select: none;
+      border: 1px solid var(--border);
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .detector-toggle:hover {
+      border-color: var(--accent-cyan);
+      background: var(--bg-raised);
+    }
+
+    .detector-toggle.disabled {
+      opacity: 0.35;
+    }
+
+    .detector-toggle input[type="checkbox"] {
+      accent-color: var(--accent-cyan);
+      cursor: pointer;
+      width: 13px;
+      height: 13px;
+    }
+
+    .detector-toggle label {
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-primary);
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+
+    .detector-toggle.disabled label {
+      text-decoration: line-through;
+      color: var(--text-muted);
+    }
+
+    .category-divider {
+      width: 100%;
+      font-family: var(--font-label);
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--accent-peach);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin: 6px 0 2px;
+    }
+
+    /* ── Custom Policies ── */
+    .custom-policies-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .policy-item {
+      background: var(--bg-inset);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      grid-template-rows: auto auto;
+      gap: 4px 16px;
+      align-items: center;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    .policy-item:hover {
+      border-color: var(--border);
+      background: rgba(15, 21, 32, 0.8);
+    }
+
+    .policy-item.disabled-policy {
+      opacity: 0.45;
+    }
+
+    .policy-item.disabled-policy:hover {
+      opacity: 0.6;
+    }
+
+    .policy-name {
+      font-family: var(--font-label);
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: 0.2px;
+    }
+
+    .policy-rule {
+      font-size: 12px;
+      color: var(--text-muted);
+      grid-column: 1;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .policy-actions {
+      grid-row: 1 / 3;
+      grid-column: 2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .policy-toggle-mini {
+      position: relative;
+      width: 34px;
+      height: 18px;
+      background: var(--accent-red);
+      border-radius: 9px;
+      cursor: pointer;
+      transition: background 0.3s, box-shadow 0.3s;
+      box-shadow: 0 0 6px rgba(255, 71, 87, 0.2);
+      flex-shrink: 0;
+    }
+
+    .policy-toggle-mini.on {
+      background: var(--accent-green);
+      box-shadow: 0 0 6px rgba(46, 213, 115, 0.2);
+    }
+
+    .policy-toggle-mini::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.25s;
+    }
+
+    .policy-toggle-mini.on::after {
+      transform: translateX(16px);
+    }
+
+    .policy-action-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+
+    .policy-action-btn:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+      background: var(--accent-cyan-dim);
+    }
+
+    .policy-action-btn.delete:hover {
+      border-color: var(--accent-red);
+      color: var(--accent-red);
+      background: var(--accent-red-dim);
+    }
+
+    .add-policy-btn {
+      background: var(--bg-inset);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      color: var(--text-dim);
+      font-family: var(--font-label);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: 0.4px;
+      transition: all 0.2s;
+    }
+
+    .add-policy-btn:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+      background: rgba(0, 212, 255, 0.04);
+    }
+
+    .add-policy-btn .plus-icon {
+      width: 22px;
+      height: 22px;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 300;
+    }
+
+    /* Policy form (inline) */
+    .policy-form {
+      background: var(--bg-raised);
+      border: 1px solid var(--accent-cyan);
+      border-radius: var(--radius-lg);
+      padding: 20px 22px;
+      box-shadow: 0 0 20px rgba(0, 212, 255, 0.06), 0 8px 32px rgba(0, 0, 0, 0.2);
+      animation: fadeSlideIn 0.25s ease-out;
+    }
+
+    .policy-form-title {
+      font-family: var(--font-label);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      margin-bottom: 14px;
+    }
+
+    .policy-form-group {
+      margin-bottom: 12px;
+    }
+
+    .policy-form-label {
+      font-family: var(--font-label);
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 5px;
+      display: block;
+    }
+
+    .policy-form-input {
+      width: 100%;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 9px 14px;
+      border-radius: var(--radius);
+      font-family: var(--font-data);
+      font-size: 13px;
+      transition: border-color 0.2s;
+    }
+
+    .policy-form-input:focus {
+      border-color: var(--accent-cyan);
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.08);
+    }
+
+    .policy-form-textarea {
+      width: 100%;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 9px 14px;
+      border-radius: var(--radius);
+      font-family: var(--font-data);
+      font-size: 12px;
+      line-height: 1.6;
+      min-height: 64px;
+      resize: vertical;
+      transition: border-color 0.2s;
+    }
+
+    .policy-form-textarea:focus {
+      border-color: var(--accent-cyan);
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.08);
+    }
+
+    .policy-form-btns {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .policy-form-save {
+      background: var(--accent-cyan);
+      color: var(--bg-deep);
+      border: none;
+      padding: 7px 18px;
+      border-radius: 16px;
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: opacity 0.15s, box-shadow 0.15s;
+      box-shadow: 0 0 10px rgba(0, 212, 255, 0.15);
+    }
+
+    .policy-form-save:hover {
+      opacity: 0.9;
+      box-shadow: 0 0 16px rgba(0, 212, 255, 0.25);
+    }
+
+    .policy-form-save:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    .policy-form-cancel {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 7px 18px;
+      border-radius: 16px;
+      font-family: var(--font-label);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .policy-form-cancel:hover {
+      color: var(--text-primary);
+      border-color: var(--text-muted);
+    }
+
+    .policy-empty {
+      text-align: center;
+      padding: 28px 16px;
+      color: var(--text-dim);
+      font-family: var(--font-label);
+      font-size: 13px;
+      letter-spacing: 0.2px;
+    }
+
+    .policy-empty-hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 6px;
+      opacity: 0.7;
+    }
+
+    /* ── Setup Overlay ── */
+    .setup-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(8, 12, 20, 0.92);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .setup-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 36px;
+      max-width: 560px;
+      width: 90%;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(0, 212, 255, 0.04);
+    }
+
+    .setup-card h2 {
+      font-family: var(--font-label);
+      color: var(--text-primary);
+      font-size: 18px;
+      margin-bottom: 16px;
+    }
+
+    .setup-card p {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+
+    .setup-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .setup-option {
+      background: var(--bg-inset);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      cursor: pointer;
+      text-align: center;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .setup-option:hover {
+      border-color: var(--accent-cyan);
+      background: var(--bg-raised);
+    }
+
+    .setup-option.selected {
+      border-color: var(--accent-cyan);
+      background: var(--accent-cyan-dim);
+    }
+
+    .setup-option h3 {
+      font-family: var(--font-label);
+      color: var(--text-primary);
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .setup-option p {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .setup-input {
+      width: 100%;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-family: var(--font-data);
+      font-size: 13px;
+      margin-bottom: 8px;
+      transition: border-color 0.2s;
+    }
+
+    .setup-input:focus {
+      border-color: var(--accent-cyan);
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.1);
+    }
+
+    .setup-btn {
+      background: var(--accent-cyan);
+      color: var(--bg-deep);
+      border: none;
+      padding: 9px 22px;
+      border-radius: 20px;
+      font-family: var(--font-label);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: opacity 0.15s, box-shadow 0.15s;
+      box-shadow: 0 0 12px rgba(0, 212, 255, 0.2);
+    }
+
+    .setup-btn:hover {
+      opacity: 0.9;
+      box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+    }
+
+    .setup-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .setup-code {
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-family: var(--font-data);
+      font-size: 12px;
+      color: var(--accent-cyan);
+      position: relative;
+      margin-bottom: 8px;
+      word-break: break-all;
+    }
+
+    .setup-copy {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 3px 10px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-family: var(--font-label);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .setup-copy:hover {
+      background: var(--border);
+      color: var(--text-primary);
+    }
+
+    .setup-step {
+      display: none;
+    }
+
+    .setup-step.active {
+      display: block;
+    }
+
+    .setup-detected {
+      color: var(--accent-green);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+  </style>
 </head>
+
 <body>
-<div class="setup-overlay" id="setup-overlay" style="display:none;">
-  <div class="setup-card">
-    <div class="setup-step active" id="setup-step-1">
-      <h2>Welcome to SafeClaw</h2>
-      <p>Configure your LLM provider to get started.</p>
-      <div id="setup-detected"></div>
-      <div class="setup-options">
-        <div class="setup-option" onclick="selectSetupOption('byok', event)">
-          <h3>I have API keys</h3>
-          <p>OpenAI, Anthropic, or local</p>
+  <div class="setup-overlay" id="setup-overlay" style="display:none;">
+    <div class="setup-card">
+      <div class="setup-step active" id="setup-step-1">
+        <h2>Welcome to SafeClaw</h2>
+        <p>Configure your LLM provider to get started.</p>
+        <div id="setup-detected"></div>
+        <div class="setup-options">
+          <div class="setup-option" onclick="selectSetupOption('byok', event)">
+            <h3>I have API keys</h3>
+            <p>OpenAI, Anthropic, or local</p>
+          </div>
+          <div class="setup-option" onclick="selectSetupOption('aceteam', event)">
+            <h3>Use AceTeam</h3>
+            <p>$5 free credit, no key needed</p>
+          </div>
         </div>
-        <div class="setup-option" onclick="selectSetupOption('aceteam', event)">
-          <h3>Use AceTeam</h3>
-          <p>$5 free credit, no key needed</p>
+        <div id="setup-byok" style="display:none;">
+          <input class="setup-input" id="setup-api-key" type="password" placeholder="sk-... or paste your API key">
+          <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
         </div>
-      </div>
-      <div id="setup-byok" style="display:none;">
-        <input class="setup-input" id="setup-api-key" type="password" placeholder="sk-... or paste your API key">
-        <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
-      </div>
-      <div id="setup-aceteam" style="display:none;">
-        <p style="color:var(--accent-peach);font-size:13px;">Coming soon. For now, paste your own API key above.</p>
-      </div>
-    </div>
-    <div class="setup-step" id="setup-step-2">
-      <h2>Point your agent here</h2>
-      <p>Add this to your terminal:</p>
-      <div class="setup-code" id="setup-export-cmd">
-        <button class="setup-copy" onclick="copySetupText('setup-export-cmd')">Copy</button>
-        export OPENAI_BASE_URL=http://localhost:8899/v1
-      </div>
-      <p style="margin-top:16px;">Using Claude Code? Add to your config:</p>
-      <div class="setup-code" id="setup-mcp-config">
-        <button class="setup-copy" onclick="copySetupText('setup-mcp-config')">Copy</button>
-        {"mcpServers":{"aceteam":{"type":"streamable-http","url":"http://localhost:8899/mcp/"}}}
-      </div>
-      <button class="setup-btn" onclick="closeSetup()" style="margin-top:16px;">Got it, start using SafeClaw</button>
-    </div>
-  </div>
-</div>
-<h1>
-  AEP Dashboard <span class="live pulse">&#x25cf; live</span>
-  <div class="safety-toggle">
-    <span class="toggle-label" id="safety-label">Safety ON</span>
-    <div class="toggle-switch on" id="safety-toggle" onclick="toggleSafety()"></div>
-  </div>
-  <div class="view-toggle">
-    <button id="btn-dev" class="active" onclick="setView('dev')">Developer</button>
-    <button id="btn-ciso" onclick="setView('ciso')">Executive</button>
-  </div>
-</h1>
-
-<!-- ===== DEVELOPER VIEW ===== -->
-<div id="view-dev">
-  <div class="grid grid-4">
-    <div class="card">
-      <div class="card-label">Total Cost</div>
-      <div class="card-value cost" id="cost">$0.000000</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Calls</div>
-      <div class="card-value calls" id="calls">0</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Safety Status</div>
-      <div class="card-value" id="status"></div>
-    </div>
-    <div class="card" id="attestation-card" style="display:none;">
-      <div class="card-label">Merkle Chain</div>
-      <div class="card-value small green" id="chain-height">0</div>
-      <div style="font-size:11px;color:var(--accent-sky);margin-top:4px;" id="chain-signer"></div>
-    </div>
-  </div>
-
-  <div class="section" id="budget-section" style="display:none;">
-    <h2>Budget</h2>
-    <div style="display:flex;gap:16px;align-items:center;">
-      <div style="flex:1;">
-        <div class="bar-container" style="height:12px;margin:0;">
-          <div id="budget-bar" style="height:100%;background:var(--accent-cyan);border-radius:4px;transition:width 0.3s;"></div>
+        <div id="setup-aceteam" style="display:none;">
+          <p style="color:var(--accent-peach);font-size:13px;">Coming soon. For now, paste your own API key above.</p>
         </div>
       </div>
-      <div id="budget-text" style="font-size:14px;color:var(--text-muted);white-space:nowrap;"></div>
-    </div>
-  </div>
-
-  <div class="section" id="policy-section">
-    <h2>Policy Controls</h2>
-    <div class="policy-controls" id="policy-controls">
-      <span class="empty">Loading policy...</span>
-    </div>
-  </div>
-
-  <div class="section" id="custom-policies-section" style="animation-delay: 0.22s;">
-    <h2>Custom Policies</h2>
-    <div id="custom-policies-container"></div>
-  </div>
-
-  <div class="section">
-    <h2>Safety Signals</h2>
-    <div class="filter-bar" id="signal-filters"></div>
-    <div id="signals"></div>
-  </div>
-
-  <div class="section" id="governance-section" style="display:none;">
-    <h2>Governance Context</h2>
-    <div id="governance"></div>
-  </div>
-
-  <div class="section" id="attestation-section" style="display:none;">
-    <h2>Attestation (Signed Verdicts)</h2>
-    <div id="attestation-details"></div>
-  </div>
-
-  <div class="section">
-    <h2>Call Timeline</h2>
-    <div id="spans"></div>
-  </div>
-</div>
-
-<!-- ===== EXECUTIVE / CISO VIEW ===== -->
-<div id="view-ciso" class="hidden">
-  <div id="ciso-session-info" class="session-info"></div>
-  <div class="grid grid-4">
-    <div class="card">
-      <div class="card-label">Policy Compliance</div>
-      <div class="card-value green" id="ciso-compliance-pct">100%</div>
-      <div class="bar-container"><div class="bar-fill bar-green" id="ciso-compliance-bar" style="width:100%"></div></div>
-    </div>
-    <div class="card">
-      <div class="card-label">Threats Blocked</div>
-      <div class="card-value" id="ciso-blocked" style="color:var(--accent-red);">0</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Total Agent Spend</div>
-      <div class="card-value cost" id="ciso-cost">$0.00</div>
-    </div>
-    <div class="card">
-      <div class="card-label">Total Calls</div>
-      <div class="card-value calls" id="ciso-calls">0</div>
-    </div>
-  </div>
-
-  <div class="section" id="ciso-savings-section" style="display:none;">
-    <h2>Cost Savings</h2>
-    <div class="metric-row"><span class="metric-label">Calls blocked before reaching LLM</span><span class="metric-value good" id="ciso-savings-blocked">0</span></div>
-    <div class="metric-row"><span class="metric-label">Estimated cost saved</span><span class="metric-value good" id="ciso-savings-amount">$0.00</span></div>
-    <div class="metric-row"><span class="metric-label">Average cost per call</span><span class="metric-value" id="ciso-savings-avg">$0.00</span></div>
-  </div>
-
-  <div class="section">
-    <h2>Compliance Status</h2>
-    <div id="ciso-compliance-body"></div>
-  </div>
-
-  <div class="section">
-    <h2>Compliance Frameworks</h2>
-    <div id="ciso-frameworks">
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green"></span> <span>HIPAA &mdash; Protected Health Information</span></div>
-        <div class="metric-row"><span class="metric-label">PHI detection enabled, auto-block on exfiltration</span><span class="metric-value good" id="fw-hipaa">ENFORCED</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green"></span> <span>GDPR &mdash; Data Protection</span></div>
-        <div class="metric-row"><span class="metric-label">PII detection, consent tracking via X-AEP-Consent</span><span class="metric-value good" id="fw-gdpr">ENFORCED</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green"></span> <span>SOC 2 Type II &mdash; Security & Availability</span></div>
-        <div class="metric-row"><span class="metric-label">Full audit trail, signed safety verdicts</span><span class="metric-value good" id="fw-soc2">ENFORCED</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-yellow"></span> <span>EU AI Act &mdash; High-Risk AI Systems</span></div>
-        <div class="metric-row"><span class="metric-label">Risk classification, human oversight logging</span><span class="metric-value warn" id="fw-euai">PARTIAL</span></div>
+      <div class="setup-step" id="setup-step-2">
+        <h2>Point your agent here</h2>
+        <p>Add this to your terminal:</p>
+        <div class="setup-code" id="setup-export-cmd">
+          <button class="setup-copy" onclick="copySetupText('setup-export-cmd')">Copy</button>
+          export OPENAI_BASE_URL=http://localhost:8899/v1
+        </div>
+        <p style="margin-top:16px;">Using Claude Code? Add to your config:</p>
+        <div class="setup-code" id="setup-mcp-config">
+          <button class="setup-copy" onclick="copySetupText('setup-mcp-config')">Copy</button>
+          {"mcpServers":{"aceteam":{"type":"streamable-http","url":"http://localhost:8899/mcp/"}}}
+        </div>
+        <button class="setup-btn" onclick="closeSetup()" style="margin-top:16px;">Got it, start using SafeClaw</button>
       </div>
     </div>
   </div>
+  <h1>
+    AEP Dashboard <span class="live pulse">&#x25cf; live</span>
+    <div class="safety-toggle">
+      <span class="toggle-label" id="safety-label">Safety ON</span>
+      <div class="toggle-switch on" id="safety-toggle" onclick="toggleSafety()"></div>
+    </div>
+    <div class="view-toggle">
+      <button id="btn-dev" class="active" onclick="setView('dev')">Developer</button>
+      <button id="btn-ciso" onclick="setView('ciso')">Executive</button>
+    </div>
+  </h1>
 
-  <div class="section">
-    <h2>Safety Breakdown</h2>
-    <div id="ciso-breakdown">
-      <div class="metric-row"><span class="metric-label">Calls passed</span><span class="metric-value good" id="ciso-pass">0</span></div>
-      <div class="metric-row"><span class="metric-label">Calls flagged</span><span class="metric-value warn" id="ciso-flag">0</span></div>
-      <div class="metric-row"><span class="metric-label">Calls blocked</span><span class="metric-value bad" id="ciso-block">0</span></div>
-      <div style="margin-top:12px;">
-        <div class="bar-container" style="height:12px;">
-          <div id="ciso-bar-pass" class="bar-fill bar-green" style="width:100%;float:left;"></div>
-          <div id="ciso-bar-flag" class="bar-fill bar-yellow" style="width:0%;float:left;"></div>
-          <div id="ciso-bar-block" class="bar-fill bar-red" style="width:0%;float:left;"></div>
+  <!-- ===== DEVELOPER VIEW ===== -->
+  <div id="view-dev">
+    <div class="grid grid-4">
+      <div class="card">
+        <div class="card-label">Total Cost</div>
+        <div class="card-value cost" id="cost">$0.000000</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Calls</div>
+        <div class="card-value calls" id="calls">0</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Safety Status</div>
+        <div class="card-value" id="status"></div>
+      </div>
+      <div class="card" id="attestation-card" style="display:none;">
+        <div class="card-label">Merkle Chain</div>
+        <div class="card-value small green" id="chain-height">0</div>
+        <div style="font-size:11px;color:var(--accent-sky);margin-top:4px;" id="chain-signer"></div>
+      </div>
+    </div>
+
+    <div class="section" id="budget-section" style="display:none;">
+      <h2>Budget</h2>
+      <div style="display:flex;gap:16px;align-items:center;">
+        <div style="flex:1;">
+          <div class="bar-container" style="height:12px;margin:0;">
+            <div id="budget-bar"
+              style="height:100%;background:var(--accent-cyan);border-radius:4px;transition:width 0.3s;"></div>
+          </div>
+        </div>
+        <div id="budget-text" style="font-size:14px;color:var(--text-muted);white-space:nowrap;"></div>
+      </div>
+    </div>
+
+    <div class="section" id="policy-section">
+      <h2>Policy Controls</h2>
+      <div class="policy-controls" id="policy-controls">
+        <span class="empty">Loading policy...</span>
+      </div>
+    </div>
+
+    <div class="section" id="custom-policies-section" style="animation-delay: 0.22s;">
+      <h2>Custom Policies</h2>
+      <div id="custom-policies-container"></div>
+    </div>
+
+    <div class="section">
+      <h2>Safety Signals</h2>
+      <div class="filter-bar" id="signal-filters"></div>
+      <div id="signals"></div>
+    </div>
+
+    <div class="section" id="governance-section" style="display:none;">
+      <h2>Governance Context</h2>
+      <div id="governance"></div>
+    </div>
+
+    <div class="section" id="attestation-section" style="display:none;">
+      <h2>Attestation (Signed Verdicts)</h2>
+      <div id="attestation-details"></div>
+    </div>
+
+    <div class="section">
+      <h2>Call Timeline</h2>
+      <div id="spans"></div>
+    </div>
+  </div>
+
+  <!-- ===== EXECUTIVE / CISO VIEW ===== -->
+  <div id="view-ciso" class="hidden">
+    <div id="ciso-session-info" class="session-info"></div>
+    <div class="grid grid-4">
+      <div class="card">
+        <div class="card-label">Policy Compliance</div>
+        <div class="card-value green" id="ciso-compliance-pct">100%</div>
+        <div class="bar-container">
+          <div class="bar-fill bar-green" id="ciso-compliance-bar" style="width:100%"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">Threats Blocked</div>
+        <div class="card-value" id="ciso-blocked" style="color:var(--accent-red);">0</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Agent Spend</div>
+        <div class="card-value cost" id="ciso-cost">$0.00</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Calls</div>
+        <div class="card-value calls" id="ciso-calls">0</div>
+      </div>
+    </div>
+
+    <div class="section" id="ciso-savings-section" style="display:none;">
+      <h2>Cost Savings</h2>
+      <div class="metric-row"><span class="metric-label">Calls blocked before reaching LLM</span><span
+          class="metric-value good" id="ciso-savings-blocked">0</span></div>
+      <div class="metric-row"><span class="metric-label">Estimated cost saved</span><span class="metric-value good"
+          id="ciso-savings-amount">$0.00</span></div>
+      <div class="metric-row"><span class="metric-label">Average cost per call</span><span class="metric-value"
+          id="ciso-savings-avg">$0.00</span></div>
+    </div>
+
+    <div class="section">
+      <h2>Compliance Status</h2>
+      <div id="ciso-compliance-body"></div>
+    </div>
+
+    <div class="section">
+      <h2>Compliance Frameworks</h2>
+      <div id="ciso-frameworks">
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-green"></span> <span>HIPAA &mdash; Protected Health
+              Information</span></div>
+          <div class="metric-row"><span class="metric-label">PHI detection enabled, auto-block on
+              exfiltration</span><span class="metric-value good" id="fw-hipaa">ENFORCED</span></div>
+        </div>
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-green"></span> <span>GDPR &mdash; Data Protection</span>
+          </div>
+          <div class="metric-row"><span class="metric-label">PII detection, consent tracking via
+              X-AEP-Consent</span><span class="metric-value good" id="fw-gdpr">ENFORCED</span></div>
+        </div>
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-green"></span> <span>SOC 2 Type II &mdash; Security &
+              Availability</span></div>
+          <div class="metric-row"><span class="metric-label">Full audit trail, signed safety verdicts</span><span
+              class="metric-value good" id="fw-soc2">ENFORCED</span></div>
+        </div>
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-yellow"></span> <span>EU AI Act &mdash; High-Risk AI
+              Systems</span></div>
+          <div class="metric-row"><span class="metric-label">Risk classification, human oversight logging</span><span
+              class="metric-value warn" id="fw-euai">PARTIAL</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Safety Breakdown</h2>
+      <div id="ciso-breakdown">
+        <div class="metric-row"><span class="metric-label">Calls passed</span><span class="metric-value good"
+            id="ciso-pass">0</span></div>
+        <div class="metric-row"><span class="metric-label">Calls flagged</span><span class="metric-value warn"
+            id="ciso-flag">0</span></div>
+        <div class="metric-row"><span class="metric-label">Calls blocked</span><span class="metric-value bad"
+            id="ciso-block">0</span></div>
+        <div style="margin-top:12px;">
+          <div class="bar-container" style="height:12px;">
+            <div id="ciso-bar-pass" class="bar-fill bar-green" style="width:100%;float:left;"></div>
+            <div id="ciso-bar-flag" class="bar-fill bar-yellow" style="width:0%;float:left;"></div>
+            <div id="ciso-bar-block" class="bar-fill bar-red" style="width:0%;float:left;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="ciso-entity-section" style="display:none;">
+      <h2>Cost by Entity</h2>
+      <div id="ciso-entity-breakdown"></div>
+    </div>
+
+    <div class="section" id="ciso-governance-section" style="display:none;">
+      <h2>Data Governance</h2>
+      <div id="ciso-governance"></div>
+    </div>
+
+    <div class="section">
+      <h2>Attestation</h2>
+      <div id="ciso-attestation">
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-green"></span> <span>Safety verdicts recorded for all
+              calls</span></div>
+          <div class="metric-row"><span class="metric-label">Every PASS/FLAG/BLOCK decision is logged with timestamp and
+              detector ID</span><span class="metric-value good">ACTIVE</span></div>
+        </div>
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-yellow"></span> <span>Cryptographic signing
+              (Ed25519)</span></div>
+          <div class="metric-row"><span class="metric-label">Signed verdict chain for tamper-proof audit
+              trail</span><span class="metric-value warn">ROADMAP</span></div>
+        </div>
+        <div class="compliance-item">
+          <div class="compliance-status"><span class="dot dot-yellow"></span> <span>Third-party attestation</span></div>
+          <div class="metric-row"><span class="metric-label">Independent verification of safety enforcement
+              claims</span><span class="metric-value warn">ROADMAP</span></div>
         </div>
       </div>
     </div>
   </div>
 
-  <div class="section" id="ciso-entity-section" style="display:none;">
-    <h2>Cost by Entity</h2>
-    <div id="ciso-entity-breakdown"></div>
-  </div>
+  <div class="footer">AEP Trust Engine &mdash; aceteam.ai</div>
 
-  <div class="section" id="ciso-governance-section" style="display:none;">
-    <h2>Data Governance</h2>
-    <div id="ciso-governance"></div>
-  </div>
+  <script>
+    var currentView = 'dev';
+    var activeFilter = 'all';
+    var lastSignals = [];
+    var collapsedGroups = {};
+    var safetyEnabled = true;
 
-  <div class="section">
-    <h2>Attestation</h2>
-    <div id="ciso-attestation">
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-green"></span> <span>Safety verdicts recorded for all calls</span></div>
-        <div class="metric-row"><span class="metric-label">Every PASS/FLAG/BLOCK decision is logged with timestamp and detector ID</span><span class="metric-value good">ACTIVE</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-yellow"></span> <span>Cryptographic signing (Ed25519)</span></div>
-        <div class="metric-row"><span class="metric-label">Signed verdict chain for tamper-proof audit trail</span><span class="metric-value warn">ROADMAP</span></div>
-      </div>
-      <div class="compliance-item">
-        <div class="compliance-status"><span class="dot dot-yellow"></span> <span>Third-party attestation</span></div>
-        <div class="metric-row"><span class="metric-label">Independent verification of safety enforcement claims</span><span class="metric-value warn">ROADMAP</span></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="footer">AEP Trust Engine &mdash; aceteam.ai</div>
-
-<script>
-var currentView = 'dev';
-var activeFilter = 'all';
-var lastSignals = [];
-var collapsedGroups = {};
-var safetyEnabled = true;
-
-// Setup wizard — show on first visit
-function checkFirstRun() {
-  if (localStorage.getItem('safeclaw-setup-done')) return;
-  fetch('api/state').then(function(r) { return r.json(); }).then(function(state) {
-    if (state.calls > 0) {
-      localStorage.setItem('safeclaw-setup-done', '1');
-      return;
+    // Setup wizard — show on first visit
+    function checkFirstRun() {
+      if (localStorage.getItem('safeclaw-setup-done')) return;
+      fetch('api/state').then(function (r) { return r.json(); }).then(function (state) {
+        if (state.calls > 0) {
+          localStorage.setItem('safeclaw-setup-done', '1');
+          return;
+        }
+        document.getElementById('setup-overlay').style.display = 'flex';
+      }).catch(function () { });
     }
-    document.getElementById('setup-overlay').style.display = 'flex';
-  }).catch(function() {});
-}
 
-function selectSetupOption(option, evt) {
-  var options = document.querySelectorAll('.setup-option');
-  for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
-  if (evt && evt.currentTarget) { evt.currentTarget.classList.add('selected'); }
-  document.getElementById('setup-byok').style.display = option === 'byok' ? 'block' : 'none';
-  document.getElementById('setup-aceteam').style.display = option === 'aceteam' ? 'block' : 'none';
-}
+    function selectSetupOption(option, evt) {
+      var options = document.querySelectorAll('.setup-option');
+      for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
+      if (evt && evt.currentTarget) { evt.currentTarget.classList.add('selected'); }
+      document.getElementById('setup-byok').style.display = option === 'byok' ? 'block' : 'none';
+      document.getElementById('setup-aceteam').style.display = option === 'aceteam' ? 'block' : 'none';
+    }
 
-function saveApiKey() {
-  var key = document.getElementById('setup-api-key').value.trim();
-  if (!key) return;
-  localStorage.setItem('safeclaw-api-key-hint', key.substring(0, 8) + '...');
-  document.getElementById('setup-step-1').classList.remove('active');
-  document.getElementById('setup-step-2').classList.add('active');
-}
+    function saveApiKey() {
+      var key = document.getElementById('setup-api-key').value.trim();
+      if (!key) return;
+      localStorage.setItem('safeclaw-api-key-hint', key.substring(0, 8) + '...');
+      document.getElementById('setup-step-1').classList.remove('active');
+      document.getElementById('setup-step-2').classList.add('active');
+    }
 
-function copySetupText(elementId) {
-  var el = document.getElementById(elementId);
-  var copyBtn = el.querySelector('.setup-copy');
-  var fullText = el.textContent || '';
-  var btnText = copyBtn ? (copyBtn.textContent || '') : '';
-  var text = fullText.replace(btnText, '').trim();
-  navigator.clipboard.writeText(text);
-}
+    function copySetupText(elementId) {
+      var el = document.getElementById(elementId);
+      var copyBtn = el.querySelector('.setup-copy');
+      var fullText = el.textContent || '';
+      var btnText = copyBtn ? (copyBtn.textContent || '') : '';
+      var text = fullText.replace(btnText, '').trim();
+      navigator.clipboard.writeText(text);
+    }
 
-function closeSetup() {
-  localStorage.setItem('safeclaw-setup-done', '1');
-  document.getElementById('setup-overlay').style.display = 'none';
-}
+    function closeSetup() {
+      localStorage.setItem('safeclaw-setup-done', '1');
+      document.getElementById('setup-overlay').style.display = 'none';
+    }
 
-// Run on page load
-checkFirstRun();
+    // Run on page load
+    checkFirstRun();
 
-function toggleSafety() {
-  safetyEnabled = !safetyEnabled;
-  fetch('api/safety', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({enabled: safetyEnabled})
-  });
-  var toggle = document.getElementById('safety-toggle');
-  var label = document.getElementById('safety-label');
-  toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
-  label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
-}
-
-var currentPolicy = null;
-
-function fetchPolicy() {
-  fetch('api/safety')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      safetyEnabled = data.safety_enabled;
+    function toggleSafety() {
+      safetyEnabled = !safetyEnabled;
+      fetch('api/safety', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: safetyEnabled })
+      });
       var toggle = document.getElementById('safety-toggle');
       var label = document.getElementById('safety-label');
       toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
       label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
-      currentPolicy = data.policy;
-      renderPolicyControls(data.policy);
-    })
-    .catch(function() {});
-}
-
-function renderPolicyControls(policy) {
-  var container = document.getElementById('policy-controls');
-  if (!container || !policy) return;
-  container.textContent = '';
-
-  var detectors = policy.detectors || {};
-  var detectorNames = Object.keys(detectors);
-
-  var displayNames = {
-    agent_threat: 'Agent Threat',
-    pii: 'PII Detection',
-    cost_anomaly: 'Cost Anomaly',
-    content_safety: 'Content Safety',
-    trust_engine: 'Trust Engine',
-    ferpa: 'FERPA'
-  };
-
-  var domainCategories = ['finance', 'iot', 'software', 'web', 'program'];
-  var categoryNames = {
-    finance: 'Finance', iot: 'IoT', software: 'Software', web: 'Web', program: 'Program'
-  };
-
-  if (detectorNames.length === 0) {
-    var empty = document.createElement('span');
-    empty.className = 'empty';
-    empty.textContent = 'No detectors configured';
-    container.appendChild(empty);
-    return;
-  }
-
-  detectorNames.forEach(function(name) {
-    var det = detectors[name];
-    var isEnabled = det.enabled !== false;
-
-    var wrap = document.createElement('div');
-    wrap.className = 'detector-toggle' + (isEnabled ? '' : ' disabled');
-
-    var cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = isEnabled;
-    cb.id = 'det-' + name;
-    cb.onchange = function() { toggleDetector(name, cb.checked); };
-
-    var lbl = document.createElement('label');
-    lbl.htmlFor = 'det-' + name;
-    lbl.textContent = displayNames[name] || name;
-
-    wrap.appendChild(cb);
-    wrap.appendChild(lbl);
-    container.appendChild(wrap);
-  });
-
-  var teConfig = detectors.trust_engine;
-  if (teConfig && teConfig.enabled !== false) {
-    var divider = document.createElement('div');
-    divider.className = 'category-divider';
-    divider.textContent = 'Trust Engine Categories';
-    container.appendChild(divider);
-
-    var activeDims = (teConfig.extra && teConfig.extra.dimensions) || domainCategories;
-
-    domainCategories.forEach(function(cat) {
-      var isActive = activeDims.indexOf(cat) >= 0;
-
-      var wrap = document.createElement('div');
-      wrap.className = 'detector-toggle' + (isActive ? '' : ' disabled');
-
-      var cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = isActive;
-      cb.id = 'cat-' + cat;
-      cb.onchange = function() { toggleCategory(cat, cb.checked); };
-
-      var lbl = document.createElement('label');
-      lbl.htmlFor = 'cat-' + cat;
-      lbl.textContent = categoryNames[cat] || cat;
-
-      wrap.appendChild(cb);
-      wrap.appendChild(lbl);
-      container.appendChild(wrap);
-    });
-  }
-}
-
-function toggleDetector(name, enabled) {
-  if (!currentPolicy) return;
-  var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
-  if (!detectors[name]) detectors[name] = {};
-  detectors[name].enabled = enabled;
-
-  var newPolicy = {
-    default_action: currentPolicy.default_action,
-    block_on: currentPolicy.block_on,
-    flag_on: currentPolicy.flag_on,
-    detectors: detectors
-  };
-
-  fetch('api/safety', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({policy: newPolicy})
-  }).then(function(r) { return r.json(); })
-    .then(function(data) {
-      currentPolicy = data.policy;
-      renderPolicyControls(data.policy);
-    })
-    .catch(function() { fetchPolicy(); });
-}
-
-function toggleCategory(cat, enabled) {
-  if (!currentPolicy) return;
-  var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
-  var te = detectors.trust_engine || {};
-  var extra = te.extra || {};
-  var dims = extra.dimensions || ['finance', 'iot', 'software', 'web', 'program'];
-
-  if (enabled && dims.indexOf(cat) < 0) {
-    dims.push(cat);
-  } else if (!enabled) {
-    dims = dims.filter(function(d) { return d !== cat; });
-  }
-
-  extra.dimensions = dims;
-  te.extra = extra;
-  detectors.trust_engine = te;
-
-  var newPolicy = {
-    default_action: currentPolicy.default_action,
-    block_on: currentPolicy.block_on,
-    flag_on: currentPolicy.flag_on,
-    detectors: detectors
-  };
-
-  fetch('api/safety', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({policy: newPolicy})
-  }).then(function(r) { return r.json(); })
-    .then(function(data) {
-      currentPolicy = data.policy;
-      renderPolicyControls(data.policy);
-    })
-    .catch(function() { fetchPolicy(); });
-}
-
-function submitVerdict(signalType, score, verdict) {
-  fetch('api/feedback', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({signal_type: signalType, score: score, verdict: verdict})
-  });
-}
-
-function setView(view) {
-  currentView = view;
-  document.getElementById('view-dev').className = view === 'dev' ? '' : 'hidden';
-  document.getElementById('view-ciso').className = view === 'ciso' ? '' : 'hidden';
-  document.getElementById('btn-dev').className = view === 'dev' ? 'active' : '';
-  document.getElementById('btn-ciso').className = view === 'ciso' ? 'active' : '';
-}
-
-function esc(s) {
-  var d = document.createElement('div');
-  d.textContent = s;
-  return d.textContent;
-}
-
-function setBadge(el, action) {
-  el.textContent = '';
-  var span = document.createElement('span');
-  var validActions = ['pass', 'flag', 'block'];
-  var cls = validActions.indexOf(action) >= 0 ? action : 'pass';
-  span.className = 'badge badge-' + cls;
-  span.textContent = action.toUpperCase();
-  el.appendChild(span);
-}
-
-function makeSmallBadge(action) {
-  var span = document.createElement('span');
-  var validActions = ['pass', 'flag', 'block'];
-  var cls = validActions.indexOf(action) >= 0 ? action : 'pass';
-  span.className = 'badge badge-sm badge-' + cls;
-  span.textContent = action.toUpperCase();
-  return span;
-}
-
-// Determine per-call enforcement from signals
-function getCallAction(callId, signals) {
-  var callSignals = signals.filter(function(s) { return s.call_id === callId; });
-  if (callSignals.length === 0) return 'pass';
-  var hasHigh = callSignals.some(function(s) { return s.severity === 'high'; });
-  if (hasHigh) return 'block';
-  var hasMedium = callSignals.some(function(s) { return s.severity === 'medium'; });
-  if (hasMedium) return 'flag';
-  return 'pass';
-}
-
-function renderFilterBar(container, signals) {
-  container.textContent = '';
-  var types = {};
-  signals.forEach(function(s) { types[s.type] = (types[s.type] || 0) + 1; });
-  var typeKeys = Object.keys(types);
-  if (typeKeys.length <= 1) return; // No filter needed for 0 or 1 type
-
-  var allBtn = document.createElement('button');
-  allBtn.className = 'filter-btn' + (activeFilter === 'all' ? ' active' : '');
-  allBtn.textContent = 'ALL (' + signals.length + ')';
-  allBtn.onclick = function() { activeFilter = 'all'; renderSignals(document.getElementById('signals'), lastSignals); renderFilterBar(container, lastSignals); };
-  container.appendChild(allBtn);
-
-  typeKeys.forEach(function(t) {
-    var btn = document.createElement('button');
-    btn.className = 'filter-btn' + (activeFilter === t ? ' active' : '');
-    btn.textContent = t.toUpperCase() + ' (' + types[t] + ')';
-    btn.onclick = function() { activeFilter = t; renderSignals(document.getElementById('signals'), lastSignals); renderFilterBar(container, lastSignals); };
-    container.appendChild(btn);
-  });
-}
-
-function renderSignals(container, signals) {
-  container.textContent = '';
-  // Apply filter
-  var filtered = activeFilter === 'all' ? signals : signals.filter(function(s) { return s.type === activeFilter; });
-  if (filtered.length === 0) {
-    var empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = signals.length === 0 ? 'No signals detected' : 'No ' + activeFilter + ' signals';
-    container.appendChild(empty);
-    return;
-  }
-
-  // Group by call_id
-  var groups = {};
-  var groupOrder = [];
-  filtered.forEach(function(s) {
-    var key = s.call_id || 'unknown';
-    if (!groups[key]) { groups[key] = []; groupOrder.push(key); }
-    groups[key].push(s);
-  });
-
-  // If only one group, render flat
-  if (groupOrder.length === 1) {
-    renderSignalList(container, filtered);
-    return;
-  }
-
-  groupOrder.forEach(function(callId) {
-    var group = groups[callId];
-    var div = document.createElement('div');
-    div.className = 'call-group';
-
-    var isCollapsed = collapsedGroups[callId] === true;
-    var header = document.createElement('div');
-    header.className = 'call-group-header';
-    var arrow = document.createElement('span');
-    arrow.className = 'call-group-arrow' + (isCollapsed ? ' collapsed' : '');
-    arrow.textContent = '\u25BC';
-    header.appendChild(arrow);
-    var label = document.createElement('span');
-    label.textContent = 'Call ' + callId + ': ' + group.length + ' signal' + (group.length > 1 ? 's' : '');
-    header.appendChild(label);
-    header.onclick = function() {
-      collapsedGroups[callId] = !collapsedGroups[callId];
-      renderSignals(container, signals);
-    };
-    div.appendChild(header);
-
-    if (!isCollapsed) {
-      var body = document.createElement('div');
-      body.className = 'call-group-body';
-      renderSignalList(body, group);
-      div.appendChild(body);
     }
 
-    container.appendChild(div);
-  });
-}
+    var currentPolicy = null;
 
-function renderSignalList(container, signals) {
-  signals.forEach(function(s) {
-    var row = document.createElement('div');
-    var validSev = ['high', 'medium', 'low'];
-    var sevCls = validSev.indexOf(s.severity) >= 0 ? s.severity : 'low';
-    row.className = 'signal signal-' + sevCls;
+    function fetchPolicy() {
+      fetch('api/safety')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          safetyEnabled = data.safety_enabled;
+          var toggle = document.getElementById('safety-toggle');
+          var label = document.getElementById('safety-label');
+          toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
+          label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+          currentPolicy = data.policy;
+          renderPolicyControls(data.policy);
+        })
+        .catch(function () { });
+    }
 
-    var sev = document.createElement('span');
-    sev.className = 'sev sev-' + sevCls;
-    sev.textContent = s.severity.toUpperCase();
-    row.appendChild(sev);
+    function renderPolicyControls(policy) {
+      var container = document.getElementById('policy-controls');
+      if (!container || !policy) return;
+      container.textContent = '';
 
-    var detail = document.createElement('span');
-    detail.textContent = esc(s.type) + ': ' + esc(s.detail);
-    row.appendChild(detail);
+      var detectors = policy.detectors || {};
+      var detectorNames = Object.keys(detectors);
 
-    // Confidence percentage for trust_engine signals, score badge for others
-    if (s.score !== null && s.score !== undefined) {
-      if (s.type === 'trust_engine' && s.score <= 1) {
-        var confPct = document.createElement('span');
-        var pct = Math.round(s.score * 100);
-        confPct.className = 'confidence-pct' + (pct >= 70 ? ' confidence-high' : pct >= 40 ? ' confidence-med' : ' confidence-low');
-        confPct.textContent = pct + '% unsafe';
-        row.appendChild(confPct);
-      } else {
-        var scoreBadge = document.createElement('span');
-        scoreBadge.className = 'score-badge';
-        scoreBadge.textContent = '(' + (s.score <= 1 ? s.score.toFixed(2) : s.score.toFixed(1) + 'x') + ')';
-        row.appendChild(scoreBadge);
+      var displayNames = {
+        agent_threat: 'Agent Threat',
+        pii: 'PII Detection',
+        cost_anomaly: 'Cost Anomaly',
+        content_safety: 'Content Safety',
+        trust_engine: 'Trust Engine',
+        ferpa: 'FERPA'
+      };
+
+      var domainCategories = ['finance', 'iot', 'software', 'web', 'program'];
+      var categoryNames = {
+        finance: 'Finance', iot: 'IoT', software: 'Software', web: 'Web', program: 'Program'
+      };
+
+      if (detectorNames.length === 0) {
+        var empty = document.createElement('span');
+        empty.className = 'empty';
+        empty.textContent = 'No detectors configured';
+        container.appendChild(empty);
+        return;
+      }
+
+      detectorNames.forEach(function (name) {
+        var det = detectors[name];
+        var isEnabled = det.enabled !== false;
+
+        var wrap = document.createElement('div');
+        wrap.className = 'detector-toggle' + (isEnabled ? '' : ' disabled');
+
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = isEnabled;
+        cb.id = 'det-' + name;
+        cb.onchange = function () { toggleDetector(name, cb.checked); };
+
+        var lbl = document.createElement('label');
+        lbl.htmlFor = 'det-' + name;
+        lbl.textContent = displayNames[name] || name;
+
+        wrap.appendChild(cb);
+        wrap.appendChild(lbl);
+        container.appendChild(wrap);
+      });
+
+      var teConfig = detectors.trust_engine;
+      if (teConfig && teConfig.enabled !== false) {
+        var divider = document.createElement('div');
+        divider.className = 'category-divider';
+        divider.textContent = 'Trust Engine Categories';
+        container.appendChild(divider);
+
+        var activeDims = (teConfig.extra && teConfig.extra.dimensions) || domainCategories;
+
+        domainCategories.forEach(function (cat) {
+          var isActive = activeDims.indexOf(cat) >= 0;
+
+          var wrap = document.createElement('div');
+          wrap.className = 'detector-toggle' + (isActive ? '' : ' disabled');
+
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = isActive;
+          cb.id = 'cat-' + cat;
+          cb.onchange = function () { toggleCategory(cat, cb.checked); };
+
+          var lbl = document.createElement('label');
+          lbl.htmlFor = 'cat-' + cat;
+          lbl.textContent = categoryNames[cat] || cat;
+
+          wrap.appendChild(cb);
+          wrap.appendChild(lbl);
+          container.appendChild(wrap);
+        });
       }
     }
 
-    // Review buttons for flagged signals (medium severity)
-    if (s.severity === 'medium') {
-      var btns = document.createElement('span');
-      btns.className = 'review-btns';
-      var confirmBtn = document.createElement('button');
-      confirmBtn.className = 'review-btn review-btn-confirm';
-      confirmBtn.textContent = 'Confirm';
-      confirmBtn.onclick = function() { submitVerdict(s.type, s.score, 'confirmed'); btns.textContent = 'Confirmed'; };
-      btns.appendChild(confirmBtn);
-      var dismissBtn = document.createElement('button');
-      dismissBtn.className = 'review-btn review-btn-dismiss';
-      dismissBtn.textContent = 'Dismiss';
-      dismissBtn.onclick = function() { submitVerdict(s.type, s.score, 'dismissed'); btns.textContent = 'Dismissed'; };
-      btns.appendChild(dismissBtn);
-      row.appendChild(btns);
+    function toggleDetector(name, enabled) {
+      if (!currentPolicy) return;
+      var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
+      if (!detectors[name]) detectors[name] = {};
+      detectors[name].enabled = enabled;
+
+      var newPolicy = {
+        default_action: currentPolicy.default_action,
+        block_on: currentPolicy.block_on,
+        flag_on: currentPolicy.flag_on,
+        detectors: detectors
+      };
+
+      fetch('api/safety', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: newPolicy })
+      }).then(function (r) { return r.json(); })
+        .then(function (data) {
+          currentPolicy = data.policy;
+          renderPolicyControls(data.policy);
+        })
+        .catch(function () { fetchPolicy(); });
     }
 
-    container.appendChild(row);
-  });
-}
+    function toggleCategory(cat, enabled) {
+      if (!currentPolicy) return;
+      var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
+      var te = detectors.trust_engine || {};
+      var extra = te.extra || {};
+      var dims = extra.dimensions || ['finance', 'iot', 'software', 'web', 'program'];
 
-function renderGovernance(container, govList) {
-  var section = document.getElementById('governance-section');
-  if (!govList || govList.length === 0) { section.style.display = 'none'; return; }
-  section.style.display = '';
-  container.textContent = '';
-  govList.forEach(function(gov) {
-    var callLabel = document.createElement('div');
-    callLabel.style.cssText = 'font-size:11px;color:#6bc5e8;margin-top:8px;margin-bottom:4px;';
-    callLabel.textContent = 'Call ' + (gov.call_id || '?');
-    container.appendChild(callLabel);
-    var fields = [
-      ['Entity', gov.entity],
-      ['Classification', gov.classification],
-      ['Consent', gov.consent ? Object.keys(gov.consent).map(function(k){ return k + '=' + gov.consent[k]; }).join(', ') : null],
-      ['Budget', gov.budget],
-      ['Sources', gov.sources && gov.sources.length ? gov.sources.join(', ') : null],
-      ['Trace ID', gov.trace_id]
-    ];
-    fields.forEach(function(f) {
-      if (!f[1]) return;
-      var row = document.createElement('div');
-      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:var(--bg-inset);border-radius:6px;margin-bottom:3px;font-size:13px;';
-      var label = document.createElement('span');
-      label.className = 'span-model';
-      label.textContent = f[0];
-      row.appendChild(label);
-      var val = document.createElement('span');
-      val.className = 'span-dur';
-      val.textContent = String(f[1]);
-      row.appendChild(val);
-      container.appendChild(row);
-    });
-  });
-}
+      if (enabled && dims.indexOf(cat) < 0) {
+        dims.push(cat);
+      } else if (!enabled) {
+        dims = dims.filter(function (d) { return d !== cat; });
+      }
 
-function renderSpans(container, spans, signals) {
-  container.textContent = '';
-  if (spans.length === 0) {
-    var empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = 'No calls recorded';
-    container.appendChild(empty);
-    return;
-  }
-  var table = document.createElement('table');
-  table.className = 'span-table';
-  spans.forEach(function(s) {
-    var tr = document.createElement('tr');
+      extra.dimensions = dims;
+      te.extra = extra;
+      detectors.trust_engine = te;
 
-    var tdTime = document.createElement('td');
-    tdTime.className = 'span-time';
-    if (s.started_at) {
-      var d = new Date(s.started_at);
-      tdTime.textContent = d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+      var newPolicy = {
+        default_action: currentPolicy.default_action,
+        block_on: currentPolicy.block_on,
+        flag_on: currentPolicy.flag_on,
+        detectors: detectors
+      };
+
+      fetch('api/safety', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: newPolicy })
+      }).then(function (r) { return r.json(); })
+        .then(function (data) {
+          currentPolicy = data.policy;
+          renderPolicyControls(data.policy);
+        })
+        .catch(function () { fetchPolicy(); });
     }
-    tr.appendChild(tdTime);
 
-    var tdModel = document.createElement('td');
-    tdModel.className = 'span-model';
-    tdModel.textContent = esc(s.executor);
-    tr.appendChild(tdModel);
-
-    var tdStatus = document.createElement('td');
-    tdStatus.className = 'span-status';
-    var callAction = getCallAction(s.call_id, signals);
-    tdStatus.appendChild(makeSmallBadge(callAction));
-    tr.appendChild(tdStatus);
-
-    var tdCost = document.createElement('td');
-    tdCost.className = 'span-cost';
-    if (s.cost > 0) {
-      tdCost.textContent = '$' + s.cost.toFixed(6);
-    }
-    tr.appendChild(tdCost);
-
-    var tdDur = document.createElement('td');
-    tdDur.className = 'span-dur';
-    tdDur.textContent = s.duration_ms ? Math.round(s.duration_ms) + 'ms' : '...';
-    tr.appendChild(tdDur);
-
-    table.appendChild(tr);
-  });
-  container.appendChild(table);
-}
-
-function formatDuration(ms) {
-  if (ms < 60000) return Math.round(ms / 1000) + ' sec';
-  if (ms < 3600000) return Math.round(ms / 60000) + ' min';
-  var h = Math.floor(ms / 3600000);
-  var m = Math.round((ms % 3600000) / 60000);
-  return h + 'h ' + m + 'm';
-}
-
-function updateCisoView(data) {
-  // Session info
-  var sessionEl = document.getElementById('ciso-session-info');
-  if (data.session_started) {
-    var started = new Date(data.session_started);
-    var elapsed = Date.now() - started.getTime();
-    var startTime = started.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-    sessionEl.textContent = 'Session started: ' + startTime + ' (' + formatDuration(elapsed) + ')';
-  }
-
-  // Aggregate signal counts by type
-  var piiCount = 0, threatCount = 0, toxicCount = 0, anomalyCount = 0;
-  (data.signals || []).forEach(function(s) {
-    if (s.type === 'pii') piiCount++;
-    else if (s.type === 'agent_threat') threatCount++;
-    else if (s.type === 'content_safety') toxicCount++;
-    else if (s.type === 'cost_anomaly') anomalyCount++;
-  });
-
-  // Count unique CALLS (not signals) that were blocked/flagged
-  var blockedCalls = {};
-  var flaggedCalls = {};
-  (data.signals || []).forEach(function(s) {
-    var cid = s.call_id || 'unknown';
-    if (s.severity === 'high') blockedCalls[cid] = true;
-    else if (s.severity === 'medium') flaggedCalls[cid] = true;
-  });
-  // A call with both high+medium counts as blocked, not both
-  Object.keys(blockedCalls).forEach(function(k) { delete flaggedCalls[k]; });
-  var blockCount = Object.keys(blockedCalls).length;
-  var flagCount = Object.keys(flaggedCalls).length;
-
-  var totalCalls = data.calls || 0;
-  var passCount = Math.max(0, totalCalls - blockCount - flagCount);
-
-  // Policy compliance percentage
-  var compliancePct = totalCalls > 0 ? ((totalCalls - blockCount) / totalCalls * 100) : 100;
-  var complianceEl = document.getElementById('ciso-compliance-pct');
-  complianceEl.textContent = compliancePct.toFixed(1) + '%';
-  var complianceBar = document.getElementById('ciso-compliance-bar');
-  complianceBar.style.width = compliancePct + '%';
-  if (compliancePct > 99) {
-    complianceEl.className = 'card-value green';
-    complianceBar.className = 'bar-fill bar-green';
-  } else if (compliancePct > 95) {
-    complianceEl.className = 'card-value';
-    complianceEl.style.color = 'var(--accent-amber)';
-    complianceBar.className = 'bar-fill bar-yellow';
-  } else {
-    complianceEl.className = 'card-value';
-    complianceEl.style.color = 'var(--accent-red)';
-    complianceBar.className = 'bar-fill bar-red';
-  }
-
-  document.getElementById('ciso-blocked').textContent = String(blockCount);
-  document.getElementById('ciso-cost').textContent = '$' + data.cost.toFixed(2);
-  document.getElementById('ciso-calls').textContent = String(totalCalls);
-
-  // Cost savings section
-  var savings = data.savings;
-  var savingsSection = document.getElementById('ciso-savings-section');
-  if (savings && savings.blocked_calls > 0) {
-    savingsSection.style.display = '';
-    document.getElementById('ciso-savings-blocked').textContent = String(savings.blocked_calls);
-    document.getElementById('ciso-savings-amount').textContent = '$' + savings.estimated_savings_usd.toFixed(4);
-    document.getElementById('ciso-savings-avg').textContent = '$' + savings.avg_call_cost_usd.toFixed(4);
-  } else {
-    savingsSection.style.display = 'none';
-  }
-
-  // Compliance status - zero-state vs incidents
-  var complianceBody = document.getElementById('ciso-compliance-body');
-  complianceBody.textContent = '';
-  var totalIncidents = piiCount + threatCount + toxicCount + anomalyCount;
-  if (totalIncidents === 0 && totalCalls > 0) {
-    // Zero-state: all clean
-    var zs = document.createElement('div');
-    zs.className = 'zero-state';
-    zs.innerHTML = '<div class="zero-state-icon" style="color:var(--accent-green);">&#x2714;</div>'
-      + '<div class="zero-state-text">All agents compliant</div>'
-      + '<div class="zero-state-sub">No safety incidents this session. ' + totalCalls + ' call' + (totalCalls > 1 ? 's' : '') + ' passed.</div>';
-    complianceBody.appendChild(zs);
-  } else if (totalCalls === 0) {
-    var zs2 = document.createElement('div');
-    zs2.className = 'zero-state';
-    zs2.innerHTML = '<div class="zero-state-icon" style="color:var(--text-dim);">&#x2022;</div>'
-      + '<div class="zero-state-text" style="color:var(--text-muted);">Waiting for agent activity</div>'
-      + '<div class="zero-state-sub">No calls recorded yet.</div>';
-    complianceBody.appendChild(zs2);
-  } else {
-    // Show incident breakdown
-    var items = [
-      { dotId: 'pii', label: 'PII Exfiltration', sublabel: 'Incidents this session', count: piiCount, verb: 'blocked' },
-      { dotId: 'threat', label: 'Agent Threat Attempts', sublabel: 'Port scans, shell access, credential theft', count: threatCount, verb: 'blocked' },
-      { dotId: 'toxic', label: 'Unsafe Content', sublabel: 'Toxic or harmful output', count: toxicCount, verb: 'detected' },
-      { dotId: 'cost', label: 'Cost Anomalies', sublabel: 'Spend spikes above baseline', count: anomalyCount, verb: 'flagged' }
-    ];
-    items.forEach(function(item) {
-      var ci = document.createElement('div');
-      ci.className = 'compliance-item';
-      var dotCls = item.count > 0 ? 'dot dot-red' : 'dot dot-green';
-      var valCls = item.count > 0 ? 'metric-value bad' : 'metric-value good';
-      ci.innerHTML = '<div class="compliance-status"><span class="' + dotCls + '"></span> <span>' + esc(item.label) + '</span></div>'
-        + '<div class="metric-row"><span class="metric-label">' + esc(item.sublabel) + '</span><span class="' + valCls + '">' + item.count + ' ' + item.verb + '</span></div>';
-      complianceBody.appendChild(ci);
-    });
-  }
-
-  // Safety breakdown
-  document.getElementById('ciso-pass').textContent = String(passCount);
-  document.getElementById('ciso-flag').textContent = String(flagCount);
-  document.getElementById('ciso-block').textContent = String(blockCount);
-
-  if (totalCalls > 0) {
-    var pPct = (passCount / totalCalls * 100);
-    var fPct = (flagCount / totalCalls * 100);
-    var bPct = (blockCount / totalCalls * 100);
-    document.getElementById('ciso-bar-pass').style.width = pPct + '%';
-    document.getElementById('ciso-bar-flag').style.width = fPct + '%';
-    document.getElementById('ciso-bar-block').style.width = bPct + '%';
-  }
-
-  // Cost per entity breakdown
-  var entitySection = document.getElementById('ciso-entity-section');
-  var entityContainer = document.getElementById('ciso-entity-breakdown');
-  var govList = data.governance || [];
-  var spans = data.spans || [];
-  if (govList.length > 0) {
-    // Build call_id → cost lookup from spans
-    var callCost = {};
-    spans.forEach(function(s) {
-      if (s.call_id) callCost[s.call_id] = (callCost[s.call_id] || 0) + (s.cost || 0);
-    });
-    // Build entity → { cost, calls } from governance
-    var entities = {};
-    govList.forEach(function(g) {
-      var e = g.entity || 'unknown';
-      if (!entities[e]) entities[e] = { cost: 0, calls: 0 };
-      entities[e].calls++;
-      entities[e].cost += callCost[g.call_id] || 0;
-    });
-    var entityKeys = Object.keys(entities);
-    if (entityKeys.length > 0) {
-      entitySection.style.display = '';
-      entityContainer.textContent = '';
-      entityKeys.forEach(function(e) {
-        var row = document.createElement('div');
-        row.className = 'entity-row';
-        var left = document.createElement('div');
-        var nameEl = document.createElement('span');
-        nameEl.className = 'entity-name';
-        nameEl.textContent = e;
-        left.appendChild(nameEl);
-        var detailEl = document.createElement('span');
-        detailEl.className = 'entity-detail';
-        detailEl.textContent = ' (' + entities[e].calls + ' call' + (entities[e].calls > 1 ? 's' : '') + ')';
-        left.appendChild(detailEl);
-        row.appendChild(left);
-        var costEl = document.createElement('span');
-        costEl.className = 'entity-cost';
-        costEl.textContent = '$' + entities[e].cost.toFixed(4);
-        row.appendChild(costEl);
-        entityContainer.appendChild(row);
+    function submitVerdict(signalType, score, verdict) {
+      fetch('api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signal_type: signalType, score: score, verdict: verdict })
       });
-    } else {
-      entitySection.style.display = 'none';
     }
-  } else {
-    entitySection.style.display = 'none';
-  }
 
-  // Governance (CISO view)
-  var cisoGovSection = document.getElementById('ciso-governance-section');
-  if (govList.length > 0) {
-    cisoGovSection.style.display = '';
-    var gContainer = document.getElementById('ciso-governance');
-    gContainer.textContent = '';
-    var classifications = {};
-    govList.forEach(function(g) {
-      if (g.classification) classifications[g.classification] = (classifications[g.classification] || 0) + 1;
-    });
-    Object.keys(classifications).forEach(function(c) {
-      var row = document.createElement('div');
-      row.className = 'metric-row';
-      var label = document.createElement('span');
-      label.className = 'metric-label';
-      label.textContent = 'Classification: ' + c;
-      row.appendChild(label);
-      var val = document.createElement('span');
-      val.className = 'metric-value';
-      val.textContent = classifications[c] + ' calls';
-      row.appendChild(val);
-      gContainer.appendChild(row);
-    });
-  } else {
-    cisoGovSection.style.display = 'none';
-  }
-}
-
-async function refresh() {
-  try {
-    var res = await fetch('api/state');
-    var data = await res.json();
-    lastSignals = data.signals || [];
-    // Sync safety toggle state
-    if (data.safety_enabled !== undefined && data.safety_enabled !== safetyEnabled) {
-      safetyEnabled = data.safety_enabled;
-      document.getElementById('safety-toggle').className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
-      document.getElementById('safety-label').textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+    function setView(view) {
+      currentView = view;
+      document.getElementById('view-dev').className = view === 'dev' ? '' : 'hidden';
+      document.getElementById('view-ciso').className = view === 'ciso' ? '' : 'hidden';
+      document.getElementById('btn-dev').className = view === 'dev' ? 'active' : '';
+      document.getElementById('btn-ciso').className = view === 'ciso' ? 'active' : '';
     }
-    // Developer view
-    document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
-    document.getElementById('calls').textContent = String(data.calls);
-    setBadge(document.getElementById('status'), data.action);
-    renderFilterBar(document.getElementById('signal-filters'), lastSignals);
-    renderSignals(document.getElementById('signals'), lastSignals);
-    renderGovernance(document.getElementById('governance'), data.governance);
-    renderAttestation(data.attestation);
-    renderBudget(data.budget);
-    renderSpans(document.getElementById('spans'), data.spans, lastSignals);
-    // Executive view
-    updateCisoView(data);
-  } catch (e) {}
-}
 
-function renderBudget(budget) {
-  var section = document.getElementById('budget-section');
-  if (!budget) { section.style.display = 'none'; return; }
-  section.style.display = '';
-  var limit = budget.total || budget.per_session || 0;
-  var spent = budget.spent || 0;
-  var remaining = budget.remaining != null ? budget.remaining : limit - spent;
-  var pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
-  var bar = document.getElementById('budget-bar');
-  bar.style.width = pct + '%';
-  bar.style.background = pct > 90 ? 'var(--accent-red)' : pct > 70 ? 'var(--accent-amber)' : 'var(--accent-cyan)';
-  var label = '$' + spent.toFixed(4) + ' / $' + limit.toFixed(2);
-  if (remaining != null) label += ' ($' + remaining.toFixed(4) + ' remaining)';
-  document.getElementById('budget-text').textContent = label;
-}
+    function esc(s) {
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.textContent;
+    }
 
-function renderAttestation(attest) {
-  var card = document.getElementById('attestation-card');
-  var section = document.getElementById('attestation-section');
-  var details = document.getElementById('attestation-details');
-  if (!attest || !attest.enabled) {
-    card.style.display = 'none';
-    section.style.display = 'none';
-    return;
-  }
-  card.style.display = '';
-  section.style.display = '';
-  document.getElementById('chain-height').textContent = String(attest.chain_height);
-  document.getElementById('chain-signer').textContent = attest.signer_id || '';
+    function setBadge(el, action) {
+      el.textContent = '';
+      var span = document.createElement('span');
+      var validActions = ['pass', 'flag', 'block'];
+      var cls = validActions.indexOf(action) >= 0 ? action : 'pass';
+      span.className = 'badge badge-' + cls;
+      span.textContent = action.toUpperCase();
+      el.appendChild(span);
+    }
 
-  var rows = [
-    ['Signing', 'Ed25519'],
-    ['Signer ID', attest.signer_id],
-    ['Chain Height', String(attest.chain_height)],
-    ['Chain Integrity', 'VERIFIED'],
-  ];
-  if (attest.latest_hash) {
-    rows.push(['Latest Hash', attest.latest_hash.substring(0, 24) + '...']);
-  }
+    function makeSmallBadge(action) {
+      var span = document.createElement('span');
+      var validActions = ['pass', 'flag', 'block'];
+      var cls = validActions.indexOf(action) >= 0 ? action : 'pass';
+      span.className = 'badge badge-sm badge-' + cls;
+      span.textContent = action.toUpperCase();
+      return span;
+    }
 
-  var html = '';
-  for (var i = 0; i < rows.length; i++) {
-    var label = rows[i][0];
-    var value = rows[i][1];
-    if (!value) continue;
-    var valueClass = (label === 'Chain Integrity') ? 'style="color:var(--accent-green);font-weight:bold;"' : '';
-    html += '<div class="entity-row">';
-    html += '<span class="entity-name">' + label + '</span>';
-    html += '<span class="entity-detail" ' + valueClass + '>' + value + '</span>';
-    html += '</div>';
-  }
-  details.innerHTML = html;
-}
-// ── Custom Policies (proxy API) ──
-var customPolicies = [];
-var editingPolicyId = null; // null = not editing, 'new' = adding, string = editing existing
+    // Determine per-call enforcement from signals
+    function getCallAction(callId, signals) {
+      var callSignals = signals.filter(function (s) { return s.call_id === callId; });
+      if (callSignals.length === 0) return 'pass';
+      var hasHigh = callSignals.some(function (s) { return s.severity === 'high'; });
+      if (hasHigh) return 'block';
+      var hasMedium = callSignals.some(function (s) { return s.severity === 'medium'; });
+      if (hasMedium) return 'flag';
+      return 'pass';
+    }
 
-function loadCustomPolicies() {
-  fetch('api/custom-policies')
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      customPolicies = data.policies || [];
-      renderCustomPolicies();
-    })
-    .catch(function() {
-      customPolicies = [];
+    function renderFilterBar(container, signals) {
+      container.textContent = '';
+      var types = {};
+      signals.forEach(function (s) { types[s.type] = (types[s.type] || 0) + 1; });
+      var typeKeys = Object.keys(types);
+      if (typeKeys.length <= 1) return; // No filter needed for 0 or 1 type
+
+      var allBtn = document.createElement('button');
+      allBtn.className = 'filter-btn' + (activeFilter === 'all' ? ' active' : '');
+      allBtn.textContent = 'ALL (' + signals.length + ')';
+      allBtn.onclick = function () { activeFilter = 'all'; renderSignals(document.getElementById('signals'), lastSignals); renderFilterBar(container, lastSignals); };
+      container.appendChild(allBtn);
+
+      typeKeys.forEach(function (t) {
+        var btn = document.createElement('button');
+        btn.className = 'filter-btn' + (activeFilter === t ? ' active' : '');
+        btn.textContent = t.toUpperCase() + ' (' + types[t] + ')';
+        btn.onclick = function () { activeFilter = t; renderSignals(document.getElementById('signals'), lastSignals); renderFilterBar(container, lastSignals); };
+        container.appendChild(btn);
+      });
+    }
+
+    function renderSignals(container, signals) {
+      container.textContent = '';
+      // Apply filter
+      var filtered = activeFilter === 'all' ? signals : signals.filter(function (s) { return s.type === activeFilter; });
+      if (filtered.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = signals.length === 0 ? 'No signals detected' : 'No ' + activeFilter + ' signals';
+        container.appendChild(empty);
+        return;
+      }
+
+      // Group by call_id
+      var groups = {};
+      var groupOrder = [];
+      filtered.forEach(function (s) {
+        var key = s.call_id || 'unknown';
+        if (!groups[key]) { groups[key] = []; groupOrder.push(key); }
+        groups[key].push(s);
+      });
+
+      // If only one group, render flat
+      if (groupOrder.length === 1) {
+        renderSignalList(container, filtered);
+        return;
+      }
+
+      groupOrder.forEach(function (callId) {
+        var group = groups[callId];
+        var div = document.createElement('div');
+        div.className = 'call-group';
+
+        var isCollapsed = collapsedGroups[callId] === true;
+        var header = document.createElement('div');
+        header.className = 'call-group-header';
+        var arrow = document.createElement('span');
+        arrow.className = 'call-group-arrow' + (isCollapsed ? ' collapsed' : '');
+        arrow.textContent = '\u25BC';
+        header.appendChild(arrow);
+        var label = document.createElement('span');
+        label.textContent = 'Call ' + callId + ': ' + group.length + ' signal' + (group.length > 1 ? 's' : '');
+        header.appendChild(label);
+        header.onclick = function () {
+          collapsedGroups[callId] = !collapsedGroups[callId];
+          renderSignals(container, signals);
+        };
+        div.appendChild(header);
+
+        if (!isCollapsed) {
+          var body = document.createElement('div');
+          body.className = 'call-group-body';
+          renderSignalList(body, group);
+          div.appendChild(body);
+        }
+
+        container.appendChild(div);
+      });
+    }
+
+    function renderSignalList(container, signals) {
+      signals.forEach(function (s) {
+        var row = document.createElement('div');
+        var validSev = ['high', 'medium', 'low'];
+        var sevCls = validSev.indexOf(s.severity) >= 0 ? s.severity : 'low';
+        row.className = 'signal signal-' + sevCls;
+
+        var sev = document.createElement('span');
+        sev.className = 'sev sev-' + sevCls;
+        sev.textContent = s.severity.toUpperCase();
+        row.appendChild(sev);
+
+        var detail = document.createElement('span');
+        detail.textContent = esc(s.type) + ': ' + esc(s.detail);
+        row.appendChild(detail);
+
+        // Confidence percentage for trust_engine signals, score badge for others
+        if (s.score !== null && s.score !== undefined) {
+          if (s.type === 'trust_engine' && s.score <= 1) {
+            var confPct = document.createElement('span');
+            var pct = Math.round(s.score * 100);
+            confPct.className = 'confidence-pct' + (pct >= 70 ? ' confidence-high' : pct >= 40 ? ' confidence-med' : ' confidence-low');
+            confPct.textContent = pct + '% unsafe';
+            row.appendChild(confPct);
+          } else {
+            var scoreBadge = document.createElement('span');
+            scoreBadge.className = 'score-badge';
+            scoreBadge.textContent = '(' + (s.score <= 1 ? s.score.toFixed(2) : s.score.toFixed(1) + 'x') + ')';
+            row.appendChild(scoreBadge);
+          }
+        }
+
+        // Review buttons for flagged signals (medium severity)
+        if (s.severity === 'medium') {
+          var btns = document.createElement('span');
+          btns.className = 'review-btns';
+          var confirmBtn = document.createElement('button');
+          confirmBtn.className = 'review-btn review-btn-confirm';
+          confirmBtn.textContent = 'Confirm';
+          confirmBtn.onclick = function () { submitVerdict(s.type, s.score, 'confirmed'); btns.textContent = 'Confirmed'; };
+          btns.appendChild(confirmBtn);
+          var dismissBtn = document.createElement('button');
+          dismissBtn.className = 'review-btn review-btn-dismiss';
+          dismissBtn.textContent = 'Dismiss';
+          dismissBtn.onclick = function () { submitVerdict(s.type, s.score, 'dismissed'); btns.textContent = 'Dismissed'; };
+          btns.appendChild(dismissBtn);
+          row.appendChild(btns);
+        }
+
+        container.appendChild(row);
+      });
+    }
+
+    function renderGovernance(container, govList) {
+      var section = document.getElementById('governance-section');
+      if (!govList || govList.length === 0) { section.style.display = 'none'; return; }
+      section.style.display = '';
+      container.textContent = '';
+      govList.forEach(function (gov) {
+        var callLabel = document.createElement('div');
+        callLabel.style.cssText = 'font-size:11px;color:#6bc5e8;margin-top:8px;margin-bottom:4px;';
+        callLabel.textContent = 'Call ' + (gov.call_id || '?');
+        container.appendChild(callLabel);
+        var fields = [
+          ['Entity', gov.entity],
+          ['Classification', gov.classification],
+          ['Consent', gov.consent ? Object.keys(gov.consent).map(function (k) { return k + '=' + gov.consent[k]; }).join(', ') : null],
+          ['Budget', gov.budget],
+          ['Sources', gov.sources && gov.sources.length ? gov.sources.join(', ') : null],
+          ['Trace ID', gov.trace_id]
+        ];
+        fields.forEach(function (f) {
+          if (!f[1]) return;
+          var row = document.createElement('div');
+          row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:var(--bg-inset);border-radius:6px;margin-bottom:3px;font-size:13px;';
+          var label = document.createElement('span');
+          label.className = 'span-model';
+          label.textContent = f[0];
+          row.appendChild(label);
+          var val = document.createElement('span');
+          val.className = 'span-dur';
+          val.textContent = String(f[1]);
+          row.appendChild(val);
+          container.appendChild(row);
+        });
+      });
+    }
+
+    function renderSpans(container, spans, signals) {
+      container.textContent = '';
+      if (spans.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No calls recorded';
+        container.appendChild(empty);
+        return;
+      }
+      var table = document.createElement('table');
+      table.className = 'span-table';
+      spans.forEach(function (s) {
+        var tr = document.createElement('tr');
+
+        var tdTime = document.createElement('td');
+        tdTime.className = 'span-time';
+        if (s.started_at) {
+          var d = new Date(s.started_at);
+          tdTime.textContent = d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+        tr.appendChild(tdTime);
+
+        var tdModel = document.createElement('td');
+        tdModel.className = 'span-model';
+        tdModel.textContent = esc(s.executor);
+        tr.appendChild(tdModel);
+
+        var tdStatus = document.createElement('td');
+        tdStatus.className = 'span-status';
+        var callAction = getCallAction(s.call_id, signals);
+        tdStatus.appendChild(makeSmallBadge(callAction));
+        tr.appendChild(tdStatus);
+
+        var tdCost = document.createElement('td');
+        tdCost.className = 'span-cost';
+        if (s.cost > 0) {
+          tdCost.textContent = '$' + s.cost.toFixed(6);
+        }
+        tr.appendChild(tdCost);
+
+        var tdDur = document.createElement('td');
+        tdDur.className = 'span-dur';
+        tdDur.textContent = s.duration_ms ? Math.round(s.duration_ms) + 'ms' : '...';
+        tr.appendChild(tdDur);
+
+        table.appendChild(tr);
+      });
+      container.appendChild(table);
+    }
+
+    function formatDuration(ms) {
+      if (ms < 60000) return Math.round(ms / 1000) + ' sec';
+      if (ms < 3600000) return Math.round(ms / 60000) + ' min';
+      var h = Math.floor(ms / 3600000);
+      var m = Math.round((ms % 3600000) / 60000);
+      return h + 'h ' + m + 'm';
+    }
+
+    function updateCisoView(data) {
+      // Session info
+      var sessionEl = document.getElementById('ciso-session-info');
+      if (data.session_started) {
+        var started = new Date(data.session_started);
+        var elapsed = Date.now() - started.getTime();
+        var startTime = started.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        sessionEl.textContent = 'Session started: ' + startTime + ' (' + formatDuration(elapsed) + ')';
+      }
+
+      // Aggregate signal counts by type
+      var piiCount = 0, threatCount = 0, toxicCount = 0, anomalyCount = 0;
+      (data.signals || []).forEach(function (s) {
+        if (s.type === 'pii') piiCount++;
+        else if (s.type === 'agent_threat') threatCount++;
+        else if (s.type === 'content_safety') toxicCount++;
+        else if (s.type === 'cost_anomaly') anomalyCount++;
+      });
+
+      // Count unique CALLS (not signals) that were blocked/flagged
+      var blockedCalls = {};
+      var flaggedCalls = {};
+      (data.signals || []).forEach(function (s) {
+        var cid = s.call_id || 'unknown';
+        if (s.severity === 'high') blockedCalls[cid] = true;
+        else if (s.severity === 'medium') flaggedCalls[cid] = true;
+      });
+      // A call with both high+medium counts as blocked, not both
+      Object.keys(blockedCalls).forEach(function (k) { delete flaggedCalls[k]; });
+      var blockCount = Object.keys(blockedCalls).length;
+      var flagCount = Object.keys(flaggedCalls).length;
+
+      var totalCalls = data.calls || 0;
+      var passCount = Math.max(0, totalCalls - blockCount - flagCount);
+
+      // Policy compliance percentage
+      var compliancePct = totalCalls > 0 ? ((totalCalls - blockCount) / totalCalls * 100) : 100;
+      var complianceEl = document.getElementById('ciso-compliance-pct');
+      complianceEl.textContent = compliancePct.toFixed(1) + '%';
+      var complianceBar = document.getElementById('ciso-compliance-bar');
+      complianceBar.style.width = compliancePct + '%';
+      if (compliancePct > 99) {
+        complianceEl.className = 'card-value green';
+        complianceBar.className = 'bar-fill bar-green';
+      } else if (compliancePct > 95) {
+        complianceEl.className = 'card-value';
+        complianceEl.style.color = 'var(--accent-amber)';
+        complianceBar.className = 'bar-fill bar-yellow';
+      } else {
+        complianceEl.className = 'card-value';
+        complianceEl.style.color = 'var(--accent-red)';
+        complianceBar.className = 'bar-fill bar-red';
+      }
+
+      document.getElementById('ciso-blocked').textContent = String(blockCount);
+      document.getElementById('ciso-cost').textContent = '$' + data.cost.toFixed(2);
+      document.getElementById('ciso-calls').textContent = String(totalCalls);
+
+      // Cost savings section
+      var savings = data.savings;
+      var savingsSection = document.getElementById('ciso-savings-section');
+      if (savings && savings.blocked_calls > 0) {
+        savingsSection.style.display = '';
+        document.getElementById('ciso-savings-blocked').textContent = String(savings.blocked_calls);
+        document.getElementById('ciso-savings-amount').textContent = '$' + savings.estimated_savings_usd.toFixed(4);
+        document.getElementById('ciso-savings-avg').textContent = '$' + savings.avg_call_cost_usd.toFixed(4);
+      } else {
+        savingsSection.style.display = 'none';
+      }
+
+      // Compliance status - zero-state vs incidents
+      var complianceBody = document.getElementById('ciso-compliance-body');
+      complianceBody.textContent = '';
+      var totalIncidents = piiCount + threatCount + toxicCount + anomalyCount;
+      if (totalIncidents === 0 && totalCalls > 0) {
+        // Zero-state: all clean
+        var zs = document.createElement('div');
+        zs.className = 'zero-state';
+        zs.innerHTML = '<div class="zero-state-icon" style="color:var(--accent-green);">&#x2714;</div>'
+          + '<div class="zero-state-text">All agents compliant</div>'
+          + '<div class="zero-state-sub">No safety incidents this session. ' + totalCalls + ' call' + (totalCalls > 1 ? 's' : '') + ' passed.</div>';
+        complianceBody.appendChild(zs);
+      } else if (totalCalls === 0) {
+        var zs2 = document.createElement('div');
+        zs2.className = 'zero-state';
+        zs2.innerHTML = '<div class="zero-state-icon" style="color:var(--text-dim);">&#x2022;</div>'
+          + '<div class="zero-state-text" style="color:var(--text-muted);">Waiting for agent activity</div>'
+          + '<div class="zero-state-sub">No calls recorded yet.</div>';
+        complianceBody.appendChild(zs2);
+      } else {
+        // Show incident breakdown
+        var items = [
+          { dotId: 'pii', label: 'PII Exfiltration', sublabel: 'Incidents this session', count: piiCount, verb: 'blocked' },
+          { dotId: 'threat', label: 'Agent Threat Attempts', sublabel: 'Port scans, shell access, credential theft', count: threatCount, verb: 'blocked' },
+          { dotId: 'toxic', label: 'Unsafe Content', sublabel: 'Toxic or harmful output', count: toxicCount, verb: 'detected' },
+          { dotId: 'cost', label: 'Cost Anomalies', sublabel: 'Spend spikes above baseline', count: anomalyCount, verb: 'flagged' }
+        ];
+        items.forEach(function (item) {
+          var ci = document.createElement('div');
+          ci.className = 'compliance-item';
+          var dotCls = item.count > 0 ? 'dot dot-red' : 'dot dot-green';
+          var valCls = item.count > 0 ? 'metric-value bad' : 'metric-value good';
+          ci.innerHTML = '<div class="compliance-status"><span class="' + dotCls + '"></span> <span>' + esc(item.label) + '</span></div>'
+            + '<div class="metric-row"><span class="metric-label">' + esc(item.sublabel) + '</span><span class="' + valCls + '">' + item.count + ' ' + item.verb + '</span></div>';
+          complianceBody.appendChild(ci);
+        });
+      }
+
+      // Safety breakdown
+      document.getElementById('ciso-pass').textContent = String(passCount);
+      document.getElementById('ciso-flag').textContent = String(flagCount);
+      document.getElementById('ciso-block').textContent = String(blockCount);
+
+      if (totalCalls > 0) {
+        var pPct = (passCount / totalCalls * 100);
+        var fPct = (flagCount / totalCalls * 100);
+        var bPct = (blockCount / totalCalls * 100);
+        document.getElementById('ciso-bar-pass').style.width = pPct + '%';
+        document.getElementById('ciso-bar-flag').style.width = fPct + '%';
+        document.getElementById('ciso-bar-block').style.width = bPct + '%';
+      }
+
+      // Cost per entity breakdown
+      var entitySection = document.getElementById('ciso-entity-section');
+      var entityContainer = document.getElementById('ciso-entity-breakdown');
+      var govList = data.governance || [];
+      var spans = data.spans || [];
+      if (govList.length > 0) {
+        // Build call_id → cost lookup from spans
+        var callCost = {};
+        spans.forEach(function (s) {
+          if (s.call_id) callCost[s.call_id] = (callCost[s.call_id] || 0) + (s.cost || 0);
+        });
+        // Build entity → { cost, calls } from governance
+        var entities = {};
+        govList.forEach(function (g) {
+          var e = g.entity || 'unknown';
+          if (!entities[e]) entities[e] = { cost: 0, calls: 0 };
+          entities[e].calls++;
+          entities[e].cost += callCost[g.call_id] || 0;
+        });
+        var entityKeys = Object.keys(entities);
+        if (entityKeys.length > 0) {
+          entitySection.style.display = '';
+          entityContainer.textContent = '';
+          entityKeys.forEach(function (e) {
+            var row = document.createElement('div');
+            row.className = 'entity-row';
+            var left = document.createElement('div');
+            var nameEl = document.createElement('span');
+            nameEl.className = 'entity-name';
+            nameEl.textContent = e;
+            left.appendChild(nameEl);
+            var detailEl = document.createElement('span');
+            detailEl.className = 'entity-detail';
+            detailEl.textContent = ' (' + entities[e].calls + ' call' + (entities[e].calls > 1 ? 's' : '') + ')';
+            left.appendChild(detailEl);
+            row.appendChild(left);
+            var costEl = document.createElement('span');
+            costEl.className = 'entity-cost';
+            costEl.textContent = '$' + entities[e].cost.toFixed(4);
+            row.appendChild(costEl);
+            entityContainer.appendChild(row);
+          });
+        } else {
+          entitySection.style.display = 'none';
+        }
+      } else {
+        entitySection.style.display = 'none';
+      }
+
+      // Governance (CISO view)
+      var cisoGovSection = document.getElementById('ciso-governance-section');
+      if (govList.length > 0) {
+        cisoGovSection.style.display = '';
+        var gContainer = document.getElementById('ciso-governance');
+        gContainer.textContent = '';
+        var classifications = {};
+        govList.forEach(function (g) {
+          if (g.classification) classifications[g.classification] = (classifications[g.classification] || 0) + 1;
+        });
+        Object.keys(classifications).forEach(function (c) {
+          var row = document.createElement('div');
+          row.className = 'metric-row';
+          var label = document.createElement('span');
+          label.className = 'metric-label';
+          label.textContent = 'Classification: ' + c;
+          row.appendChild(label);
+          var val = document.createElement('span');
+          val.className = 'metric-value';
+          val.textContent = classifications[c] + ' calls';
+          row.appendChild(val);
+          gContainer.appendChild(row);
+        });
+      } else {
+        cisoGovSection.style.display = 'none';
+      }
+    }
+
+    async function refresh() {
+      try {
+        var res = await fetch('api/state');
+        var data = await res.json();
+        lastSignals = data.signals || [];
+        // Sync safety toggle state
+        if (data.safety_enabled !== undefined && data.safety_enabled !== safetyEnabled) {
+          safetyEnabled = data.safety_enabled;
+          document.getElementById('safety-toggle').className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
+          document.getElementById('safety-label').textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
+        }
+        // Developer view
+        document.getElementById('cost').textContent = '$' + data.cost.toFixed(6);
+        document.getElementById('calls').textContent = String(data.calls);
+        setBadge(document.getElementById('status'), data.action);
+        renderFilterBar(document.getElementById('signal-filters'), lastSignals);
+        renderSignals(document.getElementById('signals'), lastSignals);
+        renderGovernance(document.getElementById('governance'), data.governance);
+        renderAttestation(data.attestation);
+        renderBudget(data.budget);
+        renderSpans(document.getElementById('spans'), data.spans, lastSignals);
+        // Executive view
+        updateCisoView(data);
+      } catch (e) { }
+    }
+
+    function renderBudget(budget) {
+      var section = document.getElementById('budget-section');
+      if (!budget) { section.style.display = 'none'; return; }
+      section.style.display = '';
+      var limit = budget.total || budget.per_session || 0;
+      var spent = budget.spent || 0;
+      var remaining = budget.remaining != null ? budget.remaining : limit - spent;
+      var pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
+      var bar = document.getElementById('budget-bar');
+      bar.style.width = pct + '%';
+      bar.style.background = pct > 90 ? 'var(--accent-red)' : pct > 70 ? 'var(--accent-amber)' : 'var(--accent-cyan)';
+      var label = '$' + spent.toFixed(4) + ' / $' + limit.toFixed(2);
+      if (remaining != null) label += ' ($' + remaining.toFixed(4) + ' remaining)';
+      document.getElementById('budget-text').textContent = label;
+    }
+
+    function renderAttestation(attest) {
+      var card = document.getElementById('attestation-card');
+      var section = document.getElementById('attestation-section');
+      var details = document.getElementById('attestation-details');
+      if (!attest || !attest.enabled) {
+        card.style.display = 'none';
+        section.style.display = 'none';
+        return;
+      }
+      card.style.display = '';
+      section.style.display = '';
+      document.getElementById('chain-height').textContent = String(attest.chain_height);
+      document.getElementById('chain-signer').textContent = attest.signer_id || '';
+
+      var rows = [
+        ['Signing', 'Ed25519'],
+        ['Signer ID', attest.signer_id],
+        ['Chain Height', String(attest.chain_height)],
+        ['Chain Integrity', 'VERIFIED'],
+      ];
+      if (attest.latest_hash) {
+        rows.push(['Latest Hash', attest.latest_hash.substring(0, 24) + '...']);
+      }
+
+      var html = '';
+      for (var i = 0; i < rows.length; i++) {
+        var label = rows[i][0];
+        var value = rows[i][1];
+        if (!value) continue;
+        var valueClass = (label === 'Chain Integrity') ? 'style="color:var(--accent-green);font-weight:bold;"' : '';
+        html += '<div class="entity-row">';
+        html += '<span class="entity-name">' + label + '</span>';
+        html += '<span class="entity-detail" ' + valueClass + '>' + value + '</span>';
+        html += '</div>';
+      }
+      details.innerHTML = html;
+    }
+    // ── Custom Policies (proxy API) ──
+    var customPolicies = [];
+    var editingPolicyId = null; // null = not editing, 'new' = adding, string = editing existing
+
+    function loadCustomPolicies() {
+      fetch('api/custom-policies')
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          customPolicies = data.policies || [];
+          renderCustomPolicies();
+        })
+        .catch(function () {
+          customPolicies = [];
+          var container = document.getElementById('custom-policies-container');
+          if (!container) return;
+          container.textContent = '';
+          var err = document.createElement('div');
+          err.className = 'policy-empty';
+          err.textContent = 'Custom policies could not be loaded from the server.';
+          container.appendChild(err);
+        });
+    }
+
+    function renderCustomPolicies() {
       var container = document.getElementById('custom-policies-container');
       if (!container) return;
       container.textContent = '';
-      var err = document.createElement('div');
-      err.className = 'policy-empty';
-      err.textContent = 'Custom policies could not be loaded from the server.';
-      container.appendChild(err);
-    });
-}
 
-function renderCustomPolicies() {
-  var container = document.getElementById('custom-policies-container');
-  if (!container) return;
-  container.textContent = '';
+      // Show form if editing
+      if (editingPolicyId !== null) {
+        var isNew = editingPolicyId === 'new';
+        var existing = isNew ? null : customPolicies.find(function (p) { return p.id === editingPolicyId; });
 
-  // Show form if editing
-  if (editingPolicyId !== null) {
-    var isNew = editingPolicyId === 'new';
-    var existing = isNew ? null : customPolicies.find(function(p) { return p.id === editingPolicyId; });
+        var form = document.createElement('div');
+        form.className = 'policy-form';
 
-    var form = document.createElement('div');
-    form.className = 'policy-form';
+        var title = document.createElement('div');
+        title.className = 'policy-form-title';
+        title.textContent = isNew ? 'New Policy' : 'Edit Policy';
+        form.appendChild(title);
 
-    var title = document.createElement('div');
-    title.className = 'policy-form-title';
-    title.textContent = isNew ? 'New Policy' : 'Edit Policy';
-    form.appendChild(title);
+        var nameGroup = document.createElement('div');
+        nameGroup.className = 'policy-form-group';
+        var nameLabel = document.createElement('label');
+        nameLabel.className = 'policy-form-label';
+        nameLabel.htmlFor = 'policy-form-name';
+        nameLabel.textContent = 'Name';
+        nameGroup.appendChild(nameLabel);
+        var nameInput = document.createElement('input');
+        nameInput.className = 'policy-form-input';
+        nameInput.id = 'policy-form-name';
+        nameInput.type = 'text';
+        nameInput.placeholder = 'e.g. No PII in Logs';
+        nameInput.value = existing ? existing.name : '';
+        nameGroup.appendChild(nameInput);
+        form.appendChild(nameGroup);
 
-    var nameGroup = document.createElement('div');
-    nameGroup.className = 'policy-form-group';
-    var nameLabel = document.createElement('label');
-    nameLabel.className = 'policy-form-label';
-    nameLabel.htmlFor = 'policy-form-name';
-    nameLabel.textContent = 'Name';
-    nameGroup.appendChild(nameLabel);
-    var nameInput = document.createElement('input');
-    nameInput.className = 'policy-form-input';
-    nameInput.id = 'policy-form-name';
-    nameInput.type = 'text';
-    nameInput.placeholder = 'e.g. No PII in Logs';
-    nameInput.value = existing ? existing.name : '';
-    nameGroup.appendChild(nameInput);
-    form.appendChild(nameGroup);
+        var ruleGroup = document.createElement('div');
+        ruleGroup.className = 'policy-form-group';
+        var ruleLabel = document.createElement('label');
+        ruleLabel.className = 'policy-form-label';
+        ruleLabel.htmlFor = 'policy-form-rule';
+        ruleLabel.textContent = 'Rule';
+        ruleGroup.appendChild(ruleLabel);
+        var ruleInput = document.createElement('textarea');
+        ruleInput.className = 'policy-form-textarea';
+        ruleInput.id = 'policy-form-rule';
+        ruleInput.placeholder = 'Describe what this policy enforces...';
+        ruleInput.value = existing ? existing.rule : '';
+        ruleGroup.appendChild(ruleInput);
+        form.appendChild(ruleGroup);
 
-    var ruleGroup = document.createElement('div');
-    ruleGroup.className = 'policy-form-group';
-    var ruleLabel = document.createElement('label');
-    ruleLabel.className = 'policy-form-label';
-    ruleLabel.htmlFor = 'policy-form-rule';
-    ruleLabel.textContent = 'Rule';
-    ruleGroup.appendChild(ruleLabel);
-    var ruleInput = document.createElement('textarea');
-    ruleInput.className = 'policy-form-textarea';
-    ruleInput.id = 'policy-form-rule';
-    ruleInput.placeholder = 'Describe what this policy enforces...';
-    ruleInput.value = existing ? existing.rule : '';
-    ruleGroup.appendChild(ruleInput);
-    form.appendChild(ruleGroup);
+        var btns = document.createElement('div');
+        btns.className = 'policy-form-btns';
+        var saveBtn = document.createElement('button');
+        saveBtn.className = 'policy-form-save';
+        saveBtn.textContent = isNew ? 'Create Policy' : 'Save Changes';
+        saveBtn.onclick = function () { savePolicyForm(isNew, existing ? existing.id : null); };
+        btns.appendChild(saveBtn);
+        var cancelBtn = document.createElement('button');
+        cancelBtn.className = 'policy-form-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = function () { editingPolicyId = null; renderCustomPolicies(); };
+        btns.appendChild(cancelBtn);
+        form.appendChild(btns);
 
-    var btns = document.createElement('div');
-    btns.className = 'policy-form-btns';
-    var saveBtn = document.createElement('button');
-    saveBtn.className = 'policy-form-save';
-    saveBtn.textContent = isNew ? 'Create Policy' : 'Save Changes';
-    saveBtn.onclick = function() { savePolicyForm(isNew, existing ? existing.id : null); };
-    btns.appendChild(saveBtn);
-    var cancelBtn = document.createElement('button');
-    cancelBtn.className = 'policy-form-cancel';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.onclick = function() { editingPolicyId = null; renderCustomPolicies(); };
-    btns.appendChild(cancelBtn);
-    form.appendChild(btns);
+        container.appendChild(form);
 
-    container.appendChild(form);
+        // Focus the name input after render
+        setTimeout(function () { nameInput.focus(); }, 30);
+        return;
+      }
 
-    // Focus the name input after render
-    setTimeout(function() { nameInput.focus(); }, 30);
-    return;
-  }
+      // Policy list
+      if (customPolicies.length === 0) {
+        var emptyWrap = document.createElement('div');
+        emptyWrap.className = 'policy-empty';
+        emptyWrap.textContent = 'No custom policies defined';
+        var hint = document.createElement('div');
+        hint.className = 'policy-empty-hint';
+        hint.textContent = 'Custom policies let you define rules that will be enforced on agent behavior.';
+        emptyWrap.appendChild(hint);
+        container.appendChild(emptyWrap);
+      } else {
+        var list = document.createElement('div');
+        list.className = 'custom-policies-list';
 
-  // Policy list
-  if (customPolicies.length === 0) {
-    var emptyWrap = document.createElement('div');
-    emptyWrap.className = 'policy-empty';
-    emptyWrap.textContent = 'No custom policies defined';
-    var hint = document.createElement('div');
-    hint.className = 'policy-empty-hint';
-    hint.textContent = 'Custom policies let you define rules that will be enforced on agent behavior.';
-    emptyWrap.appendChild(hint);
-    container.appendChild(emptyWrap);
-  } else {
-    var list = document.createElement('div');
-    list.className = 'custom-policies-list';
+        customPolicies.forEach(function (policy) {
+          var item = document.createElement('div');
+          item.className = 'policy-item' + (policy.enabled ? '' : ' disabled-policy');
 
-    customPolicies.forEach(function(policy) {
-      var item = document.createElement('div');
-      item.className = 'policy-item' + (policy.enabled ? '' : ' disabled-policy');
+          var nameEl = document.createElement('div');
+          nameEl.className = 'policy-name';
+          nameEl.textContent = policy.name;
+          item.appendChild(nameEl);
 
-      var nameEl = document.createElement('div');
-      nameEl.className = 'policy-name';
-      nameEl.textContent = policy.name;
-      item.appendChild(nameEl);
+          var ruleEl = document.createElement('div');
+          ruleEl.className = 'policy-rule';
+          ruleEl.textContent = policy.rule;
+          item.appendChild(ruleEl);
 
-      var ruleEl = document.createElement('div');
-      ruleEl.className = 'policy-rule';
-      ruleEl.textContent = policy.rule;
-      item.appendChild(ruleEl);
+          var actions = document.createElement('div');
+          actions.className = 'policy-actions';
 
-      var actions = document.createElement('div');
-      actions.className = 'policy-actions';
+          // Toggle
+          var toggle = document.createElement('div');
+          toggle.className = 'policy-toggle-mini' + (policy.enabled ? ' on' : '');
+          toggle.title = policy.enabled ? 'Disable' : 'Enable';
+          toggle.setAttribute('role', 'switch');
+          toggle.tabIndex = 0;
+          toggle.setAttribute('aria-checked', policy.enabled ? 'true' : 'false');
+          toggle.setAttribute('aria-label', (policy.enabled ? 'Disable ' : 'Enable ') + policy.name);
+          toggle.onclick = function () { toggleCustomPolicy(policy.id); };
+          toggle.onkeydown = function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              toggleCustomPolicy(policy.id);
+            }
+          };
+          actions.appendChild(toggle);
 
-      // Toggle
-      var toggle = document.createElement('div');
-      toggle.className = 'policy-toggle-mini' + (policy.enabled ? ' on' : '');
-      toggle.title = policy.enabled ? 'Disable' : 'Enable';
-      toggle.setAttribute('role', 'switch');
-      toggle.tabIndex = 0;
-      toggle.setAttribute('aria-checked', policy.enabled ? 'true' : 'false');
-      toggle.setAttribute('aria-label', (policy.enabled ? 'Disable ' : 'Enable ') + policy.name);
-      toggle.onclick = function() { toggleCustomPolicy(policy.id); };
-      toggle.onkeydown = function(event) {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          toggleCustomPolicy(policy.id);
-        }
-      };
-      actions.appendChild(toggle);
+          // Edit
+          var editBtn = document.createElement('button');
+          editBtn.className = 'policy-action-btn';
+          editBtn.title = 'Edit';
+          editBtn.innerHTML = '&#9998;';
+          editBtn.onclick = function () { editingPolicyId = policy.id; renderCustomPolicies(); };
+          actions.appendChild(editBtn);
 
-      // Edit
-      var editBtn = document.createElement('button');
-      editBtn.className = 'policy-action-btn';
-      editBtn.title = 'Edit';
-      editBtn.innerHTML = '&#9998;';
-      editBtn.onclick = function() { editingPolicyId = policy.id; renderCustomPolicies(); };
-      actions.appendChild(editBtn);
+          // Delete
+          var delBtn = document.createElement('button');
+          delBtn.className = 'policy-action-btn delete';
+          delBtn.title = 'Delete';
+          delBtn.innerHTML = '&#10005;';
+          delBtn.onclick = function () { deleteCustomPolicy(policy.id); };
+          actions.appendChild(delBtn);
 
-      // Delete
-      var delBtn = document.createElement('button');
-      delBtn.className = 'policy-action-btn delete';
-      delBtn.title = 'Delete';
-      delBtn.innerHTML = '&#10005;';
-      delBtn.onclick = function() { deleteCustomPolicy(policy.id); };
-      actions.appendChild(delBtn);
+          item.appendChild(actions);
+          list.appendChild(item);
+        });
 
-      item.appendChild(actions);
-      list.appendChild(item);
-    });
+        container.appendChild(list);
+      }
 
-    container.appendChild(list);
-  }
+      // Add button
+      var addBtn = document.createElement('button');
+      addBtn.className = 'add-policy-btn';
+      addBtn.onclick = function () { editingPolicyId = 'new'; renderCustomPolicies(); };
+      var plusIcon = document.createElement('span');
+      plusIcon.className = 'plus-icon';
+      plusIcon.textContent = '+';
+      addBtn.appendChild(plusIcon);
+      var addLabel = document.createElement('span');
+      addLabel.textContent = 'Add Policy';
+      addBtn.appendChild(addLabel);
+      container.appendChild(addBtn);
+    }
 
-  // Add button
-  var addBtn = document.createElement('button');
-  addBtn.className = 'add-policy-btn';
-  addBtn.onclick = function() { editingPolicyId = 'new'; renderCustomPolicies(); };
-  var plusIcon = document.createElement('span');
-  plusIcon.className = 'plus-icon';
-  plusIcon.textContent = '+';
-  addBtn.appendChild(plusIcon);
-  var addLabel = document.createElement('span');
-  addLabel.textContent = 'Add Policy';
-  addBtn.appendChild(addLabel);
-  container.appendChild(addBtn);
-}
+    function savePolicyForm(isNew, existingId) {
+      var name = (document.getElementById('policy-form-name').value || '').trim();
+      var rule = (document.getElementById('policy-form-rule').value || '').trim();
+      if (!name || !rule) return;
 
-function savePolicyForm(isNew, existingId) {
-  var name = (document.getElementById('policy-form-name').value || '').trim();
-  var rule = (document.getElementById('policy-form-rule').value || '').trim();
-  if (!name || !rule) return;
+      if (isNew) {
+        fetch('api/custom-policies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, rule: rule, enabled: true })
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error();
+            return r.json();
+          })
+          .then(function () {
+            editingPolicyId = null;
+            loadCustomPolicies();
+          })
+          .catch(function () {
+            alert('Failed to create custom policy');
+          });
+        return;
+      }
 
-  if (isNew) {
-    fetch('api/custom-policies', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name: name, rule: rule, enabled: true})
-    })
-      .then(function(r) {
-        if (!r.ok) throw new Error();
-        return r.json();
+      var existing = customPolicies.find(function (p) { return p.id === existingId; });
+      if (!existing) return;
+
+      fetch('api/custom-policies/' + encodeURIComponent(existingId), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, rule: rule, enabled: existing.enabled })
       })
-      .then(function() {
-        editingPolicyId = null;
-        loadCustomPolicies();
+        .then(function (r) {
+          if (!r.ok) throw new Error();
+          return r.json();
+        })
+        .then(function () {
+          editingPolicyId = null;
+          loadCustomPolicies();
+        })
+        .catch(function () {
+          alert('Failed to save custom policy');
+        });
+    }
+
+    function toggleCustomPolicy(id) {
+      var p = customPolicies.find(function (x) { return x.id === id; });
+      if (!p) return;
+      fetch('api/custom-policies/' + encodeURIComponent(id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: p.name, rule: p.rule, enabled: !p.enabled })
       })
-      .catch(function() {
-        alert('Failed to create custom policy');
-      });
-    return;
-  }
+        .then(function (r) {
+          if (!r.ok) throw new Error();
+          return r.json();
+        })
+        .then(function () {
+          loadCustomPolicies();
+        })
+        .catch(function () {
+          alert('Failed to update policy');
+          loadCustomPolicies();
+        });
+    }
 
-  var existing = customPolicies.find(function(p) { return p.id === existingId; });
-  if (!existing) return;
+    function deleteCustomPolicy(id) {
+      fetch('api/custom-policies/' + encodeURIComponent(id), { method: 'DELETE' })
+        .then(function (r) {
+          if (r.status === 204) return;
+          throw new Error();
+        })
+        .then(function () {
+          if (editingPolicyId === id) editingPolicyId = null;
+          loadCustomPolicies();
+        })
+        .catch(function () {
+          alert('Failed to delete custom policy');
+        });
+    }
 
-  fetch('api/custom-policies/' + encodeURIComponent(existingId), {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name, rule: rule, enabled: existing.enabled})
-  })
-    .then(function(r) {
-      if (!r.ok) throw new Error();
-      return r.json();
-    })
-    .then(function() {
-      editingPolicyId = null;
-      loadCustomPolicies();
-    })
-    .catch(function() {
-      alert('Failed to save custom policy');
-    });
-}
-
-function toggleCustomPolicy(id) {
-  var p = customPolicies.find(function(x) { return x.id === id; });
-  if (!p) return;
-  fetch('api/custom-policies/' + encodeURIComponent(id), {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: p.name, rule: p.rule, enabled: !p.enabled})
-  })
-    .then(function(r) {
-      if (!r.ok) throw new Error();
-      return r.json();
-    })
-    .then(function() {
-      loadCustomPolicies();
-    })
-    .catch(function() {
-      alert('Failed to update policy');
-      loadCustomPolicies();
-    });
-}
-
-function deleteCustomPolicy(id) {
-  fetch('api/custom-policies/' + encodeURIComponent(id), {method: 'DELETE'})
-    .then(function(r) {
-      if (r.status === 204) return;
-      throw new Error();
-    })
-    .then(function() {
-      if (editingPolicyId === id) editingPolicyId = null;
-      loadCustomPolicies();
-    })
-    .catch(function() {
-      alert('Failed to delete custom policy');
-    });
-}
-
-// Auto-select view on load
-setView(currentView);
-refresh();
-setInterval(refresh, 2000);
-fetchPolicy();
-loadCustomPolicies();
-setInterval(fetchPolicy, 5000);
-</script>
+    // Auto-select view on load
+    setView(currentView);
+    refresh();
+    setInterval(refresh, 2000);
+    fetchPolicy();
+    loadCustomPolicies();
+    setInterval(fetchPolicy, 5000);
+  </script>
 </body>
+
 </html>
