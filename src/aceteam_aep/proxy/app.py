@@ -171,12 +171,13 @@ async def _evaluate_policy_via_llm(
                 if isinstance(b, dict) and b.get("type") == "text"
             )
         else:
+            # gpt-5 family uses max_completion_tokens and does not accept
+            # a temperature field (see providers/openai.py).
             resp = await client.post(
                 f"{base}/v1/chat/completions",
                 json={
-                    "model": "gpt-4o-mini",
-                    "max_tokens": 2,
-                    "temperature": 0,
+                    "model": "gpt-5-nano",
+                    "max_completion_tokens": 2,
                     "messages": [
                         {"role": "system", "content": spec},
                         {"role": "user", "content": text},
