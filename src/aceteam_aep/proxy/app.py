@@ -43,6 +43,44 @@ log = logging.getLogger(__name__)
 _ANTHROPIC_STYLE = frozenset({"claude", "anthropic"})
 
 
+async def _read_json_body(request: Request) -> tuple[Any | None, Response | None]:
+    try:
+        return await request.json(), None
+    except Exception:
+        return None, Response(
+            '{"error": "invalid JSON"}', status_code=400, media_type="application/json"
+        )
+
+
+def _parse_custom_policy_write_fields(body: Any) -> dict[str, Any] | JSONResponse:
+    """Require a JSON object with exactly ``name``, ``rule``, and ``enabled``."""
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
+    if set(fields.keys()) != {"name", "rule", "enabled"}:
+        return JSONResponse(
+            {"error": "name, rule, and enabled are required"},
+            status_code=400,
+        )
+    return fields
+
+
+def _custom_policy_from_write_fields(
+    fields: dict[str, Any], *, policy_id: str | None = None
+) -> CustomPolicy | JSONResponse:
+    """Build a ``CustomPolicy`` from parsed fields; POST omits ``policy_id`` (new uuid)."""
+    payload = dict(fields)
+    if policy_id is not None:
+        payload["id"] = policy_id
+    try:
+        return CustomPolicy.model_validate(payload)
+    except ValidationError as exc:
+        return JSONResponse(
+            {"error": "validation failed", "detail": exc.errors()},
+            status_code=422,
+        )
+
+
 def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
     """Extract text content from OpenAI-format messages."""
     parts: list[str] = []
@@ -820,28 +858,15 @@ def create_proxy_app(
                 media_type="application/json",
             )
 
-        try:
-            body = await request.json()
-        except Exception:
-            return Response(
-                '{"error": "invalid JSON"}', status_code=400, media_type="application/json"
-            )
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-
-        fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
-        if set(fields.keys()) != {"name", "rule", "enabled"}:
-            return JSONResponse(
-                {"error": "name, rule, and enabled are required"},
-                status_code=400,
-            )
-        try:
-            policy = CustomPolicy.model_validate(fields)
-        except ValidationError as exc:
-            return JSONResponse(
-                {"error": "validation failed", "detail": exc.errors()},
-                status_code=422,
-            )
+        body, json_err = await _read_json_body(request)
+        if json_err is not None:
+            return json_err
+        fields = _parse_custom_policy_write_fields(body)
+        if isinstance(fields, JSONResponse):
+            return fields
+        policy = _custom_policy_from_write_fields(fields, policy_id=None)
+        if isinstance(policy, JSONResponse):
+            return policy
         state.custom_policies[policy.id] = policy
         return Response(
             json.dumps(policy.model_dump()),
@@ -868,30 +893,17 @@ def create_proxy_app(
             return Response(status_code=204)
 
         # PUT — replace name, rule, enabled (id fixed from URL)
-        try:
-            body = await request.json()
-        except Exception:
-            return Response(
-                '{"error": "invalid JSON"}', status_code=400, media_type="application/json"
-            )
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-
-        fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
-        if set(fields.keys()) != {"name", "rule", "enabled"}:
-            return JSONResponse(
-                {"error": "name, rule, and enabled are required"},
-                status_code=400,
-            )
+        body, json_err = await _read_json_body(request)
+        if json_err is not None:
+            return json_err
+        fields = _parse_custom_policy_write_fields(body)
+        if isinstance(fields, JSONResponse):
+            return fields
         if policy_id not in state.custom_policies:
             return JSONResponse({"error": "custom policy not found"}, status_code=404)
-        try:
-            updated = CustomPolicy.model_validate({**fields, "id": policy_id})
-        except ValidationError as exc:
-            return JSONResponse(
-                {"error": "validation failed", "detail": exc.errors()},
-                status_code=422,
-            )
+        updated = _custom_policy_from_write_fields(fields, policy_id=policy_id)
+        if isinstance(updated, JSONResponse):
+            return updated
         state.custom_policies[policy_id] = updated
         return Response(json.dumps(updated.model_dump()), media_type="application/json")
 
