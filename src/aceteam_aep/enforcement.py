@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .safety.base import SafetySignal
+from .safety.base import SafetyDetector, SafetySignal
 
 
 @dataclass(frozen=True)
@@ -171,7 +171,7 @@ def evaluate(signals: list[SafetySignal], policy: EnforcementPolicy) -> Enforcem
     )
 
 
-def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
+def build_detectors_from_policy(policy: EnforcementPolicy) -> list[SafetyDetector]:
     """Create detectors with config applied from policy overrides.
 
     Respects enabled/disabled, threshold, and detector-specific extra params.
@@ -179,7 +179,7 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
     from .safety.agent_threat import AgentThreatDetector
     from .safety.cost_anomaly import CostAnomalyDetector
 
-    detectors: list[Any] = []
+    detectors: list[SafetyDetector] = []
 
     # Cost anomaly
     cost_cfg = policy.overrides.get("cost_anomaly")
@@ -209,9 +209,7 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[Any]:
             from .safety.content import ContentSafetyDetector
 
             threshold = (
-                content_cfg.threshold
-                if content_cfg and content_cfg.threshold is not None
-                else 0.7
+                content_cfg.threshold if content_cfg and content_cfg.threshold is not None else 0.7
             )
             detectors.append(ContentSafetyDetector(threshold=threshold))
         except Exception:
