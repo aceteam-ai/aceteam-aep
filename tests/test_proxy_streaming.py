@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from aceteam_aep.proxy.app import _ensure_openai_stream_usage
 from aceteam_aep.proxy.streaming import _accumulate_stream_chunks, _parse_sse_line
 
 
@@ -58,3 +59,21 @@ def test_accumulate_no_usage() -> None:
     assert text == "Hi"
     assert inp == 0  # no usage chunk
     assert out == 0
+
+
+def test_ensure_openai_stream_usage_sets_include_usage() -> None:
+    body: dict = {"model": "gpt-4o", "messages": [], "stream": True}
+    _ensure_openai_stream_usage(body, "/v1/chat/completions")
+    assert body["stream_options"]["include_usage"] is True
+
+
+def test_ensure_openai_stream_usage_skips_non_chat_path() -> None:
+    body: dict = {"stream": True}
+    _ensure_openai_stream_usage(body, "/v1/embeddings")
+    assert "stream_options" not in body
+
+
+def test_ensure_openai_stream_usage_skips_non_stream() -> None:
+    body: dict = {"stream": False}
+    _ensure_openai_stream_usage(body, "/v1/chat/completions")
+    assert "stream_options" not in body
