@@ -35,7 +35,6 @@ from ..safety.custom import (
     CustomSafetyDetector,
     default_custom_policies,
 )
-from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
@@ -271,7 +270,6 @@ def _default_proxy_detectors() -> Sequence[SafetyDetector]:
     return (
         CostAnomalyDetector(),
         AgentThreatDetector(),
-        PiiDetector(),
         ContentSafetyDetector(),
     )
 
