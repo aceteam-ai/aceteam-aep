@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -28,6 +29,7 @@ from ..safety.agent_threat import AgentThreatDetector
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.content import ContentSafetyDetector
 from ..safety.cost_anomaly import CostAnomalyDetector
+from ..safety.custom import CustomPolicy
 from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
@@ -39,6 +41,44 @@ log = logging.getLogger(__name__)
 
 # Models where usage field uses different names
 _ANTHROPIC_STYLE = frozenset({"claude", "anthropic"})
+
+
+async def _read_json_body(request: Request) -> tuple[Any | None, Response | None]:
+    try:
+        return await request.json(), None
+    except Exception:
+        return None, Response(
+            '{"error": "invalid JSON"}', status_code=400, media_type="application/json"
+        )
+
+
+def _parse_custom_policy_write_fields(body: Any) -> dict[str, Any] | JSONResponse:
+    """Require a JSON object with exactly ``name``, ``rule``, and ``enabled``."""
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    fields = {k: body[k] for k in ("name", "rule", "enabled") if k in body}
+    if set(fields.keys()) != {"name", "rule", "enabled"}:
+        return JSONResponse(
+            {"error": "name, rule, and enabled are required"},
+            status_code=400,
+        )
+    return fields
+
+
+def _custom_policy_from_write_fields(
+    fields: dict[str, Any], *, policy_id: str | None = None
+) -> CustomPolicy | JSONResponse:
+    """Build a ``CustomPolicy`` from parsed fields; POST omits ``policy_id`` (new uuid)."""
+    payload = dict(fields)
+    if policy_id is not None:
+        payload["id"] = policy_id
+    try:
+        return CustomPolicy.model_validate(payload)
+    except ValidationError as exc:
+        return JSONResponse(
+            {"error": "validation failed", "detail": exc.errors()},
+            status_code=422,
+        )
 
 
 def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
@@ -99,6 +139,7 @@ class ProxyState:
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
         self.safety_enabled = True
+        self.custom_policies: dict[str, CustomPolicy] = {}
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -617,7 +658,10 @@ def create_proxy_app(
         # Debug: log the response
         if debug:
             log.debug(
-                "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, status=%d, body=%s",
+                (
+                    "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, "
+                    "status=%d, body=%s"
+                ),
                 call_id,
                 request.method,
                 path,
@@ -799,11 +843,85 @@ def create_proxy_app(
             media_type="application/json",
         )
 
+    def _normalize_policy_id(policy_id: str) -> str | None:
+        try:
+            return str(uuid.UUID(policy_id))
+        except ValueError:
+            return None
+
+    # Custom policies CRUD (collection + item routes below).
+    async def custom_policies_collection_handler(request: Request) -> Response:
+        if request.method == "GET":
+            policies = [p.model_dump() for p in state.custom_policies.values()]
+            return Response(
+                json.dumps({"policies": policies}),
+                media_type="application/json",
+            )
+
+        body, json_err = await _read_json_body(request)
+        if json_err is not None:
+            return json_err
+        fields = _parse_custom_policy_write_fields(body)
+        if isinstance(fields, JSONResponse):
+            return fields
+        policy = _custom_policy_from_write_fields(fields, policy_id=None)
+        if isinstance(policy, JSONResponse):
+            return policy
+        state.custom_policies[policy.id] = policy
+        return Response(
+            json.dumps(policy.model_dump()),
+            status_code=201,
+            media_type="application/json",
+        )
+
+    async def custom_policy_item_handler(request: Request) -> Response:
+        raw_id = request.path_params["policy_id"]
+        policy_id = _normalize_policy_id(raw_id)
+        if policy_id is None:
+            return JSONResponse({"error": "invalid policy id"}, status_code=400)
+
+        if request.method == "GET":
+            policy = state.custom_policies.get(policy_id)
+            if policy is None:
+                return JSONResponse({"error": "custom policy not found"}, status_code=404)
+            return Response(json.dumps(policy.model_dump()), media_type="application/json")
+
+        if request.method == "DELETE":
+            if policy_id not in state.custom_policies:
+                return JSONResponse({"error": "custom policy not found"}, status_code=404)
+            del state.custom_policies[policy_id]
+            return Response(status_code=204)
+
+        # PUT — replace name, rule, enabled (id fixed from URL)
+        body, json_err = await _read_json_body(request)
+        if json_err is not None:
+            return json_err
+        fields = _parse_custom_policy_write_fields(body)
+        if isinstance(fields, JSONResponse):
+            return fields
+        if policy_id not in state.custom_policies:
+            return JSONResponse({"error": "custom policy not found"}, status_code=404)
+        updated = _custom_policy_from_write_fields(fields, policy_id=policy_id)
+        if isinstance(updated, JSONResponse):
+            return updated
+        state.custom_policies[policy_id] = updated
+        return Response(json.dumps(updated.model_dump()), media_type="application/json")
+
     routes.extend(
         [
             Route("/aep/api/feedback", feedback_handler, methods=["POST"]),
             Route("/aep/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
             Route("/aep/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
+            Route(
+                "/aep/api/custom-policies/{policy_id}",
+                custom_policy_item_handler,
+                methods=["GET", "PUT", "DELETE"],
+            ),
+            Route(
+                "/aep/api/custom-policies",
+                custom_policies_collection_handler,
+                methods=["GET", "POST"],
+            ),
         ]
     )
 
