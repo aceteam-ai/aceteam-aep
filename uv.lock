@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "aceteam-aep"
-version = "0.7.0"
+version = "0.8.3"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -73,14 +73,15 @@ proxy = [
     { name = "jinja2" },
     { name = "programasweights" },
     { name = "starlette" },
-    { name = "torch" },
-    { name = "transformers" },
     { name = "uvicorn" },
 ]
 safety = [
     { name = "programasweights" },
     { name = "torch" },
     { name = "transformers" },
+]
+safety-lite = [
+    { name = "programasweights" },
 ]
 top = [
     { name = "rich" },
@@ -95,7 +96,7 @@ yaml = [
 [package.metadata]
 requires-dist = [
     { name = "aceteam-aep", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "aceteam-aep", extras = ["dashboard", "safety"], marker = "extra == 'proxy'" },
+    { name = "aceteam-aep", extras = ["dashboard", "safety-lite"], marker = "extra == 'proxy'" },
     { name = "aceteam-aep", extras = ["xai", "ollama", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events"], marker = "extra == 'all'" },
     { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
     { name = "anyio", specifier = ">=4.12" },
@@ -110,6 +111,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'xai'", specifier = ">=1.65.0,<2.0.0" },
     { name = "overrides", specifier = ">=7.7.0" },
     { name = "programasweights", marker = "extra == 'safety'", specifier = ">=0.4.2" },
+    { name = "programasweights", marker = "extra == 'safety-lite'", specifier = ">=0.4.2" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -123,7 +125,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'safety'", specifier = ">=4.40" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30" },
 ]
-provides-extras = ["xai", "ollama", "safety", "dashboard", "proxy", "events", "mcp", "yaml", "feedback", "top", "all", "dev"]
+provides-extras = ["xai", "ollama", "safety", "safety-lite", "dashboard", "proxy", "events", "mcp", "yaml", "feedback", "top", "all", "dev"]
 
 [[package]]
 name = "aiofile"
