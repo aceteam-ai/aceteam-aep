@@ -1288,7 +1288,7 @@
       margin-bottom: 8px;
     }
 
-    /* ── Policy Tester (quick PAW evaluation in-browser) ── */
+    /* ── Policy Tester (evaluate a custom policy against text in-browser) ── */
     .tester-row {
       display: flex;
       gap: 10px;
@@ -1473,10 +1473,9 @@
     <div class="section" id="policy-tester-section" style="animation-delay: 0.24s;">
       <h2>Policy Tester</h2>
       <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px;">
-        Evaluate a natural-language policy against arbitrary text — like
-        <a href="https://programasweights.com/browser" target="_blank" rel="noopener"
-          style="color:var(--accent-cyan);">programasweights.com/browser</a>, but against
-        the rules you've defined above. No agent needed.
+        Evaluate a natural-language policy against arbitrary text, without
+        running an agent. Pick one of the rules defined above, paste in a
+        sample, and see whether it passes or gets flagged.
       </p>
       <div class="tester-row">
         <select class="tester-select" id="tester-policy"></select>
