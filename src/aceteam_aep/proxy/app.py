@@ -29,7 +29,7 @@ from ..safety.agent_threat import AgentThreatDetector
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.content import ContentSafetyDetector
 from ..safety.cost_anomaly import CostAnomalyDetector
-from ..safety.custom import CustomPolicy
+from ..safety.custom import CustomPolicy, CustomPolicyStore, CustomSafetyDetector
 from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
@@ -139,14 +139,26 @@ class ProxyState:
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
         self.safety_enabled = True
-        self.custom_policies: dict[str, CustomPolicy] = {}
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
         )
 
-        # Register detectors
-        for det in detectors or _default_proxy_detectors():
+        to_register: list[SafetyDetector] = list(
+            detectors if detectors is not None else _default_proxy_detectors()
+        )
+        custom_dets = [d for d in to_register if isinstance(d, CustomSafetyDetector)]
+        if len(custom_dets) > 1:
+            raise ValueError(
+                "At most one CustomSafetyDetector may be supplied; "
+                f"found {len(custom_dets)} instances"
+            )
+        if custom_dets:
+            self.custom_policy_store = custom_dets[0].store
+        else:
+            self.custom_policy_store = CustomPolicyStore()
+            to_register.append(CustomSafetyDetector(self.custom_policy_store))
+        for det in to_register:
             self.registry.add(det)
 
     @property
@@ -852,7 +864,7 @@ def create_proxy_app(
     # Custom policies CRUD (collection + item routes below).
     async def custom_policies_collection_handler(request: Request) -> Response:
         if request.method == "GET":
-            policies = [p.model_dump() for p in state.custom_policies.values()]
+            policies = [p.model_dump() for p in state.custom_policy_store.all()]
             return Response(
                 json.dumps({"policies": policies}),
                 media_type="application/json",
@@ -867,7 +879,7 @@ def create_proxy_app(
         policy = _custom_policy_from_write_fields(fields, policy_id=None)
         if isinstance(policy, JSONResponse):
             return policy
-        state.custom_policies[policy.id] = policy
+        state.custom_policy_store.upsert(policy)
         return Response(
             json.dumps(policy.model_dump()),
             status_code=201,
@@ -881,15 +893,15 @@ def create_proxy_app(
             return JSONResponse({"error": "invalid policy id"}, status_code=400)
 
         if request.method == "GET":
-            policy = state.custom_policies.get(policy_id)
+            policy = state.custom_policy_store.get(policy_id)
             if policy is None:
                 return JSONResponse({"error": "custom policy not found"}, status_code=404)
             return Response(json.dumps(policy.model_dump()), media_type="application/json")
 
         if request.method == "DELETE":
-            if policy_id not in state.custom_policies:
+            if state.custom_policy_store.get(policy_id) is None:
                 return JSONResponse({"error": "custom policy not found"}, status_code=404)
-            del state.custom_policies[policy_id]
+            state.custom_policy_store.delete(policy_id)
             return Response(status_code=204)
 
         # PUT — replace name, rule, enabled (id fixed from URL)
@@ -899,12 +911,12 @@ def create_proxy_app(
         fields = _parse_custom_policy_write_fields(body)
         if isinstance(fields, JSONResponse):
             return fields
-        if policy_id not in state.custom_policies:
+        if state.custom_policy_store.get(policy_id) is None:
             return JSONResponse({"error": "custom policy not found"}, status_code=404)
         updated = _custom_policy_from_write_fields(fields, policy_id=policy_id)
         if isinstance(updated, JSONResponse):
             return updated
-        state.custom_policies[policy_id] = updated
+        state.custom_policy_store.upsert(updated)
         return Response(json.dumps(updated.model_dump()), media_type="application/json")
 
     routes.extend(
