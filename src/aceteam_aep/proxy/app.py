@@ -147,12 +147,14 @@ class ProxyState:
         to_register: list[SafetyDetector] = list(
             detectors if detectors is not None else _default_proxy_detectors()
         )
-        existing_custom = next(
-            (d for d in to_register if isinstance(d, CustomSafetyDetector)),
-            None,
-        )
-        if existing_custom is not None:
-            self.custom_policy_store = existing_custom.store
+        custom_dets = [d for d in to_register if isinstance(d, CustomSafetyDetector)]
+        if len(custom_dets) > 1:
+            raise ValueError(
+                "At most one CustomSafetyDetector may be supplied; "
+                f"found {len(custom_dets)} instances"
+            )
+        if custom_dets:
+            self.custom_policy_store = custom_dets[0].store
         else:
             self.custom_policy_store = CustomPolicyStore()
             to_register.append(CustomSafetyDetector(self.custom_policy_store))

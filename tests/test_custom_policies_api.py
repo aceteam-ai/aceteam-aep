@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
 
+import pytest
 from starlette.testclient import TestClient
 
 from aceteam_aep.proxy.app import create_proxy_app
-from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.base import SafetyDetector, SafetySignal
+from aceteam_aep.safety.custom import CustomPolicyStore, CustomSafetyDetector
 
 
-class _NoopDetector:
+class _NoopDetector(SafetyDetector):
     name = "noop"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
-        return []
+    async def check(self, **kwargs) -> Sequence[SafetySignal]:
+        return ()
 
 
 class TestCustomPoliciesAPI:
@@ -96,3 +98,14 @@ class TestCustomPoliciesAPI:
         )
         assert r.status_code == 201
         assert r.json()["id"] != "00000000-0000-0000-0000-000000000001"
+
+    def test_rejects_multiple_custom_safety_detectors(self) -> None:
+        store = CustomPolicyStore()
+        with pytest.raises(ValueError, match="At most one CustomSafetyDetector"):
+            create_proxy_app(
+                detectors=[
+                    CustomSafetyDetector(store),
+                    CustomSafetyDetector(CustomPolicyStore()),
+                ],
+                dashboard=False,
+            )
