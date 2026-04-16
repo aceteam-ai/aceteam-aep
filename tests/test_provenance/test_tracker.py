@@ -15,8 +15,10 @@ def test_record_and_get_sources() -> None:
 def test_get_citations() -> None:
     tracker = ProvenanceTracker()
     src = SourceRef(
-        source_type="tool_call", source_id="tool:call_1",
-        content_preview="Revenue $4.2M", confidence=0.85,
+        source_type="tool_call",
+        source_id="tool:call_1",
+        content_preview="Revenue $4.2M",
+        confidence=0.85,
     )
     tracker.record_sources("call-a", [src])
     citations = tracker.get_citations("call-a")
@@ -27,12 +29,18 @@ def test_get_citations() -> None:
 
 def test_get_all_citations() -> None:
     tracker = ProvenanceTracker()
-    tracker.record_sources("call-a", [
-        SourceRef(source_type="tool_call", source_id="t1", content_preview="A"),
-    ])
-    tracker.record_sources("call-b", [
-        SourceRef(source_type="url", source_id="u1", content_preview="B"),
-    ])
+    tracker.record_sources(
+        "call-a",
+        [
+            SourceRef(source_type="tool_call", source_id="t1", content_preview="A"),
+        ],
+    )
+    tracker.record_sources(
+        "call-b",
+        [
+            SourceRef(source_type="url", source_id="u1", content_preview="B"),
+        ],
+    )
     all_citations = tracker.get_all_citations()
     assert len(all_citations) == 2
 
@@ -40,8 +48,11 @@ def test_get_all_citations() -> None:
 def test_source_count() -> None:
     tracker = ProvenanceTracker()
     assert tracker.source_count == 0
-    tracker.record_sources("c1", [
-        SourceRef(source_type="a", source_id="1", content_preview=""),
-        SourceRef(source_type="b", source_id="2", content_preview=""),
-    ])
+    tracker.record_sources(
+        "c1",
+        [
+            SourceRef(source_type="a", source_id="1", content_preview=""),
+            SourceRef(source_type="b", source_id="2", content_preview=""),
+        ],
+    )
     assert tracker.source_count == 2

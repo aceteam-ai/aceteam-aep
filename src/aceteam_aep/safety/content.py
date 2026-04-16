@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
-from .base import SafetySignal
+from .base import SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
 
-class ContentSafetyDetector:
+class ContentSafetyDetector(SafetyDetector):
     """Classifies text as safe/unsafe using a small local toxicity model.
 
     Model is lazy-loaded on first check() call. If transformers is not
@@ -47,8 +48,13 @@ class ContentSafetyDetector:
             self._available = False
 
     def check(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-    ) -> list[SafetySignal]:
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> Sequence[SafetySignal]:
         if not self._load_attempted:
             self._load()
         if not self._available:

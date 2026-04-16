@@ -1,4 +1,5 @@
 """Tests for AEP Redis event publisher."""
+
 import json
 from unittest.mock import AsyncMock, patch
 

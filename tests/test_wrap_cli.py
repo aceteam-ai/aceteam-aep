@@ -10,7 +10,16 @@ class TestWrapCLI:
     def test_wrap_runs_command_and_exits(self):
         """wrap should run a command and return its exit code."""
         result = subprocess.run(
-            [sys.executable, "-m", "aceteam_aep.proxy.cli", "wrap", "--no-safety", "--", "echo", "hello"],
+            [
+                sys.executable,
+                "-m",
+                "aceteam_aep.proxy.cli",
+                "wrap",
+                "--no-safety",
+                "--",
+                "echo",
+                "hello",
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -21,7 +30,16 @@ class TestWrapCLI:
     def test_wrap_shows_summary(self):
         """wrap should print AEP Summary after command exits."""
         result = subprocess.run(
-            [sys.executable, "-m", "aceteam_aep.proxy.cli", "wrap", "--no-safety", "--", "echo", "done"],
+            [
+                sys.executable,
+                "-m",
+                "aceteam_aep.proxy.cli",
+                "wrap",
+                "--no-safety",
+                "--",
+                "echo",
+                "done",
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -32,8 +50,15 @@ class TestWrapCLI:
         """wrap should set OPENAI_BASE_URL for the child process."""
         result = subprocess.run(
             [
-                sys.executable, "-m", "aceteam_aep.proxy.cli", "wrap", "--no-safety", "--",
-                sys.executable, "-c", "import os; print(os.environ.get('OPENAI_BASE_URL', 'NOT SET'))",
+                sys.executable,
+                "-m",
+                "aceteam_aep.proxy.cli",
+                "wrap",
+                "--no-safety",
+                "--",
+                sys.executable,
+                "-c",
+                "import os; print(os.environ.get('OPENAI_BASE_URL', 'NOT SET'))",
             ],
             capture_output=True,
             text=True,
@@ -46,8 +71,15 @@ class TestWrapCLI:
         """wrap should forward the child process exit code."""
         result = subprocess.run(
             [
-                sys.executable, "-m", "aceteam_aep.proxy.cli", "wrap", "--no-safety", "--",
-                sys.executable, "-c", "import sys; sys.exit(42)",
+                sys.executable,
+                "-m",
+                "aceteam_aep.proxy.cli",
+                "wrap",
+                "--no-safety",
+                "--",
+                sys.executable,
+                "-c",
+                "import sys; sys.exit(42)",
             ],
             capture_output=True,
             text=True,

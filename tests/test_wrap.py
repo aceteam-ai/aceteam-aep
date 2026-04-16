@@ -13,7 +13,6 @@ from aceteam_aep.enforcement import EnforcementPolicy
 from aceteam_aep.safety.base import SafetySignal
 from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
 
-
 # ---------------------------------------------------------------------------
 # Helpers — fake OpenAI / Anthropic response objects
 # ---------------------------------------------------------------------------
@@ -91,9 +90,7 @@ def test_wrap_raises_on_unknown_client() -> None:
 
 
 def test_openai_cost_recorded() -> None:
-    client = _make_openai_client(
-        _make_openai_response(input_tokens=100, output_tokens=200)
-    )
+    client = _make_openai_client(_make_openai_response(input_tokens=100, output_tokens=200))
     wrap(client, detectors=_FAST_DETECTORS)
     client.chat.completions.create(
         model="gpt-4o",
@@ -112,9 +109,7 @@ def test_openai_spans_recorded() -> None:
 
 
 def test_openai_multiple_calls_accumulate() -> None:
-    client = _make_openai_client(
-        _make_openai_response(input_tokens=50, output_tokens=50)
-    )
+    client = _make_openai_client(_make_openai_response(input_tokens=50, output_tokens=50))
     wrap(client, detectors=_FAST_DETECTORS)
     client.chat.completions.create(model="gpt-4o", messages=[])
     client.chat.completions.create(model="gpt-4o", messages=[])
@@ -164,9 +159,7 @@ def test_anthropic_spans_recorded() -> None:
 def test_pii_detection_ssn() -> None:
     from aceteam_aep.safety.pii import PiiDetector
 
-    client = _make_openai_client(
-        _make_openai_response(content="Your SSN is 123-45-6789.")
-    )
+    client = _make_openai_client(_make_openai_response(content="Your SSN is 123-45-6789."))
     wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
     client.chat.completions.create(model="gpt-4o", messages=[])
     signals = client.aep.safety_signals
@@ -188,9 +181,7 @@ def test_pii_detection_email() -> None:
 def test_no_false_positive_on_clean_output() -> None:
     from aceteam_aep.safety.pii import PiiDetector
 
-    client = _make_openai_client(
-        _make_openai_response(content="The capital of France is Paris.")
-    )
+    client = _make_openai_client(_make_openai_response(content="The capital of France is Paris."))
     wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
     client.chat.completions.create(model="gpt-4o", messages=[])
     signals = client.aep.safety_signals
@@ -225,9 +216,7 @@ def test_no_cost_anomaly_with_fewer_than_3_calls() -> None:
     client = _make_openai_client(expensive)
     wrap(client, detectors=[CostAnomalyDetector()])
     client.chat.completions.create(model="gpt-4o", messages=[])
-    assert not any(
-        s.signal_type == "cost_anomaly" for s in client.aep.safety_signals
-    )
+    assert not any(s.signal_type == "cost_anomaly" for s in client.aep.safety_signals)
 
 
 # ---------------------------------------------------------------------------
@@ -245,9 +234,7 @@ def test_enforcement_defaults_to_pass() -> None:
 def test_enforcement_blocks_on_pii() -> None:
     from aceteam_aep.safety.pii import PiiDetector
 
-    client = _make_openai_client(
-        _make_openai_response(content="SSN: 123-45-6789")
-    )
+    client = _make_openai_client(_make_openai_response(content="SSN: 123-45-6789"))
     wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")])
     client.chat.completions.create(model="gpt-4o", messages=[])
     assert client.aep.enforcement.action == "block"
@@ -258,9 +245,7 @@ def test_custom_policy() -> None:
 
     # Allow PII — custom policy that doesn't block on anything
     policy = EnforcementPolicy(block_on=frozenset(), flag_on=frozenset())
-    client = _make_openai_client(
-        _make_openai_response(content="SSN: 123-45-6789")
-    )
+    client = _make_openai_client(_make_openai_response(content="SSN: 123-45-6789"))
     wrap(
         client,
         detectors=[PiiDetector(model_name="nonexistent/force-regex-fallback")],

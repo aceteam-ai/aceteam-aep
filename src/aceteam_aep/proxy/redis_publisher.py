@@ -6,13 +6,14 @@ When AEP_REDIS_URL is set, each request/response cycle publishes an event to:
 
 When AEP_REDIS_URL is absent, all functions are no-ops.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ def build_event(
         tokens_out=tokens_out,
         detector=detector,
         severity=severity,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
     )
 
 

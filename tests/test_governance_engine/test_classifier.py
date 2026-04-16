@@ -33,7 +33,8 @@ def test_as_safety_detector() -> None:
     """DataClassifier implements SafetyDetector protocol."""
     c = DataClassifier()
     signals = c.check(
-        input_text="", output_text="Patient diagnosis report",
+        input_text="",
+        output_text="Patient diagnosis report",
         call_id="t1",
     )
     assert len(signals) == 1
@@ -44,7 +45,8 @@ def test_as_safety_detector() -> None:
 def test_public_text_no_signal() -> None:
     c = DataClassifier()
     signals = c.check(
-        input_text="", output_text="The capital of France is Paris.",
+        input_text="",
+        output_text="The capital of France is Paris.",
         call_id="t1",
     )
     assert signals == []

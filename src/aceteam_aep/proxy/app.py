@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -23,11 +24,15 @@ from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate
-from ..safety.base import DetectorRegistry, SafetySignal
+from ..safety.agent_threat import AgentThreatDetector
+from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
+from ..safety.content import ContentSafetyDetector
 from ..safety.cost_anomaly import CostAnomalyDetector
+from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
+from .logutil import configure_proxy_debug_logging
 from .redis_publisher import build_event, publish_event
 
 log = logging.getLogger(__name__)
@@ -76,7 +81,7 @@ class ProxyState:
     def __init__(
         self,
         target_base_url: str = "https://api.openai.com",
-        detectors: list[Any] | None = None,
+        detectors: Sequence[SafetyDetector] | None = None,
         policy: EnforcementPolicy | dict[str, Any] | str | None = None,
         budget: float | None = None,
         budget_per_session: float | None = None,
@@ -136,7 +141,7 @@ class ProxyState:
         """Estimated cost saved by blocking calls before they reach the LLM."""
         if not self._call_costs:
             return Decimal("0")
-        avg = sum(self._call_costs) / len(self._call_costs)
+        avg = Decimal(sum(self._call_costs) / len(self._call_costs))
         return avg * self.blocked_count
 
     def _cost_by_span_id(self) -> dict[str, float]:
@@ -195,9 +200,7 @@ class ProxyState:
             "savings": {
                 "blocked_calls": self.blocked_count,
                 "estimated_savings_usd": float(self.estimated_savings),
-                "avg_call_cost_usd": float(
-                    sum(self._call_costs) / len(self._call_costs)
-                )
+                "avg_call_cost_usd": float(sum(self._call_costs) / len(self._call_costs))
                 if self._call_costs
                 else 0.0,
             },
@@ -205,35 +208,26 @@ class ProxyState:
         }
 
 
-def _default_proxy_detectors() -> list[Any]:
+def _default_proxy_detectors() -> Sequence[SafetyDetector]:
     """Default detectors for the proxy."""
-    from ..safety.agent_threat import AgentThreatDetector
-
-    detectors: list[Any] = [CostAnomalyDetector(), AgentThreatDetector()]
-    try:
-        from ..safety.pii import PiiDetector
-
-        detectors.append(PiiDetector())
-    except Exception:
-        pass
-    try:
-        from ..safety.content import ContentSafetyDetector
-
-        detectors.append(ContentSafetyDetector())
-    except Exception:
-        pass
-    return detectors
+    return (
+        CostAnomalyDetector(),
+        AgentThreatDetector(),
+        PiiDetector(),
+        ContentSafetyDetector(),
+    )
 
 
 def create_proxy_app(
     target_base_url: str = "https://api.openai.com",
-    detectors: list[Any] | None = None,
+    detectors: Sequence[SafetyDetector] | None = None,
     policy: EnforcementPolicy | dict[str, Any] | str | None = None,
     dashboard: bool = True,
     sign_key: Any | None = None,
     signer_id: str = "proxy:default",
     budget: float | None = None,
     budget_per_session: float | None = None,
+    debug: bool = False,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
@@ -244,6 +238,10 @@ def create_proxy_app(
         budget=budget,
         budget_per_session=budget_per_session,
     )
+
+    # Enable debug logging if requested (see logutil; uvicorn/defaults drop DEBUG)
+    if debug:
+        configure_proxy_debug_logging()
 
     # Attestation engine (optional — enabled when sign_key is provided)
     attestation_engine = None
@@ -277,6 +275,21 @@ def create_proxy_app(
         path = request.url.path
         body_bytes = await request.body()
 
+        # Debug logging for all requests (both input and output)
+        if debug:
+            try:
+                body = json.loads(body_bytes) if body_bytes else {}
+            except json.JSONDecodeError:
+                body = {}
+            log.debug(
+                "REQUEST %s %s %s: headers=%s, body=%s",
+                call_id,
+                request.method,
+                path,
+                dict(request.headers),
+                body,
+            )
+
         # Parse request body
         try:
             body = json.loads(body_bytes) if body_bytes else {}
@@ -288,12 +301,14 @@ def create_proxy_app(
         if budget_error:
             _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
             if _instance_id:
-                await publish_event(build_event(
-                    instance_id=_instance_id,
-                    event_type="budget_warning",
-                    action="block",
-                    message=budget_error,
-                ))
+                await publish_event(
+                    build_event(
+                        instance_id=_instance_id,
+                        event_type="budget_warning",
+                        action="block",
+                        message=budget_error,
+                    )
+                )
             return Response(
                 json.dumps(
                     {
@@ -328,7 +343,6 @@ def create_proxy_app(
         if "messages" in body:
             input_text = _extract_text_from_messages(body["messages"])
 
-        input_signals: list[SafetySignal] = []
         if state.safety_enabled:
             input_signals = state.registry.run_all(
                 input_text=input_text,
@@ -336,7 +350,7 @@ def create_proxy_app(
                 call_id=call_id,
             )
 
-            if input_signals:
+            if len(input_signals) > 0:
                 input_decision = evaluate(input_signals, state.policy)
                 if input_decision.action == "block":
                     state.signals.extend(input_signals)
@@ -348,14 +362,16 @@ def create_proxy_app(
                     if _instance_id:
                         _detector = input_signals[0].detector if input_signals else None
                         _severity = input_signals[0].severity if input_signals else None
-                        await publish_event(build_event(
-                            instance_id=_instance_id,
-                            event_type="safety_block",
-                            action="block",
-                            message=input_decision.reason or "Input blocked by safety filter",
-                            detector=_detector,
-                            severity=_severity,
-                        ))
+                        await publish_event(
+                            build_event(
+                                instance_id=_instance_id,
+                                event_type="safety_block",
+                                action="block",
+                                message=input_decision.reason or "Input blocked by safety filter",
+                                detector=_detector,
+                                severity=_severity,
+                            )
+                        )
                     return JSONResponse(
                         status_code=400,
                         content={
@@ -368,6 +384,8 @@ def create_proxy_app(
                             }
                         },
                     )
+        else:
+            input_signals = ()
 
         # --- FORWARD TO TARGET API ---
         target_url = f"{state.target_base_url}{path}"
@@ -426,18 +444,23 @@ def create_proxy_app(
                     _event_type = "safety_block" if decision.action == "block" else "llm_call"
                     _detector = decision.signals[0].detector if decision.signals else None
                     _severity = decision.signals[0].severity if decision.signals else None
-                    asyncio.ensure_future(publish_event(build_event(
-                        instance_id=_instance_id,
-                        event_type=_event_type,
-                        action=decision.action,
-                        message=decision.reason or f"{model} streaming call: {inp} in, {out} out",
-                        cost_usd=float(cost_node.compute_cost) if cost_node else 0,
-                        model=model,
-                        tokens_in=inp,
-                        tokens_out=out,
-                        detector=_detector,
-                        severity=_severity,
-                    )))
+                    asyncio.ensure_future(
+                        publish_event(
+                            build_event(
+                                instance_id=_instance_id,
+                                event_type=_event_type,
+                                action=decision.action,
+                                message=decision.reason
+                                or f"{model} streaming call: {inp} in, {out} out",
+                                cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                                model=model,
+                                tokens_in=inp,
+                                tokens_out=out,
+                                detector=_detector,
+                                severity=_severity,
+                            )
+                        )
+                    )
 
             return await handle_streaming_request(
                 target_url=target_url,
@@ -448,6 +471,7 @@ def create_proxy_app(
                 registry=state.registry,
                 policy=state.policy,
                 on_complete=on_stream_complete,
+                debug=debug,
             )
 
         # --- NON-STREAMING BRANCH ---
@@ -514,7 +538,7 @@ def create_proxy_app(
                 call_cost=cost_node.compute_cost,
             )
 
-            all_signals = input_signals + output_signals
+            all_signals = (*input_signals, *output_signals)
             state.signals.extend(all_signals)
 
             decision = evaluate(all_signals, state.policy)
@@ -526,9 +550,7 @@ def create_proxy_app(
                     status_code=400,
                     content={
                         "error": {
-                            "message": (
-                                f"AEP safety: response blocked — {decision.reason}"
-                            ),
+                            "message": (f"AEP safety: response blocked — {decision.reason}"),
                             "type": "aep_safety_block",
                             "code": "safety_block",
                         }
@@ -545,18 +567,21 @@ def create_proxy_app(
             _event_type = "safety_block" if decision.action == "block" else "llm_call"
             _detector = decision.signals[0].detector if decision.signals else None
             _severity = decision.signals[0].severity if decision.signals else None
-            await publish_event(build_event(
-                instance_id=_instance_id,
-                event_type=_event_type,
-                action=decision.action,
-                message=decision.reason or f"{model} call: {input_tokens} in, {output_tokens} out",
-                cost_usd=float(cost_node.compute_cost) if cost_node else 0,
-                model=model,
-                tokens_in=input_tokens if usage else None,
-                tokens_out=output_tokens if usage else None,
-                detector=_detector,
-                severity=_severity,
-            ))
+            await publish_event(
+                build_event(
+                    instance_id=_instance_id,
+                    event_type=_event_type,
+                    action=decision.action,
+                    message=decision.reason
+                    or f"{model} call: {input_tokens} in, {output_tokens} out",
+                    cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                    model=model,
+                    tokens_in=input_tokens if usage else None,
+                    tokens_out=output_tokens if usage else None,
+                    detector=_detector,
+                    severity=_severity,
+                )
+            )
 
         # --- PASS THROUGH (with AEP metadata header) ---
         resp_headers = build_response_headers(
@@ -588,6 +613,20 @@ def create_proxy_app(
                 ),
             )
             resp_headers.update(attest_headers)
+
+        # Debug: log the response
+        if debug:
+            log.debug(
+                "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, status=%d, body=%s",
+                call_id,
+                request.method,
+                path,
+                model,
+                input_tokens,
+                output_tokens,
+                upstream_resp.status_code,
+                resp_data,
+            )
 
         return Response(
             content=upstream_resp.content,
@@ -693,23 +732,25 @@ def create_proxy_app(
         """
         if request.method == "GET":
             return Response(
-                json.dumps({
-                    "safety_enabled": state.safety_enabled,
-                    "policy": {
-                        "default_action": state.policy.default_action,
-                        "block_on": sorted(state.policy.block_on),
-                        "flag_on": sorted(state.policy.flag_on),
-                        "detectors": {
-                            k: {
-                                "action": v.action,
-                                "threshold": v.threshold,
-                                "enabled": v.enabled,
-                                **({"extra": dict(v.extra)} if v.extra else {}),
-                            }
-                            for k, v in state.policy.overrides.items()
+                json.dumps(
+                    {
+                        "safety_enabled": state.safety_enabled,
+                        "policy": {
+                            "default_action": state.policy.default_action,
+                            "block_on": sorted(state.policy.block_on),
+                            "flag_on": sorted(state.policy.flag_on),
+                            "detectors": {
+                                k: {
+                                    "action": v.action,
+                                    "threshold": v.threshold,
+                                    "enabled": v.enabled,
+                                    **({"extra": dict(v.extra)} if v.extra else {}),
+                                }
+                                for k, v in state.policy.overrides.items()
+                            },
                         },
-                    },
-                }),
+                    }
+                ),
                 media_type="application/json",
             )
 
@@ -736,23 +777,25 @@ def create_proxy_app(
                 )
 
         return Response(
-            json.dumps({
-                "safety_enabled": state.safety_enabled,
-                "policy": {
-                    "default_action": state.policy.default_action,
-                    "block_on": sorted(state.policy.block_on),
-                    "flag_on": sorted(state.policy.flag_on),
-                    "detectors": {
-                        k: {
-                            "action": v.action,
-                            "threshold": v.threshold,
-                            "enabled": v.enabled,
-                            **({"extra": dict(v.extra)} if v.extra else {}),
-                        }
-                        for k, v in state.policy.overrides.items()
+            json.dumps(
+                {
+                    "safety_enabled": state.safety_enabled,
+                    "policy": {
+                        "default_action": state.policy.default_action,
+                        "block_on": sorted(state.policy.block_on),
+                        "flag_on": sorted(state.policy.flag_on),
+                        "detectors": {
+                            k: {
+                                "action": v.action,
+                                "threshold": v.threshold,
+                                "enabled": v.enabled,
+                                **({"extra": dict(v.extra)} if v.extra else {}),
+                            }
+                            for k, v in state.policy.overrides.items()
+                        },
                     },
-                },
-            }),
+                }
+            ),
             media_type="application/json",
         )
 

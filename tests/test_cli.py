@@ -22,9 +22,7 @@ def test_format_summary_with_pii_signal() -> None:
 
 
 def test_format_summary_with_medium_signal() -> None:
-    sig = SafetySignal(
-        signal_type="cost_anomaly", severity="medium", call_id="x", detail="spike"
-    )
+    sig = SafetySignal(signal_type="cost_anomaly", severity="medium", call_id="x", detail="spike")
     output = format_session_summary(cost=Decimal("0.05"), signals=[sig], call_count=5)
     assert "FLAG" in output
 

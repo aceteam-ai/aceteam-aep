@@ -100,9 +100,7 @@ def create_app(
 
     async def api_state(request: Request) -> JSONResponse:
         state = _get_state()
-        return JSONResponse(
-            content=json.loads(json.dumps(state, cls=_DecimalEncoder))
-        )
+        return JSONResponse(content=json.loads(json.dumps(state, cls=_DecimalEncoder)))
 
     return Starlette(
         routes=[

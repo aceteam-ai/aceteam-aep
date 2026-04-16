@@ -35,10 +35,16 @@ def test_dashboard_attestation_data(tmp_path):
     port = _find_free_port()
     proc = subprocess.Popen(
         [
-            "uv", "run", "aceteam-aep", "proxy",
-            "--port", str(port),
-            "--sign-key", str(key_dir / "aep.key"),
-            "--signer-id", "proxy:dashboard-test",
+            "uv",
+            "run",
+            "aceteam-aep",
+            "proxy",
+            "--port",
+            str(port),
+            "--sign-key",
+            str(key_dir / "aep.key"),
+            "--signer-id",
+            "proxy:dashboard-test",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

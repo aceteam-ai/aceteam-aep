@@ -7,10 +7,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pytest
 from starlette.testclient import TestClient
 
-from aceteam_aep.enforcement import EnforcementPolicy
 from aceteam_aep.proxy.app import ProxyState, create_proxy_app
 from aceteam_aep.safety.base import SafetySignal
 from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
@@ -61,18 +59,14 @@ class TestProxyForwarding:
     """Test that the proxy forwards requests and records cost."""
 
     def test_forwards_and_records_cost(self) -> None:
-        app = create_proxy_app(
-            detectors=[CostAnomalyDetector()], dashboard=False
-        )
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=False)
         client = TestClient(app)
 
         with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.request = AsyncMock(
-                return_value=_mock_upstream(_openai_response())
-            )
+            mock_client.request = AsyncMock(return_value=_mock_upstream(_openai_response()))
             mock_client_cls.return_value = mock_client
 
             resp = client.post(
@@ -89,18 +83,14 @@ class TestProxyForwarding:
         assert resp.headers["X-AEP-Enforcement"] == "pass"
 
     def test_passes_auth_header(self) -> None:
-        app = create_proxy_app(
-            detectors=[CostAnomalyDetector()], dashboard=False
-        )
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=False)
         client = TestClient(app)
 
         with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.request = AsyncMock(
-                return_value=_mock_upstream(_openai_response())
-            )
+            mock_client.request = AsyncMock(return_value=_mock_upstream(_openai_response()))
             mock_client_cls.return_value = mock_client
 
             client.post(
@@ -132,9 +122,7 @@ class TestProxySafetyBlocking:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             # Response contains PII
             mock_client.request = AsyncMock(
-                return_value=_mock_upstream(
-                    _openai_response(content="His SSN is 123-45-6789")
-                )
+                return_value=_mock_upstream(_openai_response(content="His SSN is 123-45-6789"))
             )
             mock_client_cls.return_value = mock_client
 
@@ -165,18 +153,14 @@ class TestProxySafetyBlocking:
                     )
                 ]
 
-        app = create_proxy_app(
-            detectors=[MediumDetector()], dashboard=False
-        )
+        app = create_proxy_app(detectors=[MediumDetector()], dashboard=False)
         client = TestClient(app)
 
         with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.request = AsyncMock(
-                return_value=_mock_upstream(_openai_response())
-            )
+            mock_client.request = AsyncMock(return_value=_mock_upstream(_openai_response()))
             mock_client_cls.return_value = mock_client
 
             resp = client.post(
@@ -214,18 +198,14 @@ class TestProxyDashboard:
     """Test that the dashboard is mounted on the proxy."""
 
     def test_dashboard_at_aep_path(self) -> None:
-        app = create_proxy_app(
-            detectors=[CostAnomalyDetector()], dashboard=True
-        )
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
         client = TestClient(app)
         resp = client.get("/aep/")
         assert resp.status_code == 200
         assert "AEP Dashboard" in resp.text
 
     def test_dashboard_api_at_aep_path(self) -> None:
-        app = create_proxy_app(
-            detectors=[CostAnomalyDetector()], dashboard=True
-        )
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
         client = TestClient(app)
         resp = client.get("/aep/api/state")
         assert resp.status_code == 200

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
@@ -30,8 +31,13 @@ class SafetyDetector(Protocol):
     name: str
 
     def check(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-    ) -> list[SafetySignal]: ...
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> Sequence[SafetySignal]: ...
 
 
 class DetectorRegistry:
@@ -47,8 +53,13 @@ class DetectorRegistry:
         self._detectors.append(detector)
 
     def run_all(
-        self, *, input_text: str, output_text: str, call_id: str, **kwargs: object
-    ) -> list[SafetySignal]:
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> Sequence[SafetySignal]:
         signals: list[SafetySignal] = []
         for det in self._detectors:
             try:

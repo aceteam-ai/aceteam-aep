@@ -1,7 +1,6 @@
 """Tests for the enforcement engine."""
 
 import tempfile
-from pathlib import Path
 
 from aceteam_aep.enforcement import (
     DetectorPolicy,
@@ -16,8 +15,12 @@ def _sig(
     signal_type: str, severity: str, score: float | None = None, detector: str = ""
 ) -> SafetySignal:
     return SafetySignal(
-        signal_type=signal_type, severity=severity, call_id="t", detail="test",
-        score=score, detector=detector,
+        signal_type=signal_type,
+        severity=severity,
+        call_id="t",
+        detail="test",
+        score=score,
+        detector=detector,
     )
 
 
@@ -141,13 +144,15 @@ def test_mixed_overrides_and_severity() -> None:
 
 
 def test_from_dict_basic() -> None:
-    policy = EnforcementPolicy.from_dict({
-        "default_action": "flag",
-        "detectors": {
-            "pii": {"action": "block", "threshold": 0.8},
-            "cost_anomaly": {"action": "pass", "multiplier": 10},
-        },
-    })
+    policy = EnforcementPolicy.from_dict(
+        {
+            "default_action": "flag",
+            "detectors": {
+                "pii": {"action": "block", "threshold": 0.8},
+                "cost_anomaly": {"action": "pass", "multiplier": 10},
+            },
+        }
+    )
     assert policy.default_action == "flag"
     assert "pii" in policy.overrides
     assert policy.overrides["pii"].action == "block"

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from aceteam_aep import AepSession, wrap
+from aceteam_aep import wrap
 from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
 
 _FAST_DETECTORS = [CostAnomalyDetector()]
@@ -101,9 +101,7 @@ async def test_async_anthropic_spans_recorded() -> None:
 async def test_async_pii_detection() -> None:
     from aceteam_aep.safety.pii import PiiDetector
 
-    client = _make_async_openai_client(
-        _make_async_openai_response(content="SSN: 123-45-6789")
-    )
+    client = _make_async_openai_client(_make_async_openai_response(content="SSN: 123-45-6789"))
     wrap(client, detectors=[PiiDetector(model_name="nonexistent/force-regex")])
     await client.chat.completions.create(model="gpt-4o", messages=[])
     assert any(s.signal_type == "pii" for s in client.aep.safety_signals)

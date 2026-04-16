@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
@@ -62,9 +63,7 @@ def _accumulate_stream_chunks(
         usage = chunk.get("usage")
         if usage:
             input_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
-            output_tokens = (
-                usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
-            )
+            output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
 
     return model, "".join(text_parts), input_tokens, output_tokens
 
@@ -79,6 +78,7 @@ async def handle_streaming_request(
     registry: DetectorRegistry,
     policy: EnforcementPolicy,
     on_complete: Any = None,
+    debug: bool = False,
 ) -> StreamingResponse:
     """Handle a streaming request through the proxy.
 
@@ -91,23 +91,34 @@ async def handle_streaming_request(
         registry: Safety detector registry
         policy: Enforcement policy
         on_complete: Callback(model, input_tokens, output_tokens, output_text, signals, decision)
+        debug: Enable debug logging for the stream
     """
 
-    async def stream_generator() -> Any:
+    async def stream_generator() -> AsyncGenerator[str, None]:
         accumulated_chunks: list[dict[str, Any]] = []
 
-        async with httpx.AsyncClient(timeout=120.0) as client, client.stream(
-            "POST",
-            target_url,
-            content=body_bytes,
-            headers=headers,
-        ) as upstream:
+        if debug:
+            log.debug("STREAM REQUEST %s: %s", call_id, target_url)
+
+        async with (
+            httpx.AsyncClient(timeout=120.0) as client,
+            client.stream(
+                "POST",
+                target_url,
+                content=body_bytes,
+                headers=headers,
+            ) as upstream,
+        ):
             # Pass through each line immediately
             async for line in upstream.aiter_lines():
                 # Buffer for post-stream safety
                 parsed = _parse_sse_line(line)
                 if parsed:
                     accumulated_chunks.append(parsed)
+
+                # Debug: log each chunk (truncated)
+                if debug:
+                    log.debug("STREAM CHUNK %s: %s", call_id, line[:200] if line else "<empty>")
 
                 # Pass through to client immediately
                 yield f"{line}\n"
@@ -116,6 +127,16 @@ async def handle_streaming_request(
         model, output_text, input_tokens, output_tokens = _accumulate_stream_chunks(
             accumulated_chunks
         )
+
+        if debug:
+            log.debug(
+                "STREAM COMPLETE %s: model=%s, input_tokens=%d, output_tokens=%d, output_text=%s",
+                call_id,
+                model,
+                input_tokens,
+                output_tokens,
+                output_text[:500] if output_text else "",
+            )
 
         # Run safety detectors
         signals = registry.run_all(

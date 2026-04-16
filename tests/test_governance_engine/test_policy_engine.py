@@ -29,13 +29,16 @@ def test_clearance_denies_above_level() -> None:
 
 def test_consent_check_passes() -> None:
     engine = GovernancePolicyEngine()
-    engine.add_policy(OrgPolicy(
-        entity="org:acme",
-        max_classification="restricted",
-        consent={"training": True, "sharing": True},
-    ))
+    engine.add_policy(
+        OrgPolicy(
+            entity="org:acme",
+            max_classification="restricted",
+            consent={"training": True, "sharing": True},
+        )
+    )
     decision = engine.evaluate(
-        "org:acme", "public",
+        "org:acme",
+        "public",
         consent_required={"training": True},
     )
     assert decision.action == "allow"
@@ -43,13 +46,16 @@ def test_consent_check_passes() -> None:
 
 def test_consent_check_denies() -> None:
     engine = GovernancePolicyEngine()
-    engine.add_policy(OrgPolicy(
-        entity="org:acme",
-        max_classification="restricted",
-        consent={"training": False},
-    ))
+    engine.add_policy(
+        OrgPolicy(
+            entity="org:acme",
+            max_classification="restricted",
+            consent={"training": False},
+        )
+    )
     decision = engine.evaluate(
-        "org:acme", "public",
+        "org:acme",
+        "public",
         consent_required={"training": True},
     )
     assert decision.action == "deny"
@@ -58,13 +64,16 @@ def test_consent_check_denies() -> None:
 
 def test_multiple_violations() -> None:
     engine = GovernancePolicyEngine()
-    engine.add_policy(OrgPolicy(
-        entity="org:acme",
-        max_classification="public",
-        consent={"training": False},
-    ))
+    engine.add_policy(
+        OrgPolicy(
+            entity="org:acme",
+            max_classification="public",
+            consent={"training": False},
+        )
+    )
     decision = engine.evaluate(
-        "org:acme", "restricted",
+        "org:acme",
+        "restricted",
         consent_required={"training": True},
     )
     assert decision.action == "deny"

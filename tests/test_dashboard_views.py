@@ -22,6 +22,7 @@ from aceteam_aep.safety.base import SafetySignal
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _openai_response(
     content: str = "Hello!",
     model: str = "gpt-4o",
@@ -135,6 +136,7 @@ def _make_call(
 # ---------------------------------------------------------------------------
 # Developer view: per-call badges, cost, signal grouping, scores, filters
 # ---------------------------------------------------------------------------
+
 
 class TestDeveloperView:
     """Verify /aep/api/state returns correct data for the developer view."""
@@ -261,6 +263,7 @@ class TestDeveloperView:
 # Executive view: compliance %, entity cost, zero-state, session duration
 # ---------------------------------------------------------------------------
 
+
 class TestExecutiveView:
     """Verify /aep/api/state returns correct data for the executive view."""
 
@@ -384,6 +387,7 @@ class TestExecutiveView:
         Verifies the state endpoint has all the data needed for both
         developer and executive dashboard views.
         """
+
         # Use separate apps because detectors are fixed per-app.
         # Instead, use a configurable detector.
         class ConfigurableDetector:
@@ -487,7 +491,15 @@ class TestExecutiveView:
 def test_dashboard_has_policy_controls_section():
     """Dashboard HTML contains the policy controls section."""
     from pathlib import Path
-    html = (Path(__file__).parent.parent / "src" / "aceteam_aep" / "dashboard" / "templates" / "index.html").read_text()
+
+    html = (
+        Path(__file__).parent.parent
+        / "src"
+        / "aceteam_aep"
+        / "dashboard"
+        / "templates"
+        / "index.html"
+    ).read_text()
     assert 'id="policy-controls"' in html
     assert 'id="policy-section"' in html
     assert "renderPolicyControls" in html
@@ -498,7 +510,15 @@ def test_dashboard_has_policy_controls_section():
 def test_dashboard_policy_controls_detector_names():
     """Dashboard JS contains display names for all known detectors."""
     from pathlib import Path
-    html = (Path(__file__).parent.parent / "src" / "aceteam_aep" / "dashboard" / "templates" / "index.html").read_text()
+
+    html = (
+        Path(__file__).parent.parent
+        / "src"
+        / "aceteam_aep"
+        / "dashboard"
+        / "templates"
+        / "index.html"
+    ).read_text()
     for name in ["Agent Threat", "PII Detection", "Cost Anomaly", "Trust Engine"]:
         assert name in html, f"Missing detector display name: {name}"
 
@@ -506,6 +526,14 @@ def test_dashboard_policy_controls_detector_names():
 def test_dashboard_policy_controls_category_names():
     """Dashboard JS contains the 5 R-Judge domain categories."""
     from pathlib import Path
-    html = (Path(__file__).parent.parent / "src" / "aceteam_aep" / "dashboard" / "templates" / "index.html").read_text()
+
+    html = (
+        Path(__file__).parent.parent
+        / "src"
+        / "aceteam_aep"
+        / "dashboard"
+        / "templates"
+        / "index.html"
+    ).read_text()
     for cat in ["Finance", "IoT", "Software", "Web", "Program"]:
         assert cat in html, f"Missing category name: {cat}"

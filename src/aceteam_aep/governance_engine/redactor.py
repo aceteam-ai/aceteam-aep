@@ -43,9 +43,7 @@ class Redactor:
 
         return result, redactions
 
-    def redact_if_needed(
-        self, text: str, classification: str
-    ) -> tuple[str, list[str]]:
+    def redact_if_needed(self, text: str, classification: str) -> tuple[str, list[str]]:
         """Redact only if classification warrants it.
 
         Only redacts for confidential and restricted data.

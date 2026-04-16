@@ -20,14 +20,16 @@ def test_parse_empty_headers() -> None:
 
 
 def test_parse_full_headers() -> None:
-    ctx = parse_aep_headers({
-        "x-aep-entity": "org:acme",
-        "x-aep-classification": "confidential",
-        "x-aep-consent": "training=no,sharing=yes",
-        "x-aep-budget": "5.00",
-        "x-aep-trace-id": "trace-abc",
-        "x-aep-sources": "doc:contract-123, url:https://example.com",
-    })
+    ctx = parse_aep_headers(
+        {
+            "x-aep-entity": "org:acme",
+            "x-aep-classification": "confidential",
+            "x-aep-consent": "training=no,sharing=yes",
+            "x-aep-budget": "5.00",
+            "x-aep-trace-id": "trace-abc",
+            "x-aep-sources": "doc:contract-123, url:https://example.com",
+        }
+    )
     assert ctx.entity == "org:acme"
     assert ctx.classification == "confidential"
     assert ctx.consent == {"training": False, "sharing": True}
