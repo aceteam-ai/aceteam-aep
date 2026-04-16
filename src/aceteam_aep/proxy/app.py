@@ -7,11 +7,11 @@ tracks cost, and enforces PASS/FLAG/BLOCK decisions.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 import json
 import logging
 import os
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -24,8 +24,11 @@ from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate
+from ..safety.agent_threat import AgentThreatDetector
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
-from ..safety import AgentThreatDetector, PiiDetector, ContentSafetyDetector, CostAnomalyDetector
+from ..safety.content import ContentSafetyDetector
+from ..safety.cost_anomaly import CostAnomalyDetector
+from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
@@ -78,7 +81,7 @@ class ProxyState:
     def __init__(
         self,
         target_base_url: str = "https://api.openai.com",
-        detectors: list[Any] | None = None,
+        detectors: Sequence[SafetyDetector] | None = None,
         policy: EnforcementPolicy | dict[str, Any] | str | None = None,
         budget: float | None = None,
         budget_per_session: float | None = None,
@@ -138,7 +141,7 @@ class ProxyState:
         """Estimated cost saved by blocking calls before they reach the LLM."""
         if not self._call_costs:
             return Decimal("0")
-        avg = sum(self._call_costs) / len(self._call_costs)
+        avg = Decimal(sum(self._call_costs) / len(self._call_costs))
         return avg * self.blocked_count
 
     def _cost_by_span_id(self) -> dict[str, float]:
@@ -340,7 +343,6 @@ def create_proxy_app(
         if "messages" in body:
             input_text = _extract_text_from_messages(body["messages"])
 
-        input_signals: list[SafetySignal] = []
         if state.safety_enabled:
             input_signals = state.registry.run_all(
                 input_text=input_text,
@@ -348,7 +350,7 @@ def create_proxy_app(
                 call_id=call_id,
             )
 
-            if input_signals:
+            if len(input_signals) > 0:
                 input_decision = evaluate(input_signals, state.policy)
                 if input_decision.action == "block":
                     state.signals.extend(input_signals)
@@ -382,6 +384,8 @@ def create_proxy_app(
                             }
                         },
                     )
+        else:
+            input_signals = ()
 
         # --- FORWARD TO TARGET API ---
         target_url = f"{state.target_base_url}{path}"
@@ -534,7 +538,7 @@ def create_proxy_app(
                 call_cost=cost_node.compute_cost,
             )
 
-            all_signals = input_signals + output_signals
+            all_signals = (*input_signals, *output_signals)
             state.signals.extend(all_signals)
 
             decision = evaluate(all_signals, state.policy)

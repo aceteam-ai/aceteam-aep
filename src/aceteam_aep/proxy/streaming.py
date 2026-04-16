@@ -11,9 +11,9 @@ When a request has `"stream": true`, the proxy:
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 import json
 import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx

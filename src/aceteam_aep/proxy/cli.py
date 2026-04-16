@@ -9,7 +9,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
 import importlib
 import logging
 import os
@@ -18,8 +17,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-from aceteam_aep.safety import SafetyDetector
+if TYPE_CHECKING:
+    from aceteam_aep.safety import SafetyDetector
 
 log = logging.getLogger(__name__)
 
@@ -163,7 +165,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
 
     debug_msg = ""
     if debug:
-        debug_msg = f"  Debug:      ON ⚠️  (warning: exposes private data in logs)\n"
+        debug_msg = "  Debug:      ON ⚠️  (warning: exposes private data in logs)\n"
 
     print(
         f"\n"
@@ -319,7 +321,7 @@ def _run_connect(args: argparse.Namespace) -> None:
                     creds["api_key"][:8] + "..." if len(creds.get("api_key", "")) > 8 else "***"
                 )
                 print(f"  Already connected (key: {key_hint})")
-                print(f"  Use --force to reconnect.\n")
+                print("  Use --force to reconnect.\n")
                 return
         except Exception:
             pass
@@ -332,7 +334,7 @@ def _run_connect(args: argparse.Namespace) -> None:
         # Interactive: open browser for auth
         aceteam_url = args.url or "https://aceteam.ai"
         auth_url = f"{aceteam_url}/settings/api-keys"
-        print(f"  Opening AceTeam to generate an API key...")
+        print("  Opening AceTeam to generate an API key...")
         print(f"  URL: {auth_url}\n")
 
         try:
@@ -375,13 +377,13 @@ def _run_connect(args: argparse.Namespace) -> None:
         r = httpx.get(f"http://localhost:{proxy_port}/aep/api/state", timeout=2)
         if r.status_code == 200:
             print(f"  ✓ Proxy detected on port {proxy_port}")
-            print(f"  ℹ Restart the proxy to activate AceTeam features")
+            print("  ℹ Restart the proxy to activate AceTeam features")
     except Exception:
         pass
 
-    print(f"\n  Connected to AceTeam!")
-    print(f"  • Workflows and 40+ node types now available")
-    print(f"  • $5 free credit for LLM calls")
+    print("\n  Connected to AceTeam!")
+    print("  • Workflows and 40+ node types now available")
+    print("  • $5 free credit for LLM calls")
     print(f"  • Restart proxy to activate: aceteam-aep proxy --port {proxy_port}\n")
 
 

@@ -19,6 +19,7 @@ Or from a YAML file::
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -145,14 +146,17 @@ def _resolve_signal_action(signal: SafetySignal, policy: EnforcementPolicy) -> s
     return "pass"
 
 
-def evaluate(signals: list[SafetySignal], policy: EnforcementPolicy) -> EnforcementDecision:
+def evaluate(
+    signals: Sequence[SafetySignal],
+    policy: EnforcementPolicy,
+) -> EnforcementDecision:
     """Evaluate safety signals against a policy and return an enforcement decision."""
     if not signals:
         return EnforcementDecision(action="pass")
 
     active = [s for s in signals if s.signal_type not in policy.allow_types]
-    if not active:
-        return EnforcementDecision(action="pass", signals=signals)
+    if len(active) == 0:
+        return EnforcementDecision(action="pass", signals=list(signals))
 
     # Resolve action per signal, take highest priority
     max_action = "pass"
