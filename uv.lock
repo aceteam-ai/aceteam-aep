@@ -22,6 +22,7 @@ all = [
     { name = "lancedb" },
     { name = "ollama" },
     { name = "openai" },
+    { name = "programasweights" },
     { name = "pyyaml" },
     { name = "redis", extra = ["hiredis"] },
     { name = "rich" },
@@ -42,6 +43,7 @@ dev = [
     { name = "lancedb" },
     { name = "ollama" },
     { name = "openai" },
+    { name = "programasweights" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -68,10 +70,14 @@ ollama = [
 ]
 proxy = [
     { name = "jinja2" },
+    { name = "programasweights" },
     { name = "starlette" },
+    { name = "torch" },
+    { name = "transformers" },
     { name = "uvicorn" },
 ]
 safety = [
+    { name = "programasweights" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -88,7 +94,7 @@ yaml = [
 [package.metadata]
 requires-dist = [
     { name = "aceteam-aep", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "aceteam-aep", extras = ["dashboard"], marker = "extra == 'proxy'" },
+    { name = "aceteam-aep", extras = ["dashboard", "safety"], marker = "extra == 'proxy'" },
     { name = "aceteam-aep", extras = ["xai", "ollama", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events"], marker = "extra == 'all'" },
     { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
@@ -101,6 +107,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.65.0,<2.0.0" },
     { name = "openai", marker = "extra == 'xai'", specifier = ">=1.65.0,<2.0.0" },
     { name = "overrides", specifier = ">=7.7.0" },
+    { name = "programasweights", marker = "extra == 'safety'", specifier = ">=0.4.2" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -483,6 +490,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5a/d3/8ae2869247df154b64c1884d7346d412fed0c49df84db635aab2d1c40e62/deprecation-2.1.0.tar.gz", hash = "sha256:72b3bde64e5d778694b0cf68178aed03d15e15477116add3fb773e581f9518ff", size = 173788, upload-time = "2020-04-20T14:23:38.738Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/c3/253a89ee03fc9b9682f1541728eb66db7db22148cd94f89ab22528cd1e1b/deprecation-2.1.0-py2.py3-none-any.whl", hash = "sha256:a10811591210e1fb0e768a8c25517cabeabcba6f0bf96564f8ff45189f90b14a", size = 11178, upload-time = "2020-04-20T14:23:36.581Z" },
+]
+
+[[package]]
+name = "diskcache"
+version = "5.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916, upload-time = "2023-08-31T06:12:00.316Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550, upload-time = "2023-08-31T06:11:58.822Z" },
 ]
 
 [[package]]
@@ -1063,6 +1079,18 @@ wheels = [
 ]
 
 [[package]]
+name = "llama-cpp-python"
+version = "0.3.19"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "diskcache" },
+    { name = "jinja2" },
+    { name = "numpy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d7/0f/b26ceec20294f5d592ac137ccc2f10e91fa1f35bb8555906b5718a625ac1/llama_cpp_python-0.3.19.tar.gz", hash = "sha256:6816e4a0a74ae9a356e7a0546e13147543f01f695c86a28d940e4b86519acf13", size = 59043951, upload-time = "2026-03-25T22:32:32.581Z" }
+
+[[package]]
 name = "markdown-it-py"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1502,6 +1530,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "programasweights"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "llama-cpp-python" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/54/86d43a525db8dca61fc245bc8e7fe47575859cd1dcbbf524144bd35193e6/programasweights-0.4.2.tar.gz", hash = "sha256:81f62161470c219e01834fcadbf2759cc775168f1f27b5d66cde5a0ba708df66", size = 79770, upload-time = "2026-04-14T15:22:14.923Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/5a/582068bf931337004fcd852281fd5b008596970f3762e15e964ca129bcfe/programasweights-0.4.2-py3-none-any.whl", hash = "sha256:139237bc2187ea6db53572c6189a499adf01b5e98ec8e0d400453f3368578a07", size = 42104, upload-time = "2026-04-14T15:22:13.355Z" },
 ]
 
 [[package]]

@@ -73,7 +73,7 @@ def _custom_policy_from_write_fields(
     if policy_id is not None:
         payload["id"] = policy_id
     try:
-        return CustomPolicy.model_validate(payload)
+        return CustomPolicy.model_validate(payload).eager()
     except ValidationError as exc:
         return JSONResponse(
             {"error": "validation failed", "detail": exc.errors()},
