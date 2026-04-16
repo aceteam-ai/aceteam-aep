@@ -205,6 +205,13 @@ class TestProxyDashboard:
         assert resp.status_code == 200
         assert "AEP Dashboard" in resp.text
 
+    def test_dashboard_redirects_aep_without_trailing_slash(self) -> None:
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
+        client = TestClient(app, follow_redirects=False)
+        resp = client.get("/aep")
+        assert resp.status_code == 307
+        assert resp.headers.get("location") == "/aep/"
+
     def test_dashboard_api_at_aep_path(self) -> None:
         app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
         client = TestClient(app)

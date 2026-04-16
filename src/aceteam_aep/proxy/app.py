@@ -20,7 +20,7 @@ import httpx
 from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
@@ -114,6 +114,20 @@ def _extract_usage(data: dict[str, Any]) -> tuple[str, int, int]:
     input_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
     output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
     return model, input_tokens, output_tokens
+
+
+def _ensure_openai_stream_usage(body: dict[str, Any], path: str) -> None:
+    """Ask OpenAI-compatible chat completion streams to include token usage in SSE.
+
+    Without ``stream_options.include_usage``, OpenAI omits ``usage`` from all stream
+    chunks, so the proxy records zero tokens and the dashboard shows no spend.
+    """
+    if not body.get("stream") or "/chat/completions" not in path:
+        return
+    opts = body.get("stream_options")
+    if not isinstance(opts, dict):
+        body["stream_options"] = {}
+    body["stream_options"]["include_usage"] = True
 
 
 class ProxyState:
@@ -461,6 +475,9 @@ def create_proxy_app(
 
         # --- STREAMING BRANCH ---
         if body.get("stream"):
+            _ensure_openai_stream_usage(body, path)
+            body_bytes = json.dumps(body).encode()
+
             from .streaming import handle_streaming_request
 
             # Start span BEFORE the stream begins to measure actual latency
@@ -489,6 +506,7 @@ def create_proxy_app(
                     model=model,
                     usage=usage,
                 )
+                state._call_costs.append(cost_node.compute_cost)
                 state.span_tracker.end_span(stream_span.span_id)
                 state.call_count += 1
                 state.signals.extend(signals)
@@ -707,8 +725,15 @@ def create_proxy_app(
         dashboard_app = create_dashboard(get_state=_get_state)
         # Look up endpoints by path to avoid fragile positional indices
         dash_endpoints = {r.path: r.endpoint for r in dashboard_app.routes}  # type: ignore[union-attr]
+
+        async def _redirect_aep_trailing_slash(_request: Request) -> RedirectResponse:
+            # Relative URLs like `api/state` resolve to /aep/api/state only when the
+            # page URL ends with /aep/; otherwise the browser resolves `api/state` to /api/state.
+            return RedirectResponse(url="/aep/", status_code=307)
+
         routes.extend(
             [
+                Route("/aep", _redirect_aep_trailing_slash, methods=["GET"]),
                 Route("/aep/", dash_endpoints["/"]),
                 Route("/aep/ciso", dash_endpoints["/ciso"]),
                 Route("/aep/api/state", dash_endpoints["/api/state"]),
