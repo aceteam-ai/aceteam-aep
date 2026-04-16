@@ -29,7 +29,12 @@ from ..safety.agent_threat import AgentThreatDetector
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.content import ContentSafetyDetector
 from ..safety.cost_anomaly import CostAnomalyDetector
-from ..safety.custom import CustomPolicy, CustomPolicyStore, CustomSafetyDetector
+from ..safety.custom import (
+    CustomPolicy,
+    CustomPolicyStore,
+    CustomSafetyDetector,
+    default_custom_policies,
+)
 from ..safety.pii import PiiDetector
 from ..spans import SpanTracker
 from ..types import Usage
@@ -156,7 +161,7 @@ class ProxyState:
         if custom_dets:
             self.custom_policy_store = custom_dets[0].store
         else:
-            self.custom_policy_store = CustomPolicyStore()
+            self.custom_policy_store = CustomPolicyStore(initial=default_custom_policies())
             to_register.append(CustomSafetyDetector(self.custom_policy_store))
         for det in to_register:
             self.registry.add(det)
