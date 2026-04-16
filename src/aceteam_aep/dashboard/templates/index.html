@@ -265,6 +265,15 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
+  /* ── Reduced Motion ── */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
   /* ── Footer ── */
   .footer {
     margin-top: 32px;
@@ -592,7 +601,7 @@
         <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
       </div>
       <div id="setup-aceteam" style="display:none;">
-        <p style="color:#e8a87c;font-size:13px;">Coming soon. For now, paste your own API key above.</p>
+        <p style="color:var(--accent-peach);font-size:13px;">Coming soon. For now, paste your own API key above.</p>
       </div>
     </div>
     <div class="setup-step" id="setup-step-2">
@@ -641,7 +650,7 @@
     <div class="card" id="attestation-card" style="display:none;">
       <div class="card-label">Merkle Chain</div>
       <div class="card-value small green" id="chain-height">0</div>
-      <div style="font-size:11px;color:#6bc5e8;margin-top:4px;" id="chain-signer"></div>
+      <div style="font-size:11px;color:var(--accent-sky);margin-top:4px;" id="chain-signer"></div>
     </div>
   </div>
 
@@ -650,10 +659,10 @@
     <div style="display:flex;gap:16px;align-items:center;">
       <div style="flex:1;">
         <div class="bar-container" style="height:12px;margin:0;">
-          <div id="budget-bar" style="height:100%;background:#00d4ff;border-radius:4px;transition:width 0.3s;"></div>
+          <div id="budget-bar" style="height:100%;background:var(--accent-cyan);border-radius:4px;transition:width 0.3s;"></div>
         </div>
       </div>
-      <div id="budget-text" style="font-size:14px;color:#8a9bb4;white-space:nowrap;"></div>
+      <div id="budget-text" style="font-size:14px;color:var(--text-muted);white-space:nowrap;"></div>
     </div>
   </div>
 
@@ -697,7 +706,7 @@
     </div>
     <div class="card">
       <div class="card-label">Threats Blocked</div>
-      <div class="card-value" id="ciso-blocked" style="color:#ff4757;">0</div>
+      <div class="card-value" id="ciso-blocked" style="color:var(--accent-red);">0</div>
     </div>
     <div class="card">
       <div class="card-label">Total Agent Spend</div>
@@ -1342,11 +1351,11 @@ function updateCisoView(data) {
     complianceBar.className = 'bar-fill bar-green';
   } else if (compliancePct > 95) {
     complianceEl.className = 'card-value';
-    complianceEl.style.color = '#ffb347';
+    complianceEl.style.color = 'var(--accent-amber)';
     complianceBar.className = 'bar-fill bar-yellow';
   } else {
     complianceEl.className = 'card-value';
-    complianceEl.style.color = '#ff4757';
+    complianceEl.style.color = 'var(--accent-red)';
     complianceBar.className = 'bar-fill bar-red';
   }
 
@@ -1374,15 +1383,15 @@ function updateCisoView(data) {
     // Zero-state: all clean
     var zs = document.createElement('div');
     zs.className = 'zero-state';
-    zs.innerHTML = '<div class="zero-state-icon" style="color:#2ed573;">&#x2714;</div>'
+    zs.innerHTML = '<div class="zero-state-icon" style="color:var(--accent-green);">&#x2714;</div>'
       + '<div class="zero-state-text">All agents compliant</div>'
       + '<div class="zero-state-sub">No safety incidents this session. ' + totalCalls + ' call' + (totalCalls > 1 ? 's' : '') + ' passed.</div>';
     complianceBody.appendChild(zs);
   } else if (totalCalls === 0) {
     var zs2 = document.createElement('div');
     zs2.className = 'zero-state';
-    zs2.innerHTML = '<div class="zero-state-icon" style="color:#627890;">&#x2022;</div>'
-      + '<div class="zero-state-text" style="color:#8a9bb4;">Waiting for agent activity</div>'
+    zs2.innerHTML = '<div class="zero-state-icon" style="color:var(--text-dim);">&#x2022;</div>'
+      + '<div class="zero-state-text" style="color:var(--text-muted);">Waiting for agent activity</div>'
       + '<div class="zero-state-sub">No calls recorded yet.</div>';
     complianceBody.appendChild(zs2);
   } else {
@@ -1531,7 +1540,7 @@ function renderBudget(budget) {
   var pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 0;
   var bar = document.getElementById('budget-bar');
   bar.style.width = pct + '%';
-  bar.style.background = pct > 90 ? '#ff4757' : pct > 70 ? '#ffb347' : '#00d4ff';
+  bar.style.background = pct > 90 ? 'var(--accent-red)' : pct > 70 ? 'var(--accent-amber)' : 'var(--accent-cyan)';
   var label = '$' + spent.toFixed(4) + ' / $' + limit.toFixed(2);
   if (remaining != null) label += ' ($' + remaining.toFixed(4) + ' remaining)';
   document.getElementById('budget-text').textContent = label;
@@ -1566,7 +1575,7 @@ function renderAttestation(attest) {
     var label = rows[i][0];
     var value = rows[i][1];
     if (!value) continue;
-    var valueClass = (label === 'Chain Integrity') ? 'style="color:#2ed573;font-weight:bold;"' : '';
+    var valueClass = (label === 'Chain Integrity') ? 'style="color:var(--accent-green);font-weight:bold;"' : '';
     html += '<div class="entity-row">';
     html += '<span class="entity-name">' + label + '</span>';
     html += '<span class="entity-detail" ' + valueClass + '>' + value + '</span>';
