@@ -32,7 +32,16 @@ def aep_proxy():
 
     port = _find_free_port()
     proc = subprocess.Popen(
-        ["uv", "run", "aceteam-aep", "proxy", "--port", str(port)],
+        [
+            "uv",
+            "run",
+            "aceteam-aep",
+            "proxy",
+            "--port",
+            str(port),
+            "--detector",
+            "aceteam_aep.safety.agent_threat:AgentThreatDetector",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )

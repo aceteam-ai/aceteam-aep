@@ -20,7 +20,16 @@ def _find_free_port() -> int:
 def _start_proxy(port: int, extra_args: list[str] | None = None):
     import subprocess
 
-    cmd = ["uv", "run", "aceteam-aep", "proxy", "--port", str(port)]
+    cmd = [
+        "uv",
+        "run",
+        "aceteam-aep",
+        "proxy",
+        "--port",
+        str(port),
+        "--detector",
+        "aceteam_aep.safety.agent_threat:AgentThreatDetector",
+    ]
     if extra_args:
         cmd.extend(extra_args)
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

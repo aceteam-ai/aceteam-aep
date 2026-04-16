@@ -119,9 +119,8 @@ def test_dashboard_attestation_data(tmp_path):
         # 8. Dashboard HTML loads
         dash = httpx.get(f"{base_url}/aep/", timeout=5)
         assert dash.status_code == 200
-        assert "attestation-card" in dash.text
         assert "attestation-section" in dash.text
-        assert "Merkle Chain" in dash.text
+        assert "Attestation (Signed Verdicts)" in dash.text
 
     finally:
         proc.terminate()
