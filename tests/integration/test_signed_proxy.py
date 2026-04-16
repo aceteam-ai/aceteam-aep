@@ -40,10 +40,16 @@ def test_signed_proxy_end_to_end(tmp_path):
     port = _find_free_port()
     proc = subprocess.Popen(
         [
-            "uv", "run", "aceteam-aep", "proxy",
-            "--port", str(port),
-            "--sign-key", str(key_dir / "aep.key"),
-            "--signer-id", "proxy:integration-test",
+            "uv",
+            "run",
+            "aceteam-aep",
+            "proxy",
+            "--port",
+            str(port),
+            "--sign-key",
+            str(key_dir / "aep.key"),
+            "--signer-id",
+            "proxy:integration-test",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -91,14 +97,16 @@ def test_signed_proxy_end_to_end(tmp_path):
             assert "x-aep-chain-hash" in r.headers
 
             # Collect chain entry for verification
-            collected_chain.append({
-                "call_id": r.headers["x-aep-call-id"],
-                "action": r.headers["x-aep-enforcement"],
-                "verdict_hash": r.headers["x-aep-verdict-hash"],
-                "signature": r.headers["x-aep-signature"],
-                "chain_height": int(r.headers["x-aep-chain-height"]),
-                "chain_hash": r.headers["x-aep-chain-hash"],
-            })
+            collected_chain.append(
+                {
+                    "call_id": r.headers["x-aep-call-id"],
+                    "action": r.headers["x-aep-enforcement"],
+                    "verdict_hash": r.headers["x-aep-verdict-hash"],
+                    "signature": r.headers["x-aep-signature"],
+                    "chain_height": int(r.headers["x-aep-chain-height"]),
+                    "chain_hash": r.headers["x-aep-chain-hash"],
+                }
+            )
 
         # 4. Verify chain
         pub_key = AepPublicKey.load(key_dir / "aep.pub")
@@ -119,9 +127,14 @@ def test_signed_proxy_end_to_end(tmp_path):
 
         result = subprocess.run(
             [
-                "uv", "run", "aceteam-aep", "verify",
-                "--pub-key", str(key_dir / "aep.pub"),
-                "--chain", str(chain_file),
+                "uv",
+                "run",
+                "aceteam-aep",
+                "verify",
+                "--pub-key",
+                str(key_dir / "aep.pub"),
+                "--chain",
+                str(chain_file),
             ],
             capture_output=True,
             text=True,

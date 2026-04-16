@@ -143,6 +143,7 @@ class FeedbackStore:
             return 0
         return self._table.count_rows()
 
+
 # ── Risk-Type Specialists (Gustavo's approach, multi_specialist_approach branch) ──
 
 RISK_SPECIALISTS: dict[str, str] = {
@@ -213,9 +214,7 @@ JUDGE_SYSTEM = (
 )
 
 
-def _build_prompt(
-    risk_key: str, text: str, feedback_store: FeedbackStore | None = None
-) -> str:
+def _build_prompt(risk_key: str, text: str, feedback_store: FeedbackStore | None = None) -> str:
     specialist = RISK_SPECIALISTS.get(risk_key, "")
 
     feedback_section = ""
@@ -227,13 +226,17 @@ def _build_prompt(
         if denied:
             feedback_section += "\n\n**Previous human decisions on similar actions:**\n"
             for d in denied:
-                feedback_section += f'- DENIED: "{d["text"][:150]}" — Reason: {str(d.get("reason", ""))[:200]}\n'
+                feedback_section += (
+                    f'- DENIED: "{d["text"][:150]}" — Reason: {str(d.get("reason", ""))[:200]}\n'
+                )
             feedback_section += "\nWeight these prior human decisions heavily in your evaluation.\n"
 
         if approved:
             feedback_section += "\n**Previously approved safe actions:**\n"
             for a in approved:
-                feedback_section += f'- APPROVED: "{a["text"][:150]}" — Reason: {str(a.get("reason", ""))[:200]}\n'
+                feedback_section += (
+                    f'- APPROVED: "{a["text"][:150]}" — Reason: {str(a.get("reason", ""))[:200]}\n'
+                )
 
     return f"{specialist}{feedback_section}\n\nEvaluate this agent interaction:\n\n{text}"
 
@@ -327,6 +330,7 @@ def evaluate_text(
     """
     if api_key is None:
         import os
+
         api_key = os.environ.get("OPENAI_API_KEY", "")
 
     target = base_url or "https://api.openai.com/v1"
@@ -340,8 +344,14 @@ def evaluate_text(
         active_risks = ALL_RISKS
 
     if not active_risks:
-        return {"verdict": "PASS", "confidence": 0.0, "risk": None, "domain": None,
-                "reason": "No active risk specialists", "judgments": []}
+        return {
+            "verdict": "PASS",
+            "confidence": 0.0,
+            "risk": None,
+            "domain": None,
+            "reason": "No active risk specialists",
+            "judgments": [],
+        }
 
     # Run all specialists in parallel
     judgments: list[dict[str, Any]] = []
@@ -349,9 +359,7 @@ def evaluate_text(
 
     with ThreadPoolExecutor(max_workers=len(active_risks)) as pool:
         futures = {
-            pool.submit(
-                _call_judge, risk, text, model, target, api_key, feedback_store
-            ): risk
+            pool.submit(_call_judge, risk, text, model, target, api_key, feedback_store): risk
             for risk in active_risks
         }
         for future in as_completed(futures):
@@ -365,7 +373,9 @@ def evaluate_text(
         top = max(unsafe, key=lambda j: j["confidence"])
         verdict = "BLOCK" if top["confidence"] >= 0.8 else "FLAG"
         # Map risk back to domain
-        domain = next((d for d, risks_list in DOMAIN_RISKS.items() if top["risk"] in risks_list), None)
+        domain = next(
+            (d for d, risks_list in DOMAIN_RISKS.items() if top["risk"] in risks_list), None
+        )
         return {
             "verdict": verdict,
             "confidence": top["confidence"],
@@ -427,12 +437,14 @@ def create_judge_app(
         return JSONResponse(result)
 
     async def health(request: Request) -> JSONResponse:
-        return JSONResponse({
-            "status": "ok",
-            "risks": ALL_RISKS,
-            "domains": ALL_DOMAINS,
-            "domain_risk_mapping": DOMAIN_RISKS,
-        })
+        return JSONResponse(
+            {
+                "status": "ok",
+                "risks": ALL_RISKS,
+                "domains": ALL_DOMAINS,
+                "domain_risk_mapping": DOMAIN_RISKS,
+            }
+        )
 
     async def feedback_handler(request: Request) -> JSONResponse:
         try:
@@ -441,9 +453,7 @@ def create_judge_app(
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         text = body.get("text", "")
         if not text:
-            return JSONResponse(
-                {"error": "missing 'text' and 'verdict' fields"}, status_code=400
-            )
+            return JSONResponse({"error": "missing 'text' and 'verdict' fields"}, status_code=400)
 
         # Validate verdict
         valid_verdicts = {"approved", "denied"}
@@ -495,7 +505,7 @@ def run_judge_service(
     import uvicorn
 
     app = create_judge_app(model=model, base_url=base_url, api_key=api_key)
-    print(f"\n  Judge Service (two-layer: risk detection + domain policies)")
+    print("\n  Judge Service (two-layer: risk detection + domain policies)")
     print(f"  {'─' * 50}")
     print(f"  Endpoint:  http://localhost:{port}/judge")
     print(f"  Feedback:  http://localhost:{port}/feedback")
@@ -504,6 +514,6 @@ def run_judge_service(
     print(f"  Model:     {model}")
     print(f"  Risks:     {', '.join(ALL_RISKS)}")
     print(f"  Domains:   {', '.join(ALL_DOMAINS)}")
-    print(f"  Parallel:  all risk specialists run concurrently")
+    print("  Parallel:  all risk specialists run concurrently")
     print()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")

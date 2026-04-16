@@ -72,8 +72,7 @@ class GovernancePolicyEngine:
             for key, required in consent_required.items():
                 if required and not policy.consent.get(key, False):
                     violations.append(
-                        f"Consent '{key}' required but entity {entity} "
-                        f"has not granted it"
+                        f"Consent '{key}' required but entity {entity} has not granted it"
                     )
 
         if violations:

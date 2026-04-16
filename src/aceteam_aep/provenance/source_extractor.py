@@ -52,23 +52,27 @@ def extract_sources_from_messages(
             source_id = f"tool:{tool_call_id}" if tool_call_id else "tool:unknown"
             if source_id not in seen_ids:
                 seen_ids.add(source_id)
-                sources.append(SourceRef(
-                    source_type="tool_call",
-                    source_id=source_id,
-                    content_preview=content[:200],
-                    metadata={"tool_call_id": tool_call_id},
-                ))
+                sources.append(
+                    SourceRef(
+                        source_type="tool_call",
+                        source_id=source_id,
+                        content_preview=content[:200],
+                        metadata={"tool_call_id": tool_call_id},
+                    )
+                )
 
         # System messages often contain RAG context
         elif role == "system" and len(content) > 500:
             source_id = f"system:{hash(content[:200]) & 0xFFFFFFFF:08x}"
             if source_id not in seen_ids:
                 seen_ids.add(source_id)
-                sources.append(SourceRef(
-                    source_type="system_context",
-                    source_id=source_id,
-                    content_preview=content[:200],
-                ))
+                sources.append(
+                    SourceRef(
+                        source_type="system_context",
+                        source_id=source_id,
+                        content_preview=content[:200],
+                    )
+                )
 
         # URLs in any message
         urls = _URL_PATTERN.findall(content)
@@ -76,11 +80,13 @@ def extract_sources_from_messages(
             source_id = f"url:{url}"
             if source_id not in seen_ids:
                 seen_ids.add(source_id)
-                sources.append(SourceRef(
-                    source_type="url",
-                    source_id=source_id,
-                    content_preview=url,
-                ))
+                sources.append(
+                    SourceRef(
+                        source_type="url",
+                        source_id=source_id,
+                        content_preview=url,
+                    )
+                )
 
     # Declared sources from X-AEP-Sources header
     for declared in declared_sources or []:
@@ -92,11 +98,13 @@ def extract_sources_from_messages(
                 stype, _sid = source_id.split(":", 1)
             else:
                 stype = "declared"
-            sources.append(SourceRef(
-                source_type=f"header_{stype}",
-                source_id=source_id,
-                content_preview="",
-            ))
+            sources.append(
+                SourceRef(
+                    source_type=f"header_{stype}",
+                    source_id=source_id,
+                    content_preview="",
+                )
+            )
 
     return sources
 

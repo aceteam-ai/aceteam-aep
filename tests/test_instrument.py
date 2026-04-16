@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -48,9 +48,7 @@ def test_instrument_patches_anthropic() -> None:
 def test_double_instrument_warns() -> None:
     """Calling instrument() twice should warn and skip."""
     instrument(detectors=[CostAnomalyDetector()])
-    with pytest.warns(match="") if False else patch(
-        "aceteam_aep.instrument.log"
-    ) as mock_log:
+    with pytest.warns(match="") if False else patch("aceteam_aep.instrument.log") as mock_log:
         instrument(detectors=[CostAnomalyDetector()])
         mock_log.warning.assert_called_once()
 

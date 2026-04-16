@@ -12,7 +12,12 @@ Prerequisites:
 import openai
 
 from aceteam_aep import wrap
-from aceteam_aep.governance_engine import DataClassifier, GovernancePolicyEngine, OrgPolicy, Redactor
+from aceteam_aep.governance_engine import (
+    DataClassifier,
+    GovernancePolicyEngine,
+    OrgPolicy,
+    Redactor,
+)
 from aceteam_aep.provenance import ProvenanceTracker, extract_sources_from_messages
 
 # --- Setup ---
@@ -21,11 +26,13 @@ client = wrap(openai.OpenAI(), entity="org:acme")
 
 # Governance: define org policies
 policy_engine = GovernancePolicyEngine()
-policy_engine.add_policy(OrgPolicy(
-    entity="org:acme",
-    max_classification="confidential",  # can access up to confidential
-    consent={"training": False, "sharing": True},
-))
+policy_engine.add_policy(
+    OrgPolicy(
+        entity="org:acme",
+        max_classification="confidential",  # can access up to confidential
+        consent={"training": False, "sharing": True},
+    )
+)
 
 classifier = DataClassifier()
 redactor = Redactor()
@@ -68,7 +75,7 @@ print(f"\nRaw output: {output[:100]}...")
 # Step 5: Redact if classification requires it
 redacted_output, redaction_log = redactor.redact_if_needed(output, classification)
 if redaction_log:
-    print(f"\nRedactions applied:")
+    print("\nRedactions applied:")
     for r in redaction_log:
         print(f"  {r}")
     print(f"\nRedacted output: {redacted_output[:100]}...")

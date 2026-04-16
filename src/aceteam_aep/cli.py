@@ -45,8 +45,7 @@ def format_session_summary(
         for s in signals:
             sev_color = _SEV_COLORS.get(s.severity, "")
             lines.append(
-                f"    [{sev_color}{s.severity.upper()}{_RESET}] "
-                f"{s.signal_type}: {s.detail}"
+                f"    [{sev_color}{s.severity.upper()}{_RESET}] {s.signal_type}: {s.detail}"
             )
     lines.append(f"{_DIM}{'─' * 50}{_RESET}")
     lines.append("")

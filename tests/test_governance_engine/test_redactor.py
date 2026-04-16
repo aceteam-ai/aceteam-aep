@@ -53,9 +53,7 @@ def test_redact_if_needed_confidential() -> None:
 
 def test_multiple_patterns() -> None:
     r = Redactor()
-    text, redactions = r.redact(
-        "SSN: 123-45-6789, email: admin@test.com, phone: (555) 123-4567"
-    )
+    text, redactions = r.redact("SSN: 123-45-6789, email: admin@test.com, phone: (555) 123-4567")
     assert "123-45-6789" not in text
     assert "admin@test.com" not in text
     assert text.count("[REDACTED]") >= 3

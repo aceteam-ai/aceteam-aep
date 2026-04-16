@@ -1,6 +1,6 @@
 """Tests for provenance source extraction from messages."""
 
-from aceteam_aep.provenance.source_extractor import SourceRef, extract_sources_from_messages
+from aceteam_aep.provenance.source_extractor import extract_sources_from_messages
 
 
 def test_extract_tool_call_results() -> None:

@@ -34,7 +34,9 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
     try:
         from fastmcp import FastMCP
     except ImportError:
-        log.info("fastmcp not installed — MCP endpoint disabled. Install with: pip install aceteam-aep[mcp]")
+        log.info(
+            "fastmcp not installed — MCP endpoint disabled. Install with: pip install aceteam-aep[mcp]"
+        )
         return None
 
     from .enforcement import EnforcementPolicy, evaluate

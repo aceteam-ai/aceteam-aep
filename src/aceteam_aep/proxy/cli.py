@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import logging
 import os
@@ -337,10 +338,8 @@ def _run_connect(args: argparse.Namespace) -> None:
         print("  Opening AceTeam to generate an API key...")
         print(f"  URL: {auth_url}\n")
 
-        try:
+        with contextlib.suppress(Exception):
             webbrowser.open(auth_url)
-        except Exception:
-            pass
 
         # Prompt for the key
         try:
@@ -355,7 +354,7 @@ def _run_connect(args: argparse.Namespace) -> None:
 
     # Validate the key format
     if not api_key.startswith("act_") and not args.force:
-        print(f"  Warning: key doesn't start with 'act_'. Use --force to save anyway.")
+        print("  Warning: key doesn't start with 'act_'. Use --force to save anyway.")
         return
 
     # Save credentials

@@ -8,11 +8,8 @@ argument parsing without starting a live server.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
 
 
 def test_proxy_help():
@@ -100,8 +97,14 @@ def test_verify_empty_chain(tmp_path):
 
     result = subprocess.run(
         [
-            sys.executable, "-m", "aceteam_aep.proxy.cli",
-            "verify", "--pub-key", str(pub_key_path), "--chain", str(chain_path),
+            sys.executable,
+            "-m",
+            "aceteam_aep.proxy.cli",
+            "verify",
+            "--pub-key",
+            str(pub_key_path),
+            "--chain",
+            str(chain_path),
         ],
         capture_output=True,
         text=True,
@@ -123,8 +126,14 @@ def test_verify_missing_chain_file(tmp_path):
 
     result = subprocess.run(
         [
-            sys.executable, "-m", "aceteam_aep.proxy.cli",
-            "verify", "--pub-key", str(pub_key_path), "--chain", str(tmp_path / "nonexistent.jsonl"),
+            sys.executable,
+            "-m",
+            "aceteam_aep.proxy.cli",
+            "verify",
+            "--pub-key",
+            str(pub_key_path),
+            "--chain",
+            str(tmp_path / "nonexistent.jsonl"),
         ],
         capture_output=True,
         text=True,

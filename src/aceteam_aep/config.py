@@ -102,9 +102,7 @@ def load_config(
         try:
             config.port = int(os.environ["AEP_PORT"])
         except ValueError:
-            raise ValueError(
-                f"AEP_PORT must be a number, got '{os.environ['AEP_PORT']}'"
-            ) from None
+            raise ValueError(f"AEP_PORT must be a number, got '{os.environ['AEP_PORT']}'") from None
     if os.environ.get("AEP_HOST"):
         config.host = os.environ["AEP_HOST"]
     if os.environ.get("AEP_TARGET"):

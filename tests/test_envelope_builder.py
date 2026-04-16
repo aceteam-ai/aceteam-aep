@@ -160,8 +160,11 @@ def test_reconstruct_from_node_records():
 def test_sum_cost_tree():
     nodes = [
         CostNode(
-            id="1", parent_id=None, entity="org:1",
-            category="llm_tokens", compute_cost=Decimal("0.10"),
+            id="1",
+            parent_id=None,
+            entity="org:1",
+            category="llm_tokens",
+            compute_cost=Decimal("0.10"),
         ),
         CostNode(
             id="2",

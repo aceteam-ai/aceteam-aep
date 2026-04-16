@@ -38,17 +38,21 @@ class _NoopDetector:
 def _mock_upstream() -> httpx.Response:
     return httpx.Response(
         status_code=200,
-        content=json.dumps({
-            "id": "x",
-            "object": "chat.completion",
-            "model": "gpt-4o",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "Hi"},
-                "finish_reason": "stop",
-            }],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-        }).encode(),
+        content=json.dumps(
+            {
+                "id": "x",
+                "object": "chat.completion",
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            }
+        ).encode(),
         headers={"content-type": "application/json"},
     )
 
@@ -121,8 +125,9 @@ class TestSafetyToggle:
         assert state["policy"]["default_action"] == "flag"
 
         # Swap to block policy
-        resp = client.post("/aep/api/safety", json={
-            "policy": {"default_action": "block", "block_on": ["high", "medium"]}
-        })
+        resp = client.post(
+            "/aep/api/safety",
+            json={"policy": {"default_action": "block", "block_on": ["high", "medium"]}},
+        )
         assert resp.status_code == 200
         assert resp.json()["policy"]["default_action"] == "block"

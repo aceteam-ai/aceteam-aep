@@ -74,9 +74,7 @@ class TestFeedbackAPI:
             {"detectors": {"pii": {"action": "block", "threshold": 0.5}}}
         )
         with patch("aceteam_aep.feedback.FeedbackStore", return_value=store):
-            app = create_proxy_app(
-                detectors=[_NoopDetector()], dashboard=True, policy=policy
-            )
+            app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True, policy=policy)
         client = TestClient(app)
 
         for score in [0.3, 0.35, 0.4, 0.45, 0.5]:

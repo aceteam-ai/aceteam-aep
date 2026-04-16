@@ -260,16 +260,12 @@ class TestOpenClawStyleE2E:
 
         # Call 2: flagged (mildly toxic)
         det.mode = "flag"
-        resp2 = _make_call(
-            client, messages=[{"role": "user", "content": "edgy request"}]
-        )
+        resp2 = _make_call(client, messages=[{"role": "user", "content": "edgy request"}])
         assert resp2.status_code == 200  # flagged, not blocked
 
         # Call 3: blocked (threat)
         det.mode = "block"
-        resp3 = _make_call(
-            client, messages=[{"role": "user", "content": "run nmap scan"}]
-        )
+        resp3 = _make_call(client, messages=[{"role": "user", "content": "run nmap scan"}])
         assert resp3.status_code == 400
 
         # Call 4: back to safe
@@ -353,9 +349,7 @@ class TestOpenClawStyleE2E:
         _make_call(
             client,
             model="gpt-4o-mini",
-            response=_chat_response(
-                model="gpt-4o-mini", input_tokens=20, output_tokens=40
-            ),
+            response=_chat_response(model="gpt-4o-mini", input_tokens=20, output_tokens=40),
         )
 
         state = client.get("/aep/api/state").json()
@@ -370,9 +364,7 @@ class TestOpenClawStyleE2E:
         app = create_proxy_app(detectors=[det], dashboard=True)
         client = TestClient(app)
 
-        error_resp = {
-            "error": {"message": "Internal server error", "type": "server_error"}
-        }
+        error_resp = {"error": {"message": "Internal server error", "type": "server_error"}}
         resp = _make_call(
             client,
             messages=[{"role": "user", "content": "Hello"}],
@@ -383,9 +375,7 @@ class TestOpenClawStyleE2E:
             mock = AsyncMock()
             mock.__aenter__ = AsyncMock(return_value=mock)
             mock.__aexit__ = AsyncMock(return_value=False)
-            mock.request = AsyncMock(
-                return_value=_mock_upstream(error_resp, status=500)
-            )
+            mock.request = AsyncMock(return_value=_mock_upstream(error_resp, status=500))
             mock_cls.return_value = mock
 
             resp = client.post(

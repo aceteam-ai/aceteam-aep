@@ -199,12 +199,8 @@ def recommend_thresholds(
         # Find the threshold that separates most false positives from true positives.
         # Strategy: set threshold to the 90th percentile of dismissed scores.
         # This filters out ~90% of false positives while keeping true positives.
-        dismissed_scores = sorted(
-            [v.score for v in dismissed if v.score is not None]
-        )
-        confirmed_scores = sorted(
-            [v.score for v in confirmed if v.score is not None]
-        )
+        dismissed_scores = sorted([v.score for v in dismissed if v.score is not None])
+        confirmed_scores = sorted([v.score for v in confirmed if v.score is not None])
 
         suggested: float | None = None
         reason = ""

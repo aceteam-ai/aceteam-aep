@@ -104,8 +104,13 @@ def test_proxy_disconnect_via_wrap(tmp_path):
     """wrap should fully disconnect (exit cleanly) after child command finishes."""
     result = subprocess.run(
         [
-            sys.executable, "-m", "aceteam_aep.proxy.cli",
-            "wrap", "--no-safety", "--", "true",
+            sys.executable,
+            "-m",
+            "aceteam_aep.proxy.cli",
+            "wrap",
+            "--no-safety",
+            "--",
+            "true",
         ],
         capture_output=True,
         text=True,
@@ -118,9 +123,15 @@ def test_proxy_disconnect_propagates_child_failure():
     """wrap should exit with child's non-zero code on disconnect."""
     result = subprocess.run(
         [
-            sys.executable, "-m", "aceteam_aep.proxy.cli",
-            "wrap", "--no-safety", "--",
-            sys.executable, "-c", "import sys; sys.exit(3)",
+            sys.executable,
+            "-m",
+            "aceteam_aep.proxy.cli",
+            "wrap",
+            "--no-safety",
+            "--",
+            sys.executable,
+            "-c",
+            "import sys; sys.exit(3)",
         ],
         capture_output=True,
         text=True,
