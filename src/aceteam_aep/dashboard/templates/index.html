@@ -1834,6 +1834,7 @@ function renderCustomPolicies() {
     nameGroup.className = 'policy-form-group';
     var nameLabel = document.createElement('label');
     nameLabel.className = 'policy-form-label';
+    nameLabel.htmlFor = 'policy-form-name';
     nameLabel.textContent = 'Name';
     nameGroup.appendChild(nameLabel);
     var nameInput = document.createElement('input');
@@ -1849,6 +1850,7 @@ function renderCustomPolicies() {
     ruleGroup.className = 'policy-form-group';
     var ruleLabel = document.createElement('label');
     ruleLabel.className = 'policy-form-label';
+    ruleLabel.htmlFor = 'policy-form-rule';
     ruleLabel.textContent = 'Rule';
     ruleGroup.appendChild(ruleLabel);
     var ruleInput = document.createElement('textarea');
@@ -1915,7 +1917,17 @@ function renderCustomPolicies() {
       var toggle = document.createElement('div');
       toggle.className = 'policy-toggle-mini' + (policy.enabled ? ' on' : '');
       toggle.title = policy.enabled ? 'Disable' : 'Enable';
+      toggle.setAttribute('role', 'switch');
+      toggle.tabIndex = 0;
+      toggle.setAttribute('aria-checked', policy.enabled ? 'true' : 'false');
+      toggle.setAttribute('aria-label', (policy.enabled ? 'Disable ' : 'Enable ') + policy.name);
       toggle.onclick = function() { toggleCustomPolicy(policy.id); };
+      toggle.onkeydown = function(event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          toggleCustomPolicy(policy.id);
+        }
+      };
       actions.appendChild(toggle);
 
       // Edit
