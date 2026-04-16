@@ -47,7 +47,7 @@ class ContentSafetyDetector(SafetyDetector):
             log.warning("Content safety model unavailable", exc_info=True)
             self._available = False
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,

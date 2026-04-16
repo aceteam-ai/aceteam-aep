@@ -487,7 +487,7 @@ class TrustEngineDetector(SafetyDetector):
         self._last_judge_results: list[JudgeResult] = []
         self._last_latency_ms: float = 0
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,

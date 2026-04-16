@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,7 +11,7 @@ import pytest
 
 from aceteam_aep import AepSession, wrap
 from aceteam_aep.enforcement import EnforcementPolicy
-from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
 
 # ---------------------------------------------------------------------------
@@ -99,6 +100,18 @@ def test_openai_cost_recorded() -> None:
     assert client.aep.cost_usd > Decimal("0")
 
 
+@pytest.mark.asyncio
+async def test_sync_openai_create_with_running_event_loop() -> None:
+    """Sync wrapped client must work when asyncio already runs (e.g. notebooks)."""
+    client = _make_openai_client(_make_openai_response(input_tokens=10, output_tokens=20))
+    wrap(client, detectors=_FAST_DETECTORS)
+    client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hi"}],
+    )
+    assert client.aep.cost_usd > Decimal("0")
+
+
 def test_openai_spans_recorded() -> None:
     client = _make_openai_client()
     wrap(client, detectors=_FAST_DETECTORS)
@@ -133,6 +146,18 @@ def test_openai_call_count() -> None:
 
 
 def test_anthropic_cost_recorded() -> None:
+    client = _make_anthropic_client()
+    wrap(client, detectors=_FAST_DETECTORS)
+    client.messages.create(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        max_tokens=100,
+    )
+    assert client.aep.cost_usd > Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_sync_anthropic_create_with_running_event_loop() -> None:
     client = _make_anthropic_client()
     wrap(client, detectors=_FAST_DETECTORS)
     client.messages.create(
@@ -260,10 +285,10 @@ def test_custom_policy() -> None:
 def test_custom_detectors() -> None:
     """Pass a custom detector list to wrap()."""
 
-    class AlwaysFlagDetector:
+    class AlwaysFlagDetector(SafetyDetector):
         name = "always_flag"
 
-        def check(self, **kwargs: Any) -> list[SafetySignal]:
+        async def check(self, **kwargs) -> Sequence[SafetySignal]:
             return [
                 SafetySignal(
                     signal_type="custom",

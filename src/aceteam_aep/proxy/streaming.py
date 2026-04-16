@@ -139,7 +139,7 @@ async def handle_streaming_request(
             )
 
         # Run safety detectors
-        signals = registry.run_all(
+        signals = await registry.run_all(
             input_text=input_text,
             output_text=output_text,
             call_id=call_id,

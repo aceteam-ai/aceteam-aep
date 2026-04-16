@@ -166,17 +166,17 @@ class TestTrustEngineDetector:
         assert "sox" in det.dimensions
 
     @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
-    def test_safe_output_no_signals(self, mock_call):
+    async def test_safe_output_no_signals(self, mock_call):
         mock_call.return_value = (
             [DimensionResult(name="pii", safe=True, confidence=0.9)],
             100,
         )
         det = TrustEngineDetector(model="test", threshold=0.6)
-        signals = det.check(input_text="hello", output_text="hi", call_id="t1")
+        signals = await det.check(input_text="hello", output_text="hi", call_id="t1")
         assert len(signals) == 0
 
     @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
-    def test_unsafe_output_high_signal(self, mock_call):
+    async def test_unsafe_output_high_signal(self, mock_call):
         mock_call.return_value = (
             [
                 DimensionResult(name="pii", safe=False, confidence=0.9),
@@ -185,7 +185,7 @@ class TestTrustEngineDetector:
             150,
         )
         det = TrustEngineDetector(model="test", threshold=0.6)
-        signals = det.check(input_text="bad", output_text="bad", call_id="t2")
+        signals = await det.check(input_text="bad", output_text="bad", call_id="t2")
         assert len(signals) == 1
         assert signals[0].severity == "high"
         assert signals[0].score is not None
@@ -193,32 +193,32 @@ class TestTrustEngineDetector:
         assert "multi-perspective" in signals[0].detail
 
     @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
-    def test_caching(self, mock_call):
+    async def test_caching(self, mock_call):
         mock_call.return_value = (
             [DimensionResult(name="pii", safe=True, confidence=0.95)],
             50,
         )
         det = TrustEngineDetector(model="test")
-        det.check(input_text="same", output_text="same", call_id="c1")
+        await det.check(input_text="same", output_text="same", call_id="c1")
         assert mock_call.call_count == 1
 
-        det.check(input_text="same", output_text="same", call_id="c2")
+        await det.check(input_text="same", output_text="same", call_id="c2")
         assert mock_call.call_count == 1  # cached
         assert det.cache.hits == 1
 
     @patch("aceteam_aep.safety.trust_engine._call_judge")
-    def test_ensemble_mode(self, mock_call):
+    async def test_ensemble_mode(self, mock_call):
         mock_call.return_value = JudgeResult(judge_id="test", safe=True, confidence=0.85)
         det = TrustEngineDetector(
             mode="ensemble",
             judges=[{"model": "a"}, {"model": "b"}],
         )
-        signals = det.check(input_text="test", output_text="test", call_id="e1")
+        signals = await det.check(input_text="test", output_text="test", call_id="e1")
         assert len(signals) == 0
         assert mock_call.call_count == 2
 
     @patch("aceteam_aep.safety.trust_engine._call_multi_perspective")
-    def test_dimension_results_stored(self, mock_call):
+    async def test_dimension_results_stored(self, mock_call):
         mock_call.return_value = (
             [
                 DimensionResult(name="pii", safe=True, confidence=0.9),
@@ -227,6 +227,6 @@ class TestTrustEngineDetector:
             200,
         )
         det = TrustEngineDetector(model="test")
-        det.check(input_text="test", output_text="test", call_id="d1")
+        await det.check(input_text="test", output_text="test", call_id="d1")
         assert len(det.last_dimension_results) == 2
         assert det.last_dimension_results[0].name == "pii"

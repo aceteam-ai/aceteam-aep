@@ -10,6 +10,7 @@ This replaces manual E2E verification (#18).
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +18,7 @@ import httpx
 from starlette.testclient import TestClient
 
 from aceteam_aep.proxy.app import create_proxy_app
-from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 
 # ---------------------------------------------------------------------------
 # Mock response builders
@@ -126,7 +127,7 @@ def _make_call(
 # ---------------------------------------------------------------------------
 
 
-class ScenarioDetector:
+class ScenarioDetector(SafetyDetector):
     """Detector that can be switched between scenarios per-call."""
 
     name = "scenario"
@@ -134,7 +135,7 @@ class ScenarioDetector:
     def __init__(self) -> None:
         self.mode: str = "pass"  # "pass", "flag", "block"
 
-    def check(self, **kwargs: Any) -> list[SafetySignal]:
+    async def check(self, **kwargs: Any) -> Sequence[SafetySignal]:
         call_id = kwargs.get("call_id", "")
         if self.mode == "block":
             return [

@@ -8,6 +8,7 @@ version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "anyio" },
     { name = "google-genai" },
     { name = "httpx" },
     { name = "openai" },
@@ -97,6 +98,7 @@ requires-dist = [
     { name = "aceteam-aep", extras = ["dashboard", "safety"], marker = "extra == 'proxy'" },
     { name = "aceteam-aep", extras = ["xai", "ollama", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events"], marker = "extra == 'all'" },
     { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
+    { name = "anyio", specifier = ">=4.12" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
     { name = "google-genai", specifier = ">=1.0.0,<2.0.0" },
     { name = "httpx", specifier = ">=0.28.0" },

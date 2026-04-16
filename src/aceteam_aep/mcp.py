@@ -35,12 +35,16 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from aceteam_aep.enforcement import EnforcementPolicy
+    from aceteam_aep.safety.base import DetectorRegistry
 
 log = logging.getLogger(__name__)
 
 
-def _build_detectors(policy_path: str | None = None) -> tuple[Any, Any]:
+def _build_detectors(policy_path: str | None = None) -> tuple[DetectorRegistry, EnforcementPolicy]:
     """Build detectors and policy from optional policy path."""
     from .enforcement import EnforcementPolicy, build_detectors_from_policy
     from .safety.base import DetectorRegistry
@@ -51,15 +55,10 @@ def _build_detectors(policy_path: str | None = None) -> tuple[Any, Any]:
     else:
         from .safety.agent_threat import AgentThreatDetector
         from .safety.cost_anomaly import CostAnomalyDetector
+        from .safety.pii import PiiDetector
 
         policy = EnforcementPolicy()
-        detectors = [CostAnomalyDetector(), AgentThreatDetector()]
-        try:
-            from .safety.pii import PiiDetector
-
-            detectors.append(PiiDetector())
-        except Exception:
-            pass
+        detectors = [CostAnomalyDetector(), AgentThreatDetector(), PiiDetector()]
 
     registry = DetectorRegistry()
     for det in detectors:
@@ -68,7 +67,7 @@ def _build_detectors(policy_path: str | None = None) -> tuple[Any, Any]:
     return registry, policy
 
 
-def run_mcp_server(policy_path: str | None = None) -> None:
+async def run_mcp_server(policy_path: str | None = None) -> None:
     """Run the AEP safety MCP server using stdin/stdout JSON-RPC."""
     registry, policy = _build_detectors(policy_path)
 
@@ -115,7 +114,7 @@ def run_mcp_server(policy_path: str | None = None) -> None:
     call_count = 0
     all_signals: list[Any] = []
 
-    def handle_request(req: dict[str, Any]) -> dict[str, Any]:
+    async def handle_request(req: dict[str, Any]) -> dict[str, Any]:
         nonlocal call_count
 
         method = req.get("method", "")
@@ -156,7 +155,7 @@ def run_mcp_server(policy_path: str | None = None) -> None:
                 call_id = f"mcp-{call_count}"
                 call_count += 1
 
-                signals = registry.run_all(
+                signals = await registry.run_all(
                     input_text=text,
                     output_text=context,
                     call_id=call_id,
@@ -221,7 +220,7 @@ def run_mcp_server(policy_path: str | None = None) -> None:
             continue
         try:
             req = json.loads(line)
-            resp = handle_request(req)
+            resp = await handle_request(req)
             if resp:
                 sys.stdout.write(json.dumps(resp) + "\n")
                 sys.stdout.flush()

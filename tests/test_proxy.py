@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -10,7 +11,7 @@ import httpx
 from starlette.testclient import TestClient
 
 from aceteam_aep.proxy.app import ProxyState, create_proxy_app
-from aceteam_aep.safety.base import SafetySignal
+from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 from aceteam_aep.safety.cost_anomaly import CostAnomalyDetector
 
 
@@ -140,10 +141,10 @@ class TestProxySafetyBlocking:
     def test_flags_medium_severity(self) -> None:
         """Medium severity signals should flag (pass through with header)."""
 
-        class MediumDetector:
+        class MediumDetector(SafetyDetector):
             name = "medium_test"
 
-            def check(self, **kwargs: Any) -> list[SafetySignal]:
+            async def check(self, **kwargs) -> Sequence[SafetySignal]:
                 return [
                     SafetySignal(
                         signal_type="test",

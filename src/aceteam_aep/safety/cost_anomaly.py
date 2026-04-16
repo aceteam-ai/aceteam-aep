@@ -20,7 +20,7 @@ class CostAnomalyDetector(SafetyDetector):
         self._multiplier = multiplier
         self._history: list[Decimal] = []
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,

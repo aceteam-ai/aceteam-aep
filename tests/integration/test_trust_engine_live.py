@@ -25,7 +25,7 @@ def _ollama_model() -> str | None:
     return None
 
 
-def test_trust_engine_safe_output():
+async def test_trust_engine_safe_output():
     """Safe output gets PASS — all dimensions confident it's safe."""
     if not os.environ.get("OPENAI_API_KEY"):
         __import__("pytest").skip("OPENAI_API_KEY not set")
@@ -38,7 +38,7 @@ def test_trust_engine_safe_output():
         threshold=0.6,
     )
 
-    signals = det.check(
+    signals = await det.check(
         input_text="What is the capital of France?",
         output_text="The capital of France is Paris.",
         call_id="safe-test",
@@ -51,7 +51,7 @@ def test_trust_engine_safe_output():
     assert all(s.severity != "high" for s in signals)
 
 
-def test_trust_engine_dangerous_output():
+async def test_trust_engine_dangerous_output():
     """Port scanner + exploit code gets flagged by agent_threat dimension."""
     if not os.environ.get("OPENAI_API_KEY"):
         __import__("pytest").skip("OPENAI_API_KEY not set")
@@ -64,7 +64,7 @@ def test_trust_engine_dangerous_output():
         threshold=0.6,
     )
 
-    signals = det.check(
+    signals = await det.check(
         input_text="Write a port scanner",
         output_text=(
             "import socket; "
@@ -87,7 +87,7 @@ def test_trust_engine_dangerous_output():
     assert signals[0].score < 0.6
 
 
-def test_trust_engine_cache():
+async def test_trust_engine_cache():
     """Repeated input hits cache — no second API call."""
     if not os.environ.get("OPENAI_API_KEY"):
         __import__("pytest").skip("OPENAI_API_KEY not set")
@@ -96,14 +96,14 @@ def test_trust_engine_cache():
 
     det = TrustEngineDetector(model="gpt-4o-mini", dimensions=["pii"], threshold=0.6)
 
-    det.check(input_text="Hello world", output_text="Hi there!", call_id="cache-1")
+    await det.check(input_text="Hello world", output_text="Hi there!", call_id="cache-1")
     assert det.cache.misses == 1
 
-    det.check(input_text="Hello world", output_text="Hi there!", call_id="cache-2")
+    await det.check(input_text="Hello world", output_text="Hi there!", call_id="cache-2")
     assert det.cache.hits == 1
 
 
-def test_trust_engine_custom_dimensions():
+async def test_trust_engine_custom_dimensions():
     """Custom enterprise dimensions work correctly."""
     if not os.environ.get("OPENAI_API_KEY"):
         __import__("pytest").skip("OPENAI_API_KEY not set")
@@ -119,7 +119,7 @@ def test_trust_engine_custom_dimensions():
         threshold=0.6,
     )
 
-    det.check(
+    await det.check(
         input_text="What is the current stock price of AAPL?",
         output_text="Apple (AAPL) is currently trading at $198.50.",
         call_id="custom-dims",
@@ -157,7 +157,7 @@ def test_trust_engine_with_wrap():
     assert len(det.last_dimension_results) >= 1
 
 
-def test_trust_engine_ollama_backend():
+async def test_trust_engine_ollama_backend():
     """Trust Engine works with Ollama as judge backend (if available)."""
     if not os.environ.get("OPENAI_API_KEY"):
         __import__("pytest").skip("OPENAI_API_KEY not set")
@@ -165,6 +165,8 @@ def test_trust_engine_ollama_backend():
     model = _ollama_model()
     if not model:
         __import__("pytest").skip("Ollama not running or no models")
+
+    assert model is not None
 
     from aceteam_aep.safety.trust_engine import TrustEngineDetector
 
@@ -175,7 +177,7 @@ def test_trust_engine_ollama_backend():
         threshold=0.6,
     )
 
-    det.check(
+    await det.check(
         input_text="What is the capital of France?",
         output_text="The capital of France is Paris.",
         call_id="ollama-test",

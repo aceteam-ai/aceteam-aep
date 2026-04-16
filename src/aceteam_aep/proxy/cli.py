@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import importlib
 import logging
@@ -898,7 +899,7 @@ def main() -> None:
     elif args.command == "mcp-server":
         from ..mcp import run_mcp_server
 
-        run_mcp_server(policy_path=args.policy)
+        asyncio.run(run_mcp_server(policy_path=args.policy))
     elif args.command == "setup":
         _run_setup(args)
     elif args.command == "connect":

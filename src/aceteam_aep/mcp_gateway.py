@@ -35,7 +35,8 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
         from fastmcp import FastMCP
     except ImportError:
         log.info(
-            "fastmcp not installed — MCP endpoint disabled. Install with: pip install aceteam-aep[mcp]"
+            "fastmcp not installed — MCP endpoint disabled. "
+            "Install with: pip install aceteam-aep[mcp]"
         )
         return None
 
@@ -52,7 +53,7 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
     )
 
     @mcp.tool()
-    def check_safety(text: str, context: str = "") -> str:
+    async def check_safety(text: str, context: str = "") -> str:
         """Check text for safety issues before executing a risky action.
 
         Returns PASS, FLAG, or BLOCK with details about any detected threats
@@ -65,7 +66,7 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
         state.call_count += 1
         call_id = f"mcp-{state.call_count}"
 
-        signals = state.registry.run_all(
+        signals = await state.registry.run_all(
             input_text=text,
             output_text=context,
             call_id=call_id,

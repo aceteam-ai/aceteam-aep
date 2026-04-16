@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ class SafetyDetector(Protocol):
 
     name: str
 
-    def check(
+    async def check(
         self,
         *,
         input_text: str,
@@ -52,7 +53,7 @@ class DetectorRegistry:
     def add(self, detector: SafetyDetector) -> None:
         self._detectors.append(detector)
 
-    def run_all(
+    async def run_all(
         self,
         *,
         input_text: str,
@@ -60,21 +61,29 @@ class DetectorRegistry:
         call_id: str,
         **kwargs,
     ) -> Sequence[SafetySignal]:
-        signals: list[SafetySignal] = []
-        for det in self._detectors:
+        async def _run_one(detector: SafetyDetector) -> Sequence[SafetySignal]:
             try:
-                results = det.check(
-                    input_text=input_text, output_text=output_text, call_id=call_id, **kwargs
+                results = await detector.check(
+                    input_text=input_text,
+                    output_text=output_text,
+                    call_id=call_id,
+                    **kwargs,
                 )
                 for s in results:
-                    s.detector = det.name
-                signals.extend(results)
+                    s.detector = detector.name
+                return list(results)
             except Exception:
                 log.warning(
                     "Detector %s failed, skipping",
-                    getattr(det, "name", "unknown"),
+                    getattr(detector, "name", "unknown"),
                     exc_info=True,
                 )
+                return []
+
+        chunks = await asyncio.gather(*(_run_one(detector) for detector in self._detectors))
+        signals: list[SafetySignal] = []
+        for chunk in chunks:
+            signals.extend(chunk)
         return signals
 
 

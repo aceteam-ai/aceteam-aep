@@ -18,6 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "anthropic>=0.45.0,<1.0.0",
+    "anyio>=4.12",
     "google-genai>=1.0.0,<2.0.0",
     "httpx>=0.28.0",
     "openai>=1.65.0,<2.0.0",
