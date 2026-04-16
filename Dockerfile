@@ -2,6 +2,13 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
+# programasweights -> llama-cpp-python may build from source when no wheel matches;
+# CMake needs a C/C++ toolchain (slim images omit it by default).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv for fast dependency resolution
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
