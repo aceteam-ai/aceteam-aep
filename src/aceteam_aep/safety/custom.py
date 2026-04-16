@@ -12,6 +12,14 @@ if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
 
 
+def _retrieve_eager_task_exception(task: asyncio.Task[object]) -> None:
+    """Eager ``create_task``; retrieve the result so asyncio doesn't warn."""
+
+    if task.cancelled():
+        return
+    task.exception()
+
+
 # compile_and_load is synchronous; use a thread lock so prepare() is safe under
 # asyncio.run() (no running loop) and under create_task() (running loop).
 paw_lock = threading.Lock()
@@ -32,17 +40,19 @@ class AsyncPawFunction:
     def __init__(self, spec: str):
         self._spec = spec
         self._fn: PawFunction | None = None
+        self._prepare_task: asyncio.Task[PawFunction] | None = None
+        self._prepare_lock = asyncio.Lock()
+        self._eager_task: asyncio.Task[PawFunction] | None = None
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             asyncio.run(self.prepare())
         else:
-            asyncio.create_task(self.prepare())
+            # Single entry point: prepare() creates the compile task and awaits it.
+            self._eager_task = asyncio.create_task(self.prepare())
+            self._eager_task.add_done_callback(_retrieve_eager_task_exception)
 
-    async def prepare(self) -> PawFunction:
-        if self._fn is not None:
-            return self._fn
-
+    async def _prepare_impl(self) -> PawFunction:
         def _compile_and_load() -> None:
             with paw_lock:
                 if self._fn is None:
@@ -53,6 +63,26 @@ class AsyncPawFunction:
         await asyncio.to_thread(_compile_and_load)
         assert self._fn is not None
         return self._fn
+
+    async def prepare(self) -> PawFunction:
+        # Fast path when compilation already finished.
+        if self._fn is not None:
+            return self._fn
+        # Exactly one in-flight task for this instance: concurrent awaiters share
+        # it instead of each scheduling asyncio.to_thread via _prepare_impl.
+        async with self._prepare_lock:
+            # Double check after acquiring the lock.
+            if self._fn is not None:
+                return self._fn
+            if self._prepare_task is None:
+                self._prepare_task = asyncio.create_task(self._prepare_impl())
+        assert self._prepare_task is not None
+        try:
+            return await self._prepare_task
+        except BaseException:
+            async with self._prepare_lock:
+                self._prepare_task = None
+            raise
 
     async def __call__(self, text: str) -> str:
         fn = await self.prepare()
@@ -125,9 +155,12 @@ class CustomPolicy(BaseModel):
 
     def eager(self) -> Self:
         """
-        Begin eagerly compiling the PawFunction in the background.
+        Begin eagerly compiling the PawFunction in the background, if enabled.
+
+        For disabled policies, this method is a no-op.
         """
-        _ = self._paw
+        if self.enabled:
+            _ = self._paw
         return self
 
     async def __call__(self, text: str) -> bool:
