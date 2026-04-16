@@ -188,6 +188,55 @@ class CustomPolicy(BaseModel):
         return True
 
 
+def default_custom_policies() -> tuple[CustomPolicy, ...]:
+    """Starter custom policies (all disabled until explicitly enabled).
+
+    IDs are deterministic so dashboards and automation can refer to them
+    stably across process restarts.
+    """
+
+    def _stable_id(slug: str) -> str:
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"https://aceteam-aep.invalid/custom-policy/{slug}",
+            )
+        )
+
+    return (
+        CustomPolicy(
+            id=_stable_id("english-only"),
+            name="English only",
+            rule=(
+                "Messages must be primarily in English. "
+                "Empty or whitespace-only text is compliant. "
+                "This rule is violated if the substantive content of a message is not in English."
+            ),
+            enabled=False,
+        ),
+        CustomPolicy(
+            id=_stable_id("monetary-policy"),
+            name="Monetary policy",
+            rule=(
+                "Monetary amounts must always be expressed in US dollars ($, USD, or US$). "
+                "Empty or whitespace-only text is compliant. "
+                "This rule is violated if other currencies (such as EUR, GBP, ¥, ₹) appear."
+            ),
+            enabled=False,
+        ),
+        CustomPolicy(
+            id=_stable_id("no-fun"),
+            name="No fun",
+            rule=(
+                "Humor, jokes, sarcasm, witty wordplay, or comedy are not allowed. "
+                "Empty or whitespace-only text is compliant. "
+                "This rule is violated if there is any attempt at humor."
+            ),
+            enabled=False,
+        ),
+    )
+
+
 class CustomPolicyStore:
     """Authoritative collection of custom policies keyed by id.
 
@@ -260,7 +309,9 @@ class CustomSafetyDetector(SafetyDetector):
 
         signals: list[SafetySignal] = []
 
-        chunks = await asyncio.gather(*(_check_one(policy) for policy in self._store.all()))
+        chunks = await asyncio.gather(
+            *(_check_one(policy) for policy in self._store.all() if policy.enabled)
+        )
         for chunk in chunks:
             signals.extend(chunk)
         return signals
@@ -270,4 +321,5 @@ __all__ = [
     "CustomPolicy",
     "CustomPolicyStore",
     "CustomSafetyDetector",
+    "default_custom_policies",
 ]

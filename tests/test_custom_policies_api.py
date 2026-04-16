@@ -25,7 +25,9 @@ class TestCustomPoliciesAPI:
         client = TestClient(app)
 
         listed = client.get("/aep/api/custom-policies").json()
-        assert listed == {"policies": []}
+        names = {p["name"] for p in listed["policies"]}
+        assert names == {"English only", "Monetary policy", "No fun"}
+        assert all(p["enabled"] is False for p in listed["policies"])
 
         create = client.post(
             "/aep/api/custom-policies",
@@ -39,8 +41,8 @@ class TestCustomPoliciesAPI:
         assert body["enabled"] is True
 
         listed = client.get("/aep/api/custom-policies").json()
-        assert len(listed["policies"]) == 1
-        assert listed["policies"][0]["id"] == policy_id
+        assert len(listed["policies"]) == 4
+        assert any(p["id"] == policy_id for p in listed["policies"])
 
         one = client.get(f"/aep/api/custom-policies/{policy_id}")
         assert one.status_code == 200
