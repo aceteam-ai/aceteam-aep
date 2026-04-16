@@ -781,70 +781,8 @@
       letter-spacing: 0.8px;
     }
 
-    /* ── Policy Controls ── */
-    .policy-controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .detector-toggle {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      background: var(--bg-inset);
-      padding: 7px 14px;
-      border-radius: 20px;
-      cursor: pointer;
-      user-select: none;
-      border: 1px solid var(--border);
-      transition: border-color 0.2s, background 0.2s;
-    }
-
-    .detector-toggle:hover {
-      border-color: var(--accent-cyan);
-      background: var(--bg-raised);
-    }
-
-    .detector-toggle.disabled {
-      opacity: 0.35;
-    }
-
-    .detector-toggle input[type="checkbox"] {
-      accent-color: var(--accent-cyan);
-      cursor: pointer;
-      width: 13px;
-      height: 13px;
-    }
-
-    .detector-toggle label {
-      font-family: var(--font-label);
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-primary);
-      cursor: pointer;
-      text-transform: uppercase;
-      letter-spacing: 0.6px;
-    }
-
-    .detector-toggle.disabled label {
-      text-decoration: line-through;
-      color: var(--text-muted);
-    }
-
-    .category-divider {
-      width: 100%;
-      font-family: var(--font-label);
-      font-size: 9px;
-      font-weight: 600;
-      color: var(--accent-peach);
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-      margin: 6px 0 2px;
-    }
-
-    /* ── Custom Policies ── */
-    .custom-policies-list {
+    /* ── Policies (natural-language rules; API: /aep/api/custom-policies) ── */
+    .policies-list {
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -1363,7 +1301,7 @@
 
   <!-- ===== DEVELOPER VIEW ===== -->
   <div id="view-dev">
-    <div class="grid grid-4">
+    <div class="grid">
       <div class="card">
         <div class="card-label">Total Cost</div>
         <div class="card-value cost" id="cost">$0.000000</div>
@@ -1375,11 +1313,6 @@
       <div class="card">
         <div class="card-label">Safety Status</div>
         <div class="card-value" id="status"></div>
-      </div>
-      <div class="card" id="attestation-card" style="display:none;">
-        <div class="card-label">Merkle Chain</div>
-        <div class="card-value small green" id="chain-height">0</div>
-        <div style="font-size:11px;color:var(--accent-sky);margin-top:4px;" id="chain-signer"></div>
       </div>
     </div>
 
@@ -1396,16 +1329,9 @@
       </div>
     </div>
 
-    <div class="section" id="policy-section">
-      <h2>Policy Controls</h2>
-      <div class="policy-controls" id="policy-controls">
-        <span class="empty">Loading policy...</span>
-      </div>
-    </div>
-
-    <div class="section" id="custom-policies-section" style="animation-delay: 0.22s;">
-      <h2>Custom Policies</h2>
-      <div id="custom-policies-container"></div>
+    <div class="section" id="policies-section" style="animation-delay: 0.22s;">
+      <h2>Policies</h2>
+      <div id="policies-container"></div>
     </div>
 
     <div class="section">
@@ -1588,168 +1514,6 @@
       var label = document.getElementById('safety-label');
       toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
       label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
-    }
-
-    var currentPolicy = null;
-
-    function fetchPolicy() {
-      fetch('api/safety')
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          safetyEnabled = data.safety_enabled;
-          var toggle = document.getElementById('safety-toggle');
-          var label = document.getElementById('safety-label');
-          toggle.className = 'toggle-switch' + (safetyEnabled ? ' on' : '');
-          label.textContent = safetyEnabled ? 'Safety ON' : 'Safety OFF';
-          currentPolicy = data.policy;
-          renderPolicyControls(data.policy);
-        })
-        .catch(function () { });
-    }
-
-    function renderPolicyControls(policy) {
-      var container = document.getElementById('policy-controls');
-      if (!container || !policy) return;
-      container.textContent = '';
-
-      var detectors = policy.detectors || {};
-      var detectorNames = Object.keys(detectors);
-
-      var displayNames = {
-        agent_threat: 'Agent Threat',
-        pii: 'PII Detection',
-        cost_anomaly: 'Cost Anomaly',
-        content_safety: 'Content Safety',
-        trust_engine: 'Trust Engine',
-        ferpa: 'FERPA'
-      };
-
-      var domainCategories = ['finance', 'iot', 'software', 'web', 'program'];
-      var categoryNames = {
-        finance: 'Finance', iot: 'IoT', software: 'Software', web: 'Web', program: 'Program'
-      };
-
-      if (detectorNames.length === 0) {
-        var empty = document.createElement('span');
-        empty.className = 'empty';
-        empty.textContent = 'No detectors configured';
-        container.appendChild(empty);
-        return;
-      }
-
-      detectorNames.forEach(function (name) {
-        var det = detectors[name];
-        var isEnabled = det.enabled !== false;
-
-        var wrap = document.createElement('div');
-        wrap.className = 'detector-toggle' + (isEnabled ? '' : ' disabled');
-
-        var cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = isEnabled;
-        cb.id = 'det-' + name;
-        cb.onchange = function () { toggleDetector(name, cb.checked); };
-
-        var lbl = document.createElement('label');
-        lbl.htmlFor = 'det-' + name;
-        lbl.textContent = displayNames[name] || name;
-
-        wrap.appendChild(cb);
-        wrap.appendChild(lbl);
-        container.appendChild(wrap);
-      });
-
-      var teConfig = detectors.trust_engine;
-      if (teConfig && teConfig.enabled !== false) {
-        var divider = document.createElement('div');
-        divider.className = 'category-divider';
-        divider.textContent = 'Trust Engine Categories';
-        container.appendChild(divider);
-
-        var activeDims = (teConfig.extra && teConfig.extra.dimensions) || domainCategories;
-
-        domainCategories.forEach(function (cat) {
-          var isActive = activeDims.indexOf(cat) >= 0;
-
-          var wrap = document.createElement('div');
-          wrap.className = 'detector-toggle' + (isActive ? '' : ' disabled');
-
-          var cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.checked = isActive;
-          cb.id = 'cat-' + cat;
-          cb.onchange = function () { toggleCategory(cat, cb.checked); };
-
-          var lbl = document.createElement('label');
-          lbl.htmlFor = 'cat-' + cat;
-          lbl.textContent = categoryNames[cat] || cat;
-
-          wrap.appendChild(cb);
-          wrap.appendChild(lbl);
-          container.appendChild(wrap);
-        });
-      }
-    }
-
-    function toggleDetector(name, enabled) {
-      if (!currentPolicy) return;
-      var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
-      if (!detectors[name]) detectors[name] = {};
-      detectors[name].enabled = enabled;
-
-      var newPolicy = {
-        default_action: currentPolicy.default_action,
-        block_on: currentPolicy.block_on,
-        flag_on: currentPolicy.flag_on,
-        detectors: detectors
-      };
-
-      fetch('api/safety', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ policy: newPolicy })
-      }).then(function (r) { return r.json(); })
-        .then(function (data) {
-          currentPolicy = data.policy;
-          renderPolicyControls(data.policy);
-        })
-        .catch(function () { fetchPolicy(); });
-    }
-
-    function toggleCategory(cat, enabled) {
-      if (!currentPolicy) return;
-      var detectors = JSON.parse(JSON.stringify(currentPolicy.detectors || {}));
-      var te = detectors.trust_engine || {};
-      var extra = te.extra || {};
-      var dims = extra.dimensions || ['finance', 'iot', 'software', 'web', 'program'];
-
-      if (enabled && dims.indexOf(cat) < 0) {
-        dims.push(cat);
-      } else if (!enabled) {
-        dims = dims.filter(function (d) { return d !== cat; });
-      }
-
-      extra.dimensions = dims;
-      te.extra = extra;
-      detectors.trust_engine = te;
-
-      var newPolicy = {
-        default_action: currentPolicy.default_action,
-        block_on: currentPolicy.block_on,
-        flag_on: currentPolicy.flag_on,
-        detectors: detectors
-      };
-
-      fetch('api/safety', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ policy: newPolicy })
-      }).then(function (r) { return r.json(); })
-        .then(function (data) {
-          currentPolicy = data.policy;
-          renderPolicyControls(data.policy);
-        })
-        .catch(function () { fetchPolicy(); });
     }
 
     function submitVerdict(signalType, score, verdict) {
@@ -2273,18 +2037,13 @@
     }
 
     function renderAttestation(attest) {
-      var card = document.getElementById('attestation-card');
       var section = document.getElementById('attestation-section');
       var details = document.getElementById('attestation-details');
       if (!attest || !attest.enabled) {
-        card.style.display = 'none';
         section.style.display = 'none';
         return;
       }
-      card.style.display = '';
       section.style.display = '';
-      document.getElementById('chain-height').textContent = String(attest.chain_height);
-      document.getElementById('chain-signer').textContent = attest.signer_id || '';
 
       var rows = [
         ['Signing', 'Ed25519'],
@@ -2309,41 +2068,41 @@
       }
       details.innerHTML = html;
     }
-    // ── Custom Policies (proxy API) ──
-    var customPolicies = [];
+    // ── Policies (proxy API: /aep/api/custom-policies)
+    var policies = [];
     var editingPolicyId = null; // null = not editing, 'new' = adding, string = editing existing
 
-    function loadCustomPolicies() {
+    function loadPolicies() {
       fetch('api/custom-policies')
         .then(function (r) {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.json();
         })
         .then(function (data) {
-          customPolicies = data.policies || [];
-          renderCustomPolicies();
+          policies = data.policies || [];
+          renderPolicies();
         })
         .catch(function () {
-          customPolicies = [];
-          var container = document.getElementById('custom-policies-container');
+          policies = [];
+          var container = document.getElementById('policies-container');
           if (!container) return;
           container.textContent = '';
           var err = document.createElement('div');
           err.className = 'policy-empty';
-          err.textContent = 'Custom policies could not be loaded from the server.';
+          err.textContent = 'Policies could not be loaded from the server.';
           container.appendChild(err);
         });
     }
 
-    function renderCustomPolicies() {
-      var container = document.getElementById('custom-policies-container');
+    function renderPolicies() {
+      var container = document.getElementById('policies-container');
       if (!container) return;
       container.textContent = '';
 
       // Show form if editing
       if (editingPolicyId !== null) {
         var isNew = editingPolicyId === 'new';
-        var existing = isNew ? null : customPolicies.find(function (p) { return p.id === editingPolicyId; });
+        var existing = isNew ? null : policies.find(function (p) { return p.id === editingPolicyId; });
 
         var form = document.createElement('div');
         form.className = 'policy-form';
@@ -2394,7 +2153,7 @@
         var cancelBtn = document.createElement('button');
         cancelBtn.className = 'policy-form-cancel';
         cancelBtn.textContent = 'Cancel';
-        cancelBtn.onclick = function () { editingPolicyId = null; renderCustomPolicies(); };
+        cancelBtn.onclick = function () { editingPolicyId = null; renderPolicies(); };
         btns.appendChild(cancelBtn);
         form.appendChild(btns);
 
@@ -2406,20 +2165,20 @@
       }
 
       // Policy list
-      if (customPolicies.length === 0) {
+      if (policies.length === 0) {
         var emptyWrap = document.createElement('div');
         emptyWrap.className = 'policy-empty';
-        emptyWrap.textContent = 'No custom policies defined';
+        emptyWrap.textContent = 'No policies defined';
         var hint = document.createElement('div');
         hint.className = 'policy-empty-hint';
-        hint.textContent = 'Custom policies let you define rules that will be enforced on agent behavior.';
+        hint.textContent = 'Define rules that will be enforced on agent behavior.';
         emptyWrap.appendChild(hint);
         container.appendChild(emptyWrap);
       } else {
         var list = document.createElement('div');
-        list.className = 'custom-policies-list';
+        list.className = 'policies-list';
 
-        customPolicies.forEach(function (policy) {
+        policies.forEach(function (policy) {
           var item = document.createElement('div');
           item.className = 'policy-item' + (policy.enabled ? '' : ' disabled-policy');
 
@@ -2444,11 +2203,11 @@
           toggle.tabIndex = 0;
           toggle.setAttribute('aria-checked', policy.enabled ? 'true' : 'false');
           toggle.setAttribute('aria-label', (policy.enabled ? 'Disable ' : 'Enable ') + policy.name);
-          toggle.onclick = function () { toggleCustomPolicy(policy.id); };
+          toggle.onclick = function () { togglePolicy(policy.id); };
           toggle.onkeydown = function (event) {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
-              toggleCustomPolicy(policy.id);
+              togglePolicy(policy.id);
             }
           };
           actions.appendChild(toggle);
@@ -2458,7 +2217,7 @@
           editBtn.className = 'policy-action-btn';
           editBtn.title = 'Edit';
           editBtn.innerHTML = '&#9998;';
-          editBtn.onclick = function () { editingPolicyId = policy.id; renderCustomPolicies(); };
+          editBtn.onclick = function () { editingPolicyId = policy.id; renderPolicies(); };
           actions.appendChild(editBtn);
 
           // Delete
@@ -2466,7 +2225,7 @@
           delBtn.className = 'policy-action-btn delete';
           delBtn.title = 'Delete';
           delBtn.innerHTML = '&#10005;';
-          delBtn.onclick = function () { deleteCustomPolicy(policy.id); };
+          delBtn.onclick = function () { deletePolicy(policy.id); };
           actions.appendChild(delBtn);
 
           item.appendChild(actions);
@@ -2479,7 +2238,7 @@
       // Add button
       var addBtn = document.createElement('button');
       addBtn.className = 'add-policy-btn';
-      addBtn.onclick = function () { editingPolicyId = 'new'; renderCustomPolicies(); };
+      addBtn.onclick = function () { editingPolicyId = 'new'; renderPolicies(); };
       var plusIcon = document.createElement('span');
       plusIcon.className = 'plus-icon';
       plusIcon.textContent = '+';
@@ -2507,15 +2266,15 @@
           })
           .then(function () {
             editingPolicyId = null;
-            loadCustomPolicies();
+            loadPolicies();
           })
           .catch(function () {
-            alert('Failed to create custom policy');
+            alert('Failed to create policy');
           });
         return;
       }
 
-      var existing = customPolicies.find(function (p) { return p.id === existingId; });
+      var existing = policies.find(function (p) { return p.id === existingId; });
       if (!existing) return;
 
       fetch('api/custom-policies/' + encodeURIComponent(existingId), {
@@ -2529,15 +2288,15 @@
         })
         .then(function () {
           editingPolicyId = null;
-          loadCustomPolicies();
+          loadPolicies();
         })
         .catch(function () {
-          alert('Failed to save custom policy');
+          alert('Failed to save policy');
         });
     }
 
-    function toggleCustomPolicy(id) {
-      var p = customPolicies.find(function (x) { return x.id === id; });
+    function togglePolicy(id) {
+      var p = policies.find(function (x) { return x.id === id; });
       if (!p) return;
       fetch('api/custom-policies/' + encodeURIComponent(id), {
         method: 'PUT',
@@ -2549,15 +2308,15 @@
           return r.json();
         })
         .then(function () {
-          loadCustomPolicies();
+          loadPolicies();
         })
         .catch(function () {
           alert('Failed to update policy');
-          loadCustomPolicies();
+          loadPolicies();
         });
     }
 
-    function deleteCustomPolicy(id) {
+    function deletePolicy(id) {
       fetch('api/custom-policies/' + encodeURIComponent(id), { method: 'DELETE' })
         .then(function (r) {
           if (r.status === 204) return;
@@ -2565,10 +2324,10 @@
         })
         .then(function () {
           if (editingPolicyId === id) editingPolicyId = null;
-          loadCustomPolicies();
+          loadPolicies();
         })
         .catch(function () {
-          alert('Failed to delete custom policy');
+          alert('Failed to delete policy');
         });
     }
 
@@ -2576,9 +2335,7 @@
     setView(currentView);
     refresh();
     setInterval(refresh, 2000);
-    fetchPolicy();
-    loadCustomPolicies();
-    setInterval(fetchPolicy, 5000);
+    loadPolicies();
   </script>
 </body>
 
