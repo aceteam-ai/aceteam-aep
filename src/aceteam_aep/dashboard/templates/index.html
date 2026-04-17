@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AEP Dashboard</title>
+  <title>Agent Safety Net Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -1431,7 +1431,7 @@
     </div>
   </div>
   <h1>
-    AEP Dashboard <span class="live pulse">&#x25cf; live</span>
+    Agent Safety Net <span class="live pulse">&#x25cf; live</span>
     <div class="safety-toggle">
       <span class="toggle-label" id="safety-label">Safety ON</span>
       <div class="toggle-switch on" id="safety-toggle" onclick="toggleSafety()"></div>
@@ -1612,7 +1612,13 @@
     </div>
   </div>
 
-  <div class="footer">AEP Trust Engine &mdash; aceteam.ai</div>
+  <div class="footer">
+    Agent Safety Net &mdash; aceteam.ai
+    <div style="margin-top:6px; font-size:10px; letter-spacing:0.3px; text-transform:none; opacity:0.7;">
+      Powered by <a href="https://github.com/aceteam-ai/aceteam-aep" style="color:inherit; text-decoration:underline;">AEP</a>
+      &mdash; the Agentic Execution Protocol, an open standard for governing every LLM call an agent makes (cost, PII, policy, signed audit).
+    </div>
+  </div>
 
   <script>
     var currentView = 'dev';
