@@ -184,7 +184,26 @@ def _run_proxy(args: argparse.Namespace) -> None:
         f"\n"
     )
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # Run uvicorn manually (not uvicorn.run) so we can exit cleanly on Ctrl+C.
+    # Why: uvicorn.run() calls asyncio.run(), which installs its own SIGINT
+    # handler that raises KeyboardInterrupt mid-shutdown. That KeyboardInterrupt
+    # cancels Starlette's lifespan task, producing a noisy CancelledError
+    # traceback even though the shutdown actually succeeded. Using
+    # loop.run_until_complete skips asyncio.run's signal setup; uvicorn's own
+    # capture_signals handles SIGINT by setting server.should_exit for a
+    # graceful shutdown.
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+    config.setup_event_loop()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(server.serve())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
 
 
 def _run_wrap(args: argparse.Namespace) -> None:
