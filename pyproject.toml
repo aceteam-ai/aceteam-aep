@@ -1,6 +1,6 @@
 [project]
 name = "aceteam-aep"
-version = "0.8.5"
+version = "0.9.0"
 description = "Agentic Execution Protocol™ (AEP™) - trust & safety infrastructure for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
