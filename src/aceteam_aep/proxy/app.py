@@ -160,10 +160,16 @@ class ProxyState:
         self._started_at = datetime.now(UTC)
         self.blocked_count = 0
         self.safety_enabled = True
-        # Runtime BYOK API key, set via POST /dashboard/api/api-key and used as
-        # the Authorization header when forwarding /v1/* requests that don't
-        # already carry one (e.g. the in-dashboard playground).
-        self.api_key: str | None = None
+        # Runtime BYOK API key — when set, the proxy owns auth and substitutes
+        # this key for whatever Authorization the caller sent. Set via
+        # POST /dashboard/api/api-key, or seeded from the matching env var at
+        # startup so users who supply OPENAI_API_KEY / ANTHROPIC_API_KEY via
+        # .env don't need to re-enter it in the dashboard.
+        env_key_name = (
+            "ANTHROPIC_API_KEY" if "anthropic" in self.target_base_url else "OPENAI_API_KEY"
+        )
+        env_key = os.environ.get(env_key_name, "").strip()
+        self.api_key: str | None = env_key or None
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -480,15 +486,19 @@ def create_proxy_app(
         for key in ("x-api-key", "anthropic-version"):
             if request.headers.get(key):
                 forward_headers[key] = request.headers[key]
-        # Fall back to runtime BYOK key when caller didn't set auth headers
-        # (e.g. the in-dashboard playground fetches /v1/chat/completions
-        # from the browser without exposing the raw key to JS).
-        if state.api_key and "Authorization" not in forward_headers:
+        # When the proxy owns a managed key (set via env or dashboard BYOK), it
+        # overrides whatever Authorization the caller sent. This lets clients
+        # (OpenClaw, the in-dashboard playground, etc.) send any placeholder
+        # key — e.g. the "aep-proxy-managed" sentinel — and have the proxy
+        # substitute the real credential before forwarding.
+        if state.api_key:
             if "anthropic" in state.target_base_url or path == "/v1/messages":
-                forward_headers.setdefault("x-api-key", state.api_key)
+                forward_headers["x-api-key"] = state.api_key
                 forward_headers.setdefault("anthropic-version", "2023-06-01")
+                forward_headers.pop("Authorization", None)
             else:
                 forward_headers["Authorization"] = f"Bearer {state.api_key}"
+                forward_headers.pop("x-api-key", None)
         # Strip X-AEP-* headers so they don't leak to the LLM provider
         forward_headers = strip_aep_headers(forward_headers)
 

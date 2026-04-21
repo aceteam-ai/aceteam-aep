@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import pytest
 from starlette.testclient import TestClient
 
 from aceteam_aep.proxy.app import ProxyState, create_proxy_app
@@ -126,6 +127,54 @@ class TestProxyForwarding:
                 call_kwargs.kwargs["headers"]["Authorization"]
                 == "Bearer sk-byok-from-dashboard"
             )
+
+    def test_byok_overrides_caller_auth(self) -> None:
+        """When the proxy has a managed key (env or dashboard BYOK), it
+        substitutes its own key for whatever Authorization the caller sent.
+        This lets OpenClaw-style clients send a placeholder sentinel and have
+        the proxy inject the real credential."""
+        app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
+        client = TestClient(app)
+
+        client.post("/dashboard/api/api-key", json={"api_key": "sk-proxy-managed"})
+
+        with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.request = AsyncMock(return_value=_mock_upstream(_openai_response()))
+            mock_client_cls.return_value = mock_client
+
+            client.post(
+                "/v1/chat/completions",
+                json=_openai_request(),
+                headers={"Authorization": "Bearer aep-proxy-managed"},
+            )
+
+            call_kwargs = mock_client.request.call_args
+            assert (
+                call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-proxy-managed"
+            )
+
+    def test_proxy_state_inits_api_key_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ProxyState picks up OPENAI_API_KEY / ANTHROPIC_API_KEY from env at
+        startup, matching the provider implied by target_base_url."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-openai-env")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert ProxyState().api_key == "sk-from-openai-env"
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-anthropic-env")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        assert (
+            ProxyState(target_base_url="https://api.anthropic.com").api_key
+            == "sk-from-anthropic-env"
+        )
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert ProxyState().api_key is None
 
 
 class TestProxySafetyBlocking:
