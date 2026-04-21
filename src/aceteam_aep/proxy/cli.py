@@ -194,9 +194,17 @@ def _run_proxy(args: argparse.Namespace) -> None:
     # graceful shutdown.
     config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(config)
-    config.setup_event_loop()
 
-    loop = asyncio.new_event_loop()
+    # uvicorn 0.36 replaced `Config.setup_event_loop()` (side-effect: install
+    # uvloop policy) with `Config.get_loop_factory()` (pure: returns a loop
+    # factory callable or None). Support both so we keep working across the
+    # unpinned `uvicorn>=0.30` range.
+    if hasattr(config, "get_loop_factory"):
+        loop_factory = config.get_loop_factory()
+        loop = loop_factory() if loop_factory is not None else asyncio.new_event_loop()
+    else:
+        config.setup_event_loop()
+        loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(server.serve())
