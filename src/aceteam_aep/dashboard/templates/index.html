@@ -1411,7 +1411,9 @@
           <button class="setup-btn" onclick="saveApiKey()">Save &amp; Continue</button>
         </div>
         <div id="setup-aceteam" style="display:none;">
-          <p style="color:var(--accent-peach);font-size:13px;">Coming soon. For now, paste your own API key above.</p>
+          <p style="font-size:13px;margin-bottom:10px;">Sign in to AceTeam — we'll connect SafeClaw to your account. $5 free credit included; top up from your dashboard when it runs out.</p>
+          <button class="setup-btn" onclick="connectAceTeam()">Continue to AceTeam</button>
+          <p id="aceteam-status" style="font-size:12px;color:var(--text-muted);margin-top:8px;"></p>
         </div>
       </div>
       <div class="setup-step" id="setup-step-2">
@@ -1721,8 +1723,52 @@
       document.getElementById('setup-overlay').style.display = 'none';
     }
 
-    // Run on page load
-    checkFirstRun();
+    // "Use AceTeam" option: bounce the user to aceteam.ai, where they sign in,
+    // we mint a key, and they're redirected back here with the key in the URL
+    // fragment (handled by tryConsumeAceteamReturn on next load).
+    var ACETEAM_CONNECT_URL = 'https://aceteam.ai/connect/safeclaw';
+    function connectAceTeam() {
+      var callback = window.location.origin + '/dashboard/';
+      var status = document.getElementById('aceteam-status');
+      if (status) status.textContent = 'Opening aceteam.ai…';
+      window.location.href = ACETEAM_CONNECT_URL + '?callback=' + encodeURIComponent(callback);
+    }
+
+    // Handle the redirect back from aceteam.ai/connect/safeclaw. The bridge
+    // page appends `#aceteam_key=...&aceteam_base=...` to our dashboard URL;
+    // we POST those to the same /api/api-key endpoint BYOK uses, then clear
+    // the fragment so a refresh doesn't re-apply a stale key.
+    function tryConsumeAceteamReturn() {
+      var hash = window.location.hash || '';
+      if (hash.length < 2) return false;
+      var params = new URLSearchParams(hash.slice(1));
+      var key = params.get('aceteam_key');
+      var baseUrl = params.get('aceteam_base');
+      if (!key) return false;
+      history.replaceState(null, '', window.location.pathname);
+      fetch('api/api-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key, base_url: baseUrl || undefined })
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function (info) {
+        refreshKeyHint(info);
+        // Skip the overlay entirely — user came back already-provisioned.
+        var overlay = document.getElementById('setup-overlay');
+        if (overlay) overlay.style.display = 'none';
+      }).catch(function () {
+        alert('Connected to AceTeam, but the proxy refused the key. Try again from the dashboard.');
+      });
+      return true;
+    }
+
+    // Run on page load. If we just came back from aceteam.ai we short-circuit
+    // the normal "do you have a key?" check since we just saved one.
+    if (!tryConsumeAceteamReturn()) {
+      checkFirstRun();
+    }
 
     function toggleSafety() {
       safetyEnabled = !safetyEnabled;
