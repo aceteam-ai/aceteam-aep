@@ -24,7 +24,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
-from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate
+from ..enforcement import EnforcementDecision, EnforcementPolicy, build_pipeline_from_policy, evaluate, evaluate_pipeline
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.custom import (
     CustomPolicy,
@@ -191,6 +191,10 @@ class ProxyState:
             to_register.append(CustomSafetyDetector(self.custom_policy_store))
         for det in to_register:
             self.registry.add(det)
+
+        self.pipeline = build_pipeline_from_policy(self.policy, to_register)
+        if self.pipeline:
+            log.info("Safety pipeline enabled with %d layers", len(self.pipeline._layers))
 
     @property
     def cost_usd(self) -> Decimal:
@@ -430,15 +434,23 @@ def create_proxy_app(
             input_text = _extract_text_from_messages(body["messages"])
 
         if state.safety_enabled:
-            input_signals = await state.registry.run_all(
-                input_text=input_text,
-                output_text="",
-                call_id=call_id,
-            )
+            if state.pipeline:
+                pipeline_result = await state.pipeline.evaluate(
+                    input_text=input_text,
+                    output_text="",
+                    call_id=call_id,
+                )
+                input_signals = pipeline_result.signals
+                input_decision = evaluate_pipeline(pipeline_result, state.policy) if input_signals or pipeline_result.verdict == "block" else EnforcementDecision(action="pass")
+            else:
+                input_signals = await state.registry.run_all(
+                    input_text=input_text,
+                    output_text="",
+                    call_id=call_id,
+                )
+                input_decision = evaluate(input_signals, state.policy) if input_signals else EnforcementDecision(action="pass")
 
-            if len(input_signals) > 0:
-                input_decision = evaluate(input_signals, state.policy)
-                if input_decision.action == "block":
+            if input_decision.action == "block":
                     state.signals.extend(input_signals)
                     state.decisions.append(input_decision)
                     state.call_count += 1
@@ -573,6 +585,7 @@ def create_proxy_app(
                 input_text=input_text,
                 registry=state.registry,
                 policy=state.policy,
+                pipeline=state.pipeline,
                 on_complete=on_stream_complete,
                 debug=debug,
             )
@@ -634,17 +647,28 @@ def create_proxy_app(
 
         # --- OUTPUT SAFETY CHECK ---
         if state.safety_enabled:
-            output_signals = await state.registry.run_all(
-                input_text=input_text,
-                output_text=output_text,
-                call_id=call_id,
-                call_cost=cost_node.compute_cost,
-            )
+            if state.pipeline:
+                pipeline_result = await state.pipeline.evaluate(
+                    input_text=input_text,
+                    output_text=output_text,
+                    call_id=call_id,
+                    call_cost=cost_node.compute_cost,
+                )
+                output_signals = pipeline_result.signals
+                all_signals = (*input_signals, *output_signals)
+                state.signals.extend(all_signals)
+                decision = evaluate_pipeline(pipeline_result, state.policy)
+            else:
+                output_signals = await state.registry.run_all(
+                    input_text=input_text,
+                    output_text=output_text,
+                    call_id=call_id,
+                    call_cost=cost_node.compute_cost,
+                )
+                all_signals = (*input_signals, *output_signals)
+                state.signals.extend(all_signals)
+                decision = evaluate(all_signals, state.policy)
 
-            all_signals = (*input_signals, *output_signals)
-            state.signals.extend(all_signals)
-
-            decision = evaluate(all_signals, state.policy)
             state.decisions.append(decision)
 
             if decision.action == "block":

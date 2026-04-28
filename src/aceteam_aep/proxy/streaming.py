@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from starlette.responses import StreamingResponse
 
-from ..enforcement import EnforcementPolicy, evaluate
+from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate, evaluate_pipeline
 from ..safety.base import DetectorRegistry
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ async def handle_streaming_request(
     input_text: str,
     registry: DetectorRegistry,
     policy: EnforcementPolicy,
+    pipeline: Any = None,
     on_complete: Any = None,
     debug: bool = False,
 ) -> StreamingResponse:
@@ -139,13 +140,21 @@ async def handle_streaming_request(
             )
 
         # Run safety detectors
-        signals = await registry.run_all(
-            input_text=input_text,
-            output_text=output_text,
-            call_id=call_id,
-        )
-
-        decision = evaluate(signals, policy)
+        if pipeline:
+            pipeline_result = await pipeline.evaluate(
+                input_text=input_text,
+                output_text=output_text,
+                call_id=call_id,
+            )
+            signals = pipeline_result.signals
+            decision = evaluate_pipeline(pipeline_result, policy)
+        else:
+            signals = await registry.run_all(
+                input_text=input_text,
+                output_text=output_text,
+                call_id=call_id,
+            )
+            decision = evaluate(signals, policy)
 
         # If blocked, append a safety event to the stream
         if decision.action == "block":
