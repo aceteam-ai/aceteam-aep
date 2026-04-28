@@ -193,6 +193,7 @@ class ProxyState:
             self.registry.add(det)
 
         self.pipeline = build_pipeline_from_policy(self.policy, to_register)
+        self._last_pipeline_result: Any = None
         if self.pipeline:
             log.info("Safety pipeline enabled with %d layers", len(self.pipeline._layers))
 
@@ -293,7 +294,34 @@ class ProxyState:
                 else 0.0,
             },
             "attestation": None,  # populated by proxy when signing enabled
+            "pipeline": self._serialize_pipeline(),
         }
+
+    def _serialize_pipeline(self) -> dict[str, Any] | None:
+        if not self.pipeline:
+            return None
+        info: dict[str, Any] = {"enabled": True}
+        pr = self._last_pipeline_result
+        if pr is not None:
+            info["last_result"] = {
+                "p_unsafe": pr.p_unsafe,
+                "confidence": pr.confidence,
+                "verdict": pr.verdict,
+                "layers_executed": pr.layers_executed,
+                "short_circuited_at": pr.short_circuited_at,
+                "total_latency_ms": pr.total_latency_ms,
+                "layer_results": [
+                    {
+                        "layer_name": lr.layer_name,
+                        "p_unsafe": lr.p_unsafe,
+                        "confidence": lr.confidence,
+                        "latency_ms": lr.latency_ms,
+                        "signal_count": len(lr.signals),
+                    }
+                    for lr in pr.layer_results
+                ],
+            }
+        return info
 
 
 def _default_proxy_detectors() -> Sequence[SafetyDetector]:
@@ -440,6 +468,7 @@ def create_proxy_app(
                     output_text="",
                     call_id=call_id,
                 )
+                state._last_pipeline_result = pipeline_result
                 input_signals = pipeline_result.signals
                 input_decision = evaluate_pipeline(pipeline_result, state.policy) if input_signals or pipeline_result.verdict == "block" else EnforcementDecision(action="pass")
             else:
@@ -654,6 +683,7 @@ def create_proxy_app(
                     call_id=call_id,
                     call_cost=cost_node.compute_cost,
                 )
+                state._last_pipeline_result = pipeline_result
                 output_signals = pipeline_result.signals
                 all_signals = (*input_signals, *output_signals)
                 state.signals.extend(all_signals)
