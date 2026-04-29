@@ -1,0 +1,94 @@
+# AEP Policy: Cascading Confidence Pipeline
+#
+# This policy enables the safety pipeline — a sequential cascade of
+# increasingly expensive safety layers that short-circuits when confident.
+#
+# How it works:
+#   1. Regex detectors run first (free, <1ms). If they match, confidence
+#      is 1.0 and the pipeline stops immediately (BLOCK or FLAG).
+#   2. PAW local classifier runs next (free, ~50ms). Uses LoRA adapters
+#      on Qwen 0.6B with logprob extraction for real P(safe) scores.
+#   3. Content model runs if still uncertain (free, ~100ms). Local
+#      toxicity transformer.
+#   4. TrustEngine API runs last (costs ~$0.001, ~500ms). Multi-perspective
+#      LLM evaluation with structured reasoning.
+#
+# The pipeline stops as soon as combined confidence exceeds the threshold
+# AND p_unsafe is decisively high (>= block_above) or low (< pass_below).
+# Most safe actions never reach Layer 3 or 4.
+#
+# Thresholds guide:
+#   Strict (bank/healthcare):   pass_below=0.1, block_above=0.5, confidence=0.8
+#   Balanced (enterprise):      pass_below=0.3, block_above=0.7, confidence=0.7
+#   Permissive (startup/dev):   pass_below=0.5, block_above=0.9, confidence=0.6
+#
+# Usage:
+#   aceteam-aep proxy --policy policies/pipeline.yaml
+#
+# To disable the pipeline and revert to parallel detectors, set enabled: false
+# or remove the pipeline section entirely.
+
+default_action: flag
+block_on: [high]
+flag_on: [medium]
+
+# --- Cascading Confidence Pipeline ---
+# Uncomment to enable. Without this section, detectors run in parallel
+# as before (backward compatible).
+#
+# pipeline:
+#   enabled: true
+#
+#   # Escalation thresholds
+#   pass_below: 0.3           # p_unsafe < 0.3 -> auto-PASS (skip human review)
+#   block_above: 0.7          # p_unsafe >= 0.7 -> auto-BLOCK
+#   confidence_threshold: 0.7  # minimum combined confidence to short-circuit
+#
+#   # Layers run in order. Weight controls influence on combined score.
+#   # Higher weight = this layer's opinion matters more.
+#   layers:
+#     - name: regex           # PII + agent threat regex (free, <1ms)
+#       weight: 1.0
+#     - name: paw             # PAW local LoRA classifier (free, ~50ms)
+#       weight: 1.5
+#     - name: content_model   # Local toxicity classifier (free, ~100ms)
+#       weight: 1.0
+#     - name: trust_engine    # LLM API multi-perspective (~$0.001, ~500ms)
+#       weight: 2.0
+
+# --- Per-Detector Configuration ---
+# These settings apply to both pipeline and non-pipeline modes.
+# In pipeline mode, detectors are wrapped as layers automatically.
+
+detectors:
+  pii:
+    action: block
+    threshold: 0.6
+    enabled: true
+
+  content_safety:
+    action: flag
+    threshold: 0.5
+    enabled: true
+
+  agent_threat:
+    action: block
+    enabled: true
+
+  cost_anomaly:
+    action: flag
+    multiplier: 5
+    enabled: true
+
+  # Trust Engine: enable for pipeline Layer 3 or standalone use.
+  # Requires OPENAI_API_KEY for API calls.
+  trust_engine:
+    action: flag
+    threshold: 0.4
+    enabled: false
+    dimensions:
+      - pii
+      - toxicity
+      - agent_threat
+      - policy_compliance
+      - irreversibility

@@ -38,6 +38,18 @@ class DetectorPolicy:
 
 
 @dataclass(frozen=True)
+class PipelinePolicy:
+    """Configuration for the cascading confidence pipeline."""
+
+    enabled: bool = False
+    pass_below: float = 0.3
+    block_above: float = 0.7
+    confidence_threshold: float = 0.7
+    layers: list[dict[str, Any]] = field(default_factory=list)
+    layer_weights: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class EnforcementPolicy:
     """Configurable policy for mapping signal severities to enforcement actions.
 
@@ -52,6 +64,7 @@ class EnforcementPolicy:
     allow_types: frozenset[str] = frozenset()
     default_action: str = "flag"
     overrides: dict[str, DetectorPolicy] = field(default_factory=dict)
+    pipeline: PipelinePolicy = field(default_factory=PipelinePolicy)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EnforcementPolicy:
@@ -68,12 +81,27 @@ class EnforcementPolicy:
                     },
                 )
 
+        pipeline_data = data.get("pipeline", {})
+        pipeline = PipelinePolicy(
+            enabled=pipeline_data.get("enabled", False),
+            pass_below=pipeline_data.get("pass_below", 0.3),
+            block_above=pipeline_data.get("block_above", 0.7),
+            confidence_threshold=pipeline_data.get("confidence_threshold", 0.7),
+            layers=pipeline_data.get("layers", []),
+            layer_weights={
+                l["name"]: l.get("weight", 1.0)
+                for l in pipeline_data.get("layers", [])
+                if isinstance(l, dict) and "name" in l
+            },
+        )
+
         return cls(
             block_on=frozenset(data.get("block_on", {"high"})),
             flag_on=frozenset(data.get("flag_on", {"medium"})),
             allow_types=frozenset(data.get("allow_types", set())),
             default_action=data.get("default_action", "flag"),
             overrides=overrides,
+            pipeline=pipeline,
         )
 
     @classmethod
@@ -254,6 +282,100 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[SafetyDetecto
     return detectors
 
 
+def evaluate_pipeline(
+    pipeline_result: Any,
+    policy: EnforcementPolicy,
+) -> EnforcementDecision:
+    """Convert a PipelineResult into an EnforcementDecision.
+
+    Uses the pipeline's own verdict (based on calibrated p_unsafe thresholds)
+    and merges any signals raised by individual layers.
+    """
+    from .safety.pipeline import PipelineResult
+
+    if not isinstance(pipeline_result, PipelineResult):
+        raise TypeError(f"Expected PipelineResult, got {type(pipeline_result).__name__}")
+
+    reasons: list[str] = []
+    if pipeline_result.verdict in ("block", "flag"):
+        reasons.append(
+            f"pipeline: p_unsafe={pipeline_result.p_unsafe:.2f} "
+            f"confidence={pipeline_result.confidence:.2f} "
+            f"({pipeline_result.layers_executed} layers"
+            + (f", short-circuited at {pipeline_result.short_circuited_at})" if pipeline_result.short_circuited_at else ")")
+        )
+
+    return EnforcementDecision(
+        action=pipeline_result.verdict,
+        signals=pipeline_result.signals,
+        reason="; ".join(reasons),
+    )
+
+
+def build_pipeline_from_policy(
+    policy: EnforcementPolicy,
+    detectors: list[SafetyDetector],
+) -> Any | None:
+    """Build a SafetyPipeline from policy config and available detectors.
+
+    Returns None if pipeline is not enabled in the policy.
+    """
+    if not policy.pipeline.enabled:
+        return None
+
+    from .safety.agent_threat import AgentThreatDetector
+    from .safety.content import ContentSafetyDetector
+    from .safety.custom import CustomSafetyDetector
+    from .safety.pii import PiiDetector
+    from .safety.pipeline import (
+        ContentModelLayer,
+        PawLayer,
+        RegexLayer,
+        SafetyPipeline,
+        TrustEngineLayer,
+    )
+    from .safety.trust_engine import TrustEngineDetector
+
+    detector_map: dict[str, SafetyDetector] = {d.name: d for d in detectors}
+    configured_layers = {l["name"] for l in policy.pipeline.layers if isinstance(l, dict)}
+
+    layers = []
+
+    if "regex" in configured_layers or not configured_layers:
+        regex_detectors = [
+            d for d in detectors
+            if isinstance(d, (PiiDetector, AgentThreatDetector))
+        ]
+        if regex_detectors:
+            layers.append(RegexLayer(regex_detectors))
+
+    if "paw" in configured_layers or not configured_layers:
+        custom = detector_map.get("custom_safety")
+        if custom and isinstance(custom, CustomSafetyDetector):
+            layers.append(PawLayer(custom))
+
+    if "content_model" in configured_layers or not configured_layers:
+        content = detector_map.get("content_safety")
+        if content and isinstance(content, ContentSafetyDetector):
+            layers.append(ContentModelLayer(content))
+
+    if "trust_engine" in configured_layers or not configured_layers:
+        te = detector_map.get("trust_engine")
+        if te and isinstance(te, TrustEngineDetector):
+            layers.append(TrustEngineLayer(te))
+
+    if not layers:
+        return None
+
+    return SafetyPipeline(
+        layers=layers,
+        pass_below=policy.pipeline.pass_below,
+        block_above=policy.pipeline.block_above,
+        confidence_threshold=policy.pipeline.confidence_threshold,
+        layer_weights=policy.pipeline.layer_weights,
+    )
+
+
 DEFAULT_POLICY = EnforcementPolicy()
 
 
@@ -303,7 +425,10 @@ __all__ = [
     "DetectorPolicy",
     "EnforcementDecision",
     "EnforcementPolicy",
+    "PipelinePolicy",
     "build_detectors_from_policy",
+    "build_pipeline_from_policy",
     "discover_policy",
     "evaluate",
+    "evaluate_pipeline",
 ]
