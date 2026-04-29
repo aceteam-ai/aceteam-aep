@@ -196,6 +196,13 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[SafetyDetecto
     if not threat_cfg or threat_cfg.enabled:
         detectors.append(AgentThreatDetector())
 
+    # Secret/credential leak
+    secret_cfg = policy.overrides.get("secret_leak")
+    if not secret_cfg or secret_cfg.enabled:
+        from .safety.secrets import SecretDetector
+
+        detectors.append(SecretDetector())
+
     # PII
     pii_cfg = policy.overrides.get("pii")
     if not pii_cfg or pii_cfg.enabled:
