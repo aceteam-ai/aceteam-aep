@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import ValidationError
@@ -990,6 +991,48 @@ def create_proxy_app(
         state.custom_policy_store.upsert(updated)
         return Response(json.dumps(updated.model_dump()), media_type="application/json")
 
+    # Best-effort upstream identity refresh. For act_* gateway keys we can
+    # ask the upstream `/api/whoami` endpoint who owns the key; the dashboard
+    # then renders "Connected as <email>" instead of the cryptic prefix.
+    # No-op for BYOK keys (sk-/sk-ant-) since OpenAI/Anthropic don't expose
+    # a comparable identity endpoint and we have no way to look up identity.
+    async def _refresh_connected_account() -> None:
+        key = state.api_key
+        if not key or not key.startswith("act_"):
+            return
+        parsed = urlparse(state.target_base_url)
+        if not parsed.scheme or not parsed.netloc:
+            return
+        whoami_url = f"{parsed.scheme}://{parsed.netloc}/api/whoami"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    whoami_url, headers={"Authorization": f"Bearer {key}"}
+                )
+            if resp.status_code != 200:
+                log.warning(
+                    "whoami refresh: %s returned %d", whoami_url, resp.status_code
+                )
+                return
+            data = resp.json()
+            email = data.get("email")
+            if not isinstance(email, str) or not email.strip():
+                # Without an email there's nothing useful to display, so
+                # don't shadow the friendly-label fallback with a half-empty
+                # account record.
+                return
+            state.connected_account = {
+                "email": email.strip(),
+                "user_id": data.get("user_id")
+                if isinstance(data.get("user_id"), str)
+                else None,
+                "organization_id": data.get("organization_id")
+                if isinstance(data.get("organization_id"), str)
+                else None,
+            }
+        except Exception as err:  # noqa: BLE001 — best-effort fetch
+            log.warning("whoami refresh failed: %s", err)
+
     # BYOK API key management — GET returns a hint, POST sets the key, DELETE clears.
     # The raw key is only held in process memory (never written to disk) and is used
     # as the fallback Authorization header when a /v1/* request arrives without one.
@@ -1044,9 +1087,9 @@ def create_proxy_app(
             )
         state.api_key = key.strip()
         # Reset identity so a stale account doesn't shadow the new key.
-        # The dashboard re-supplies it for keys minted via the connect flow,
-        # and #20 will refresh it via /api/whoami for keys that arrive
-        # without identity context (e.g. on proxy restart).
+        # The dashboard re-supplies identity for keys minted via the connect
+        # flow; for everything else we'll try the upstream /api/whoami refresh
+        # below if the prefix looks like a gateway key.
         state.connected_account = None
         connected = body.get("connected_account")
         if isinstance(connected, dict):
@@ -1072,6 +1115,10 @@ def create_proxy_app(
             state.target_base_url = candidate
             log.info("Upstream base URL updated to %s", candidate)
         log.info("BYOK API key updated (len=%d)", len(state.api_key))
+        # If the caller didn't pre-supply identity, try fetching it from the
+        # upstream gateway. Skip for non-act_* keys inside _refresh_*.
+        if state.connected_account is None:
+            await _refresh_connected_account()
         return JSONResponse(_hint(state.api_key))
 
     # Policy tester — evaluate a single custom policy against arbitrary text,
@@ -1158,18 +1205,24 @@ def create_proxy_app(
     except Exception as exc:
         log.debug("MCP gateway not available: %s", exc)
 
-    # Wire MCP lifespan into parent app (required by FastMCP for task group init)
-    if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
-        from contextlib import asynccontextmanager
+    # Always provide a lifespan so we can refresh `connected_account` for
+    # an env-seeded act_* key at startup. If MCP is also mounted, nest its
+    # lifespan inside ours so FastMCP still gets its task group init.
+    from contextlib import asynccontextmanager
 
-        @asynccontextmanager
-        async def lifespan(app):
+    @asynccontextmanager
+    async def lifespan(app):
+        # Best-effort identity refresh for keys that survived a restart
+        # (env-seeded or, eventually, persisted). Runs in the background
+        # so a slow/unreachable upstream doesn't block server startup.
+        asyncio.create_task(_refresh_connected_account())
+        if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
             async with mcp_http_app.lifespan(app):
                 yield
+        else:
+            yield
 
-        return Starlette(routes=routes, lifespan=lifespan)
-
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, lifespan=lifespan)
 
 
 __all__ = ["ProxyState", "create_proxy_app"]

@@ -226,6 +226,115 @@ class TestCustomPoliciesAPI:
         ).json()
         assert replaced["connected_account"] is None
 
+    def test_api_key_act_prefix_introspects_via_whoami(self) -> None:
+        """Pasting an act_* key without identity triggers an upstream /api/whoami refresh."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        whoami_resp = MagicMock()
+        whoami_resp.status_code = 200
+        whoami_resp.json = MagicMock(
+            return_value={
+                "auth_type": "api_key",
+                "user_id": "u_42",
+                "organization_id": "org_42",
+                "email": "introspected@example.com",
+                "key_id": "key_42",
+                "key_name": "Test key",
+            }
+        )
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=whoami_resp)
+
+        async def _aenter(self):
+            return mock_client
+
+        async def _aexit(self, *_):
+            return None
+
+        with (
+            patch("httpx.AsyncClient.__aenter__", _aenter),
+            patch("httpx.AsyncClient.__aexit__", _aexit),
+        ):
+            saved = client.post(
+                "/dashboard/api/api-key",
+                json={
+                    "api_key": "act_xxxxxxxxxxxxxxxx",
+                    "base_url": "http://aceteam.local/api/gateway/v1",
+                },
+            ).json()
+
+        assert saved["connected_account"] == {
+            "email": "introspected@example.com",
+            "user_id": "u_42",
+            "organization_id": "org_42",
+        }
+        # Confirm the whoami URL was derived from base_url's host, not the
+        # full gateway path.
+        assert mock_client.get.await_args.args[0] == "http://aceteam.local/api/whoami"
+        assert (
+            mock_client.get.await_args.kwargs["headers"]["Authorization"]
+            == "Bearer act_xxxxxxxxxxxxxxxx"
+        )
+
+    def test_api_key_byok_skips_whoami_refresh(self) -> None:
+        """sk-* and self-hosted keys don't have an upstream whoami to call."""
+        from unittest.mock import AsyncMock
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        mock_client = AsyncMock()
+
+        async def _aenter(self):
+            return mock_client
+
+        async def _aexit(self, *_):
+            return None
+
+        with (
+            patch("httpx.AsyncClient.__aenter__", _aenter),
+            patch("httpx.AsyncClient.__aexit__", _aexit),
+        ):
+            saved = client.post(
+                "/dashboard/api/api-key", json={"api_key": "sk-openai-12345"}
+            ).json()
+
+        assert saved["connected_account"] is None
+        mock_client.get.assert_not_called()
+
+    def test_api_key_explicit_identity_skips_whoami(self) -> None:
+        """When the dashboard pre-supplies identity (connect-flow), we trust it."""
+        from unittest.mock import AsyncMock
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        mock_client = AsyncMock()
+
+        async def _aenter(self):
+            return mock_client
+
+        async def _aexit(self, *_):
+            return None
+
+        with (
+            patch("httpx.AsyncClient.__aenter__", _aenter),
+            patch("httpx.AsyncClient.__aexit__", _aexit),
+        ):
+            saved = client.post(
+                "/dashboard/api/api-key",
+                json={
+                    "api_key": "act_xxxxxxxxxxxxxxxx",
+                    "connected_account": {"email": "explicit@example.com"},
+                },
+            ).json()
+
+        assert saved["connected_account"]["email"] == "explicit@example.com"
+        mock_client.get.assert_not_called()
+
     def test_api_key_rejects_empty_and_non_string(self) -> None:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
