@@ -1135,6 +1135,7 @@
     }
 
     .setup-card {
+      position: relative;
       background: var(--bg-surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
@@ -1142,6 +1143,26 @@
       max-width: 560px;
       width: 90%;
       box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(0, 212, 255, 0.04);
+    }
+
+    .setup-close {
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .setup-close:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.06);
     }
 
     .setup-card h2 {
@@ -1387,6 +1408,7 @@
 <body>
   <div class="setup-overlay" id="setup-overlay" style="display:none;">
     <div class="setup-card">
+      <button class="setup-close" id="setup-close-btn" onclick="closeSetup()" title="Close" style="display:none;" aria-label="Close">&times;</button>
       <div class="setup-step active" id="setup-step-1">
         <h2>Welcome to SafeClaw</h2>
         <p>Configure your LLM provider to get started.</p>
@@ -1659,6 +1681,9 @@
       document.getElementById('setup-base-url').value = '';
       var options = document.querySelectorAll('.setup-option');
       for (var i = 0; i < options.length; i++) { options[i].classList.remove('selected'); }
+      // Manual open (vs forced first-run) → user already has a way out.
+      var closeBtn = document.getElementById('setup-close-btn');
+      if (closeBtn) closeBtn.style.display = 'block';
       document.getElementById('setup-overlay').style.display = 'flex';
     }
 
