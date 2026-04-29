@@ -989,11 +989,25 @@ def create_proxy_app(
     # The raw key is only held in process memory (never written to disk) and is used
     # as the fallback Authorization header when a /v1/* request arrives without one.
     async def api_key_handler(request: Request) -> Response:
+        def _classify(key: str) -> str:
+            # Surface where the key came from so the dashboard can show
+            # "Connected to AceTeam" instead of the cryptic "KEY: act_bb3..."
+            # when the user used the sign-in flow. Prefixes are stable and
+            # vendor-published; matching here avoids round-tripping to the
+            # mint service just to know what to label the chip.
+            if key.startswith("act_"):
+                return "aceteam"
+            if key.startswith("sk-ant-"):
+                return "anthropic"
+            if key.startswith("sk-"):
+                return "openai"
+            return "byok"
+
         def _hint(key: str | None) -> dict[str, Any]:
             if not key:
-                return {"set": False, "hint": None}
+                return {"set": False, "hint": None, "provider": None}
             visible = key[:7] if len(key) > 7 else key[:3]
-            return {"set": True, "hint": f"{visible}..."}
+            return {"set": True, "hint": f"{visible}...", "provider": _classify(key)}
 
         if request.method == "GET":
             return JSONResponse(_hint(state.api_key))

@@ -1654,10 +1654,26 @@
     // Setup wizard — the proxy tells us whether a BYOK key is already stored.
     // (Previously we relied on localStorage, which left users stranded behind a
     // cookie/localStorage clear whenever they wanted to update a key.)
+    // Map a provider tag from /api/api-key to the chip text shown in the header.
+    // Keeping the truncated key in the title attribute lets users sanity-check
+    // which key is active without exposing the full secret.
+    var KEY_CHIP_LABELS = {
+      aceteam: 'CONNECTED · AceTeam',
+      anthropic: 'KEY · Anthropic',
+      openai: 'KEY · OpenAI',
+    };
     function refreshKeyHint(info) {
+      var btn = document.getElementById('settings-btn');
       var label = document.getElementById('settings-btn-label');
       if (!label) return;
-      label.textContent = info && info.set ? 'KEY: ' + info.hint : 'SETUP';
+      if (!(info && info.set)) {
+        label.textContent = 'SETUP';
+        if (btn) btn.title = 'API key & agent setup';
+        return;
+      }
+      var friendly = KEY_CHIP_LABELS[info.provider];
+      label.textContent = friendly || ('KEY: ' + info.hint);
+      if (btn) btn.title = 'Active key: ' + info.hint + ' — click to change';
     }
 
     function checkFirstRun() {
