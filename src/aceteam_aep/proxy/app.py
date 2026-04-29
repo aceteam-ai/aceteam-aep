@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import ValidationError
@@ -170,6 +171,11 @@ class ProxyState:
         )
         env_key = os.environ.get(env_key_name, "").strip()
         self.api_key: str | None = env_key or None
+        # Identity associated with the active key, populated when the user
+        # comes through the AceTeam connect flow (or, eventually, via a
+        # /api/whoami introspect on existing keys). None for raw BYOK users
+        # since we have no way to look them up.
+        self.connected_account: dict[str, Any] | None = None
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -985,21 +991,88 @@ def create_proxy_app(
         state.custom_policy_store.upsert(updated)
         return Response(json.dumps(updated.model_dump()), media_type="application/json")
 
+    # Best-effort upstream identity refresh. For act_* gateway keys we can
+    # ask the upstream `/api/whoami` endpoint who owns the key; the dashboard
+    # then renders "Connected as <email>" instead of the cryptic prefix.
+    # No-op for BYOK keys (sk-/sk-ant-) since OpenAI/Anthropic don't expose
+    # a comparable identity endpoint and we have no way to look up identity.
+    async def _refresh_connected_account() -> None:
+        key = state.api_key
+        if not key or not key.startswith("act_"):
+            return
+        parsed = urlparse(state.target_base_url)
+        if not parsed.scheme or not parsed.netloc:
+            return
+        whoami_url = f"{parsed.scheme}://{parsed.netloc}/api/whoami"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    whoami_url, headers={"Authorization": f"Bearer {key}"}
+                )
+            if resp.status_code != 200:
+                log.warning(
+                    "whoami refresh: %s returned %d", whoami_url, resp.status_code
+                )
+                return
+            data = resp.json()
+            email = data.get("email")
+            if not isinstance(email, str) or not email.strip():
+                # Without an email there's nothing useful to display, so
+                # don't shadow the friendly-label fallback with a half-empty
+                # account record.
+                return
+            state.connected_account = {
+                "email": email.strip(),
+                "user_id": data.get("user_id")
+                if isinstance(data.get("user_id"), str)
+                else None,
+                "organization_id": data.get("organization_id")
+                if isinstance(data.get("organization_id"), str)
+                else None,
+            }
+        except Exception as err:  # noqa: BLE001 — best-effort fetch
+            log.warning("whoami refresh failed: %s", err)
+
     # BYOK API key management — GET returns a hint, POST sets the key, DELETE clears.
     # The raw key is only held in process memory (never written to disk) and is used
     # as the fallback Authorization header when a /v1/* request arrives without one.
     async def api_key_handler(request: Request) -> Response:
+        def _classify(key: str) -> str:
+            # Surface where the key came from so the dashboard can show
+            # "Connected to AceTeam" instead of the cryptic "KEY: act_bb3..."
+            # when the user used the sign-in flow. Prefixes are stable and
+            # vendor-published; matching here avoids round-tripping to the
+            # mint service just to know what to label the chip.
+            if key.startswith("act_"):
+                return "aceteam"
+            if key.startswith("sk-ant-"):
+                return "anthropic"
+            if key.startswith("sk-"):
+                return "openai"
+            return "byok"
+
         def _hint(key: str | None) -> dict[str, Any]:
             if not key:
-                return {"set": False, "hint": None}
+                return {
+                    "set": False,
+                    "hint": None,
+                    "provider": None,
+                    "connected_account": None,
+                }
             visible = key[:7] if len(key) > 7 else key[:3]
-            return {"set": True, "hint": f"{visible}..."}
+            return {
+                "set": True,
+                "hint": f"{visible}...",
+                "provider": _classify(key),
+                "connected_account": state.connected_account,
+            }
 
         if request.method == "GET":
             return JSONResponse(_hint(state.api_key))
 
         if request.method == "DELETE":
             state.api_key = None
+            state.connected_account = None
             return JSONResponse(_hint(None))
 
         body, json_err = await _read_json_body(request)
@@ -1013,6 +1086,24 @@ def create_proxy_app(
                 {"error": "api_key must be a non-empty string"}, status_code=400
             )
         state.api_key = key.strip()
+        # Reset identity so a stale account doesn't shadow the new key.
+        # The dashboard re-supplies identity for keys minted via the connect
+        # flow; for everything else we'll try the upstream /api/whoami refresh
+        # below if the prefix looks like a gateway key.
+        state.connected_account = None
+        connected = body.get("connected_account")
+        if isinstance(connected, dict):
+            email = connected.get("email")
+            if isinstance(email, str) and email.strip():
+                state.connected_account = {
+                    "email": email.strip(),
+                    "user_id": connected.get("user_id")
+                    if isinstance(connected.get("user_id"), str)
+                    else None,
+                    "organization_id": connected.get("organization_id")
+                    if isinstance(connected.get("organization_id"), str)
+                    else None,
+                }
         base_url = body.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             candidate = base_url.strip().rstrip("/")
@@ -1024,6 +1115,10 @@ def create_proxy_app(
             state.target_base_url = candidate
             log.info("Upstream base URL updated to %s", candidate)
         log.info("BYOK API key updated (len=%d)", len(state.api_key))
+        # If the caller didn't pre-supply identity, try fetching it from the
+        # upstream gateway. Skip for non-act_* keys inside _refresh_*.
+        if state.connected_account is None:
+            await _refresh_connected_account()
         return JSONResponse(_hint(state.api_key))
 
     # Policy tester — evaluate a single custom policy against arbitrary text,
@@ -1110,18 +1205,24 @@ def create_proxy_app(
     except Exception as exc:
         log.debug("MCP gateway not available: %s", exc)
 
-    # Wire MCP lifespan into parent app (required by FastMCP for task group init)
-    if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
-        from contextlib import asynccontextmanager
+    # Always provide a lifespan so we can refresh `connected_account` for
+    # an env-seeded act_* key at startup. If MCP is also mounted, nest its
+    # lifespan inside ours so FastMCP still gets its task group init.
+    from contextlib import asynccontextmanager
 
-        @asynccontextmanager
-        async def lifespan(app):
+    @asynccontextmanager
+    async def lifespan(app):
+        # Best-effort identity refresh for keys that survived a restart
+        # (env-seeded or, eventually, persisted). Runs in the background
+        # so a slow/unreachable upstream doesn't block server startup.
+        asyncio.create_task(_refresh_connected_account())
+        if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
             async with mcp_http_app.lifespan(app):
                 yield
+        else:
+            yield
 
-        return Starlette(routes=routes, lifespan=lifespan)
-
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, lifespan=lifespan)
 
 
 __all__ = ["ProxyState", "create_proxy_app"]
