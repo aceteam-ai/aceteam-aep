@@ -151,20 +151,80 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
 
-        assert client.get("/dashboard/api/api-key").json() == {"set": False, "hint": None}
+        unset = client.get("/dashboard/api/api-key").json()
+        assert unset == {
+            "set": False,
+            "hint": None,
+            "provider": None,
+            "connected_account": None,
+        }
 
         saved = client.post(
             "/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}
         ).json()
         assert saved["set"] is True
         assert saved["hint"].startswith("sk-abc1")
+        assert saved["provider"] == "openai"
+        assert saved["connected_account"] is None
 
         hint = client.get("/dashboard/api/api-key").json()
         assert hint["set"] is True
         assert hint["hint"] == saved["hint"]
+        assert hint["provider"] == "openai"
 
         cleared = client.delete("/dashboard/api/api-key").json()
-        assert cleared == {"set": False, "hint": None}
+        assert cleared == {
+            "set": False,
+            "hint": None,
+            "provider": None,
+            "connected_account": None,
+        }
+
+    def test_api_key_classifies_known_prefixes(self) -> None:
+        """The provider tag drives the dashboard's friendly chip label."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        cases = [
+            ("act_aceteam_xxxx", "aceteam"),
+            ("sk-ant-anthropic-yyy", "anthropic"),
+            ("sk-openai-style-zzz", "openai"),
+            ("custom-self-hosted-token", "byok"),
+        ]
+        for key, expected_provider in cases:
+            saved = client.post("/dashboard/api/api-key", json={"api_key": key}).json()
+            assert saved["provider"] == expected_provider, (key, saved)
+            client.delete("/dashboard/api/api-key")
+
+    def test_api_key_stores_connected_account(self) -> None:
+        """Identity supplied by the connect-flow surfaces on subsequent GETs."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        saved = client.post(
+            "/dashboard/api/api-key",
+            json={
+                "api_key": "act_xxxxxxxxxxxxxxxx",
+                "connected_account": {
+                    "email": "jason@example.com",
+                    "user_id": "u_123",
+                },
+            },
+        ).json()
+        assert saved["connected_account"] == {
+            "email": "jason@example.com",
+            "user_id": "u_123",
+            "organization_id": None,
+        }
+        assert client.get("/dashboard/api/api-key").json()["connected_account"][
+            "email"
+        ] == "jason@example.com"
+
+        # Replacing the key without supplying identity clears the stale account.
+        replaced = client.post(
+            "/dashboard/api/api-key", json={"api_key": "sk-fresh-byok"}
+        ).json()
+        assert replaced["connected_account"] is None
 
     def test_api_key_rejects_empty_and_non_string(self) -> None:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)

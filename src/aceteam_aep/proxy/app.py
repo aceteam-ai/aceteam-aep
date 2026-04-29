@@ -170,6 +170,11 @@ class ProxyState:
         )
         env_key = os.environ.get(env_key_name, "").strip()
         self.api_key: str | None = env_key or None
+        # Identity associated with the active key, populated when the user
+        # comes through the AceTeam connect flow (or, eventually, via a
+        # /api/whoami introspect on existing keys). None for raw BYOK users
+        # since we have no way to look them up.
+        self.connected_account: dict[str, Any] | None = None
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -1005,15 +1010,26 @@ def create_proxy_app(
 
         def _hint(key: str | None) -> dict[str, Any]:
             if not key:
-                return {"set": False, "hint": None, "provider": None}
+                return {
+                    "set": False,
+                    "hint": None,
+                    "provider": None,
+                    "connected_account": None,
+                }
             visible = key[:7] if len(key) > 7 else key[:3]
-            return {"set": True, "hint": f"{visible}...", "provider": _classify(key)}
+            return {
+                "set": True,
+                "hint": f"{visible}...",
+                "provider": _classify(key),
+                "connected_account": state.connected_account,
+            }
 
         if request.method == "GET":
             return JSONResponse(_hint(state.api_key))
 
         if request.method == "DELETE":
             state.api_key = None
+            state.connected_account = None
             return JSONResponse(_hint(None))
 
         body, json_err = await _read_json_body(request)
@@ -1027,6 +1043,24 @@ def create_proxy_app(
                 {"error": "api_key must be a non-empty string"}, status_code=400
             )
         state.api_key = key.strip()
+        # Reset identity so a stale account doesn't shadow the new key.
+        # The dashboard re-supplies it for keys minted via the connect flow,
+        # and #20 will refresh it via /api/whoami for keys that arrive
+        # without identity context (e.g. on proxy restart).
+        state.connected_account = None
+        connected = body.get("connected_account")
+        if isinstance(connected, dict):
+            email = connected.get("email")
+            if isinstance(email, str) and email.strip():
+                state.connected_account = {
+                    "email": email.strip(),
+                    "user_id": connected.get("user_id")
+                    if isinstance(connected.get("user_id"), str)
+                    else None,
+                    "organization_id": connected.get("organization_id")
+                    if isinstance(connected.get("organization_id"), str)
+                    else None,
+                }
         base_url = body.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             candidate = base_url.strip().rstrip("/")

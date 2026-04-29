@@ -1671,6 +1671,14 @@
         if (btn) btn.title = 'API key & agent setup';
         return;
       }
+      // Prefer the verified upstream identity when we have it — that's
+      // unambiguous proof of which account this proxy is signed in as.
+      var account = info.connected_account;
+      if (account && account.email) {
+        label.textContent = account.email;
+        if (btn) btn.title = 'Connected as ' + account.email + ' (key ' + info.hint + ') — click to change';
+        return;
+      }
       var friendly = KEY_CHIP_LABELS[info.provider];
       label.textContent = friendly || ('KEY: ' + info.hint);
       if (btn) btn.title = 'Active key: ' + info.hint + ' — click to change';
@@ -1785,12 +1793,15 @@
       var params = new URLSearchParams(hash.slice(1));
       var key = params.get('aceteam_key');
       var baseUrl = params.get('aceteam_base');
+      var email = params.get('aceteam_email');
       if (!key) return false;
       history.replaceState(null, '', window.location.pathname);
+      var body = { api_key: key, base_url: baseUrl || undefined };
+      if (email) body.connected_account = { email: email };
       fetch('api/api-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: key, base_url: baseUrl || undefined })
+        body: JSON.stringify(body)
       }).then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
