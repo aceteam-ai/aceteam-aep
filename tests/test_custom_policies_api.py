@@ -344,6 +344,41 @@ class TestCustomPoliciesAPI:
         )
         assert client.post("/dashboard/api/api-key", json={}).status_code == 400
 
+    def test_api_key_strips_trailing_v1_from_base_url(self) -> None:
+        """OpenAI-SDK convention is base_url ending in /v1; the proxy concatenates
+        base_url with the request path (which already includes /v1/), so a
+        trailing /v1 on the target produces /v1/v1/chat/completions and 404s.
+        Strip it transparently so users can paste either form."""
+        import gc
+
+        from aceteam_aep.proxy.app import ProxyState
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        # Find the ProxyState owned by this app instance via the api_key we set.
+        def state_for_key(key: str) -> ProxyState:
+            return next(
+                s for s in gc.get_objects() if isinstance(s, ProxyState) and s.api_key == key
+            )
+
+        # Trailing /v1 — must be stripped.
+        client.post(
+            "/dashboard/api/api-key",
+            json={
+                "api_key": "sk-strip-test-1",
+                "base_url": "https://aceteam.ai/api/gateway/v1",
+            },
+        )
+        assert state_for_key("sk-strip-test-1").target_base_url == "https://aceteam.ai/api/gateway"
+
+        # No /v1 — left alone.
+        client.post(
+            "/dashboard/api/api-key",
+            json={"api_key": "sk-strip-test-2", "base_url": "https://api.openai.com"},
+        )
+        assert state_for_key("sk-strip-test-2").target_base_url == "https://api.openai.com"
+
     def test_policy_test_endpoint_returns_violation(self) -> None:
         """Stub the CustomPolicy's __call__ so we don't need the PAW compiler online."""
         from aceteam_aep.safety.custom import CustomPolicy

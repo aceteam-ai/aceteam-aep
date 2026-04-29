@@ -1112,6 +1112,12 @@ def create_proxy_app(
                     {"error": "base_url must start with http:// or https://"},
                     status_code=400,
                 )
+            # Proxy forwards by concatenating target_base_url with the incoming
+            # request path, which already starts with /v1/... A trailing /v1 on
+            # the target produces /v1/v1/chat/completions and 404s. Strip it so
+            # OpenAI-SDK conventions (base_url ending in /v1) work transparently.
+            if candidate.endswith("/v1"):
+                candidate = candidate[: -len("/v1")]
             state.target_base_url = candidate
             log.info("Upstream base URL updated to %s", candidate)
         log.info("BYOK API key updated (len=%d)", len(state.api_key))
