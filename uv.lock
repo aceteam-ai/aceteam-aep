@@ -18,6 +18,7 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "aiosqlite" },
     { name = "fastmcp" },
     { name = "jinja2" },
     { name = "lancedb" },
@@ -38,6 +39,7 @@ dashboard = [
     { name = "uvicorn" },
 ]
 dev = [
+    { name = "aiosqlite" },
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -66,10 +68,14 @@ feedback = [
 mcp = [
     { name = "fastmcp" },
 ]
+observability = [
+    { name = "aiosqlite" },
+]
 ollama = [
     { name = "ollama" },
 ]
 proxy = [
+    { name = "aiosqlite" },
     { name = "jinja2" },
     { name = "programasweights" },
     { name = "starlette" },
@@ -96,8 +102,9 @@ yaml = [
 [package.metadata]
 requires-dist = [
     { name = "aceteam-aep", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "aceteam-aep", extras = ["dashboard", "safety-lite"], marker = "extra == 'proxy'" },
-    { name = "aceteam-aep", extras = ["xai", "ollama", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events"], marker = "extra == 'all'" },
+    { name = "aceteam-aep", extras = ["dashboard", "safety-lite", "observability"], marker = "extra == 'proxy'" },
+    { name = "aceteam-aep", extras = ["xai", "ollama", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events", "observability"], marker = "extra == 'all'" },
+    { name = "aiosqlite", marker = "extra == 'observability'", specifier = ">=0.20" },
     { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
     { name = "anyio", specifier = ">=4.12" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
@@ -125,7 +132,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'safety'", specifier = ">=4.40" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30" },
 ]
-provides-extras = ["xai", "ollama", "safety", "safety-lite", "dashboard", "proxy", "events", "mcp", "yaml", "feedback", "top", "all", "dev"]
+provides-extras = ["xai", "ollama", "safety", "safety-lite", "dashboard", "observability", "proxy", "events", "mcp", "yaml", "feedback", "top", "all", "dev"]
 
 [[package]]
 name = "aiofile"
@@ -137,6 +144,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/67/e2/d7cb819de8df6b5c1968a2756c3cb4122d4fa2b8fc768b53b7c9e5edb646/aiofile-3.9.0.tar.gz", hash = "sha256:e5ad718bb148b265b6df1b3752c4d1d83024b93da9bd599df74b9d9ffcf7919b", size = 17943, upload-time = "2024-10-08T10:39:35.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/50/25/da1f0b4dd970e52bf5a36c204c107e11a0c6d3ed195eba0bfbc664c312b2/aiofile-3.9.0-py3-none-any.whl", hash = "sha256:ce2f6c1571538cbdfa0143b04e16b208ecb0e9cb4148e528af8a640ed51cc8aa", size = 19539, upload-time = "2024-10-08T10:39:32.955Z" },
+]
+
+[[package]]
+name = "aiosqlite"
+version = "0.22.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650", size = 14821, upload-time = "2025-12-23T19:25:43.997Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb", size = 17405, upload-time = "2025-12-23T19:25:42.139Z" },
 ]
 
 [[package]]
