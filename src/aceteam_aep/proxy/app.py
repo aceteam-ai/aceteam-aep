@@ -26,6 +26,8 @@ from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate
+from ..observability.events import FlaggedCall, ObservabilityEvent
+from ..observability.store import EventStore
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.custom import (
     CustomPolicy,
@@ -125,6 +127,20 @@ def _extract_usage(data: dict[str, Any]) -> tuple[str, int, int]:
     return model, input_tokens, output_tokens
 
 
+def _detect_provider(target_url: str) -> str:
+    """Extract a short provider name from the target URL."""
+    lower = target_url.lower()
+    if "anthropic" in lower:
+        return "anthropic"
+    if "openai" in lower:
+        return "openai"
+    if "ollama" in lower or "11434" in lower:
+        return "ollama"
+    if "google" in lower or "generativelanguage" in lower:
+        return "google"
+    return urlparse(target_url).hostname or target_url
+
+
 def _ensure_openai_stream_usage(body: dict[str, Any], path: str) -> None:
     """Ask OpenAI-compatible chat completion streams to include token usage in SSE.
 
@@ -149,8 +165,11 @@ class ProxyState:
         policy: EnforcementPolicy | dict[str, Any] | str | None = None,
         budget: float | None = None,
         budget_per_session: float | None = None,
+        event_store: EventStore | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
+        self.event_store = event_store
+        self.session_id = uuid.uuid4().hex
         self.cost_tracker = CostTracker()
         self.span_tracker = SpanTracker()
         self.registry = DetectorRegistry()
@@ -327,6 +346,7 @@ def create_proxy_app(
     budget: float | None = None,
     budget_per_session: float | None = None,
     debug: bool = False,
+    event_store: EventStore | None = None,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
@@ -336,6 +356,7 @@ def create_proxy_app(
         policy=policy,
         budget=budget,
         budget_per_session=budget_per_session,
+        event_store=event_store,
     )
 
     # Enable debug logging if requested (see logutil; uvicorn/defaults drop DEBUG)
@@ -373,6 +394,19 @@ def create_proxy_app(
         call_id = uuid.uuid4().hex[:8]
         path = request.url.path
         body_bytes = await request.body()
+
+        # --- CALL_START EVENT ---
+        # Parse body early to get model for call_start event
+        try:
+            _body_peek = json.loads(body_bytes) if body_bytes else {}
+        except json.JSONDecodeError:
+            _body_peek = {}
+        if state.event_store:
+            asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                session_id=state.session_id, type="call_start", call_id=call_id,
+                model=_body_peek.get("model") if isinstance(_body_peek, dict) else None,
+                provider=_detect_provider(state.target_base_url),
+            )))
 
         # Debug logging for all requests (both input and output)
         if debug:
@@ -471,6 +505,35 @@ def create_proxy_app(
                                 severity=_severity,
                             )
                         )
+                    # --- OBSERVABILITY: input-blocked early return ---
+                    if state.event_store:
+                        for sig in input_signals:
+                            asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                                session_id=state.session_id, type="safety_signal", call_id=call_id,
+                                detector=sig.detector, severity=sig.severity, reason=sig.detail,
+                            )))
+                        asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                            session_id=state.session_id, type="enforcement", call_id=call_id,
+                            action="block", reason=input_decision.reason,
+                            metadata={"policy": {"block_on": sorted(state.policy.block_on), "flag_on": sorted(state.policy.flag_on)}},
+                        )))
+                        _block_detector = input_signals[0].detector if input_signals else None
+                        _block_severity = input_signals[0].severity if input_signals else None
+                        asyncio.ensure_future(state.event_store.record_flagged_call(FlaggedCall(
+                            call_id=call_id, session_id=state.session_id,
+                            action="block",
+                            detector=_block_detector, severity=_block_severity,
+                            reason=input_decision.reason,
+                            model=body.get("model") if isinstance(body, dict) else None,
+                            input_messages=body.get("messages", []) if isinstance(body, dict) else [],
+                            output_text=None,
+                        )))
+                        asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                            session_id=state.session_id, type="call_end", call_id=call_id,
+                            model=body.get("model") if isinstance(body, dict) else None,
+                            provider=_detect_provider(state.target_base_url),
+                            tokens_in=0, tokens_out=0, cost_usd=0.0, latency_ms=None,
+                        )))
                     return JSONResponse(
                         status_code=400,
                         content={
@@ -483,6 +546,13 @@ def create_proxy_app(
                             }
                         },
                     )
+            # Emit safety_signal events for non-blocked input signals
+            if state.event_store and len(input_signals) > 0:
+                for sig in input_signals:
+                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                        session_id=state.session_id, type="safety_signal", call_id=call_id,
+                        detector=sig.detector, severity=sig.severity, reason=sig.detail,
+                    )))
         else:
             input_signals = ()
 
@@ -578,6 +648,40 @@ def create_proxy_app(
                         )
                     )
 
+                # --- OBSERVABILITY: streaming call_end + enforcement + flagged_call ---
+                if state.event_store:
+                    for sig in signals:
+                        asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                            session_id=state.session_id, type="safety_signal", call_id=call_id,
+                            detector=sig.detector, severity=sig.severity, reason=sig.detail,
+                        )))
+                    _stream_action = decision.action if decision else "pass"
+                    _stream_reason = decision.reason if decision else None
+                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                        session_id=state.session_id, type="enforcement", call_id=call_id,
+                        action=_stream_action, reason=_stream_reason,
+                        metadata={"policy": {"block_on": sorted(state.policy.block_on), "flag_on": sorted(state.policy.flag_on)}},
+                    )))
+                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                        session_id=state.session_id, type="call_end", call_id=call_id,
+                        model=model, provider=_detect_provider(state.target_base_url),
+                        tokens_in=inp, tokens_out=out,
+                        cost_usd=float(cost_node.compute_cost), latency_ms=stream_span.duration_ms,
+                    )))
+                    if decision and decision.action in ("flag", "block"):
+                        _s_detector = signals[0].detector if signals else None
+                        _s_severity = signals[0].severity if signals else None
+                        _s_output = kwargs.get("output_text")
+                        asyncio.ensure_future(state.event_store.record_flagged_call(FlaggedCall(
+                            call_id=call_id, session_id=state.session_id,
+                            action=decision.action,
+                            detector=_s_detector, severity=_s_severity,
+                            reason=decision.reason,
+                            model=model,
+                            input_messages=body.get("messages", []) if isinstance(body, dict) else [],
+                            output_text=_s_output if decision.action == "flag" else None,
+                        )))
+
             return await handle_streaming_request(
                 target_url=target_url,
                 body_bytes=body_bytes,
@@ -654,11 +758,44 @@ def create_proxy_app(
                 call_cost=cost_node.compute_cost,
             )
 
+            # Emit safety_signal events for output signals
+            if state.event_store:
+                for sig in output_signals:
+                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                        session_id=state.session_id, type="safety_signal", call_id=call_id,
+                        detector=sig.detector, severity=sig.severity, reason=sig.detail,
+                    )))
+
             all_signals = (*input_signals, *output_signals)
             state.signals.extend(all_signals)
 
             decision = evaluate(all_signals, state.policy)
             state.decisions.append(decision)
+
+            # --- OBSERVABILITY: enforcement + call_end + flagged_call ---
+            if state.event_store:
+                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                    session_id=state.session_id, type="enforcement", call_id=call_id,
+                    action=decision.action, reason=decision.reason,
+                    metadata={"policy": {"block_on": sorted(state.policy.block_on), "flag_on": sorted(state.policy.flag_on)}},
+                )))
+                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                    session_id=state.session_id, type="call_end", call_id=call_id,
+                    model=model, provider=_detect_provider(state.target_base_url),
+                    tokens_in=input_tokens, tokens_out=output_tokens,
+                    cost_usd=float(cost_node.compute_cost), latency_ms=span.duration_ms,
+                )))
+                if decision.action in ("flag", "block"):
+                    _obs_detector = all_signals[0].detector if all_signals else None
+                    _obs_severity = all_signals[0].severity if all_signals else None
+                    asyncio.ensure_future(state.event_store.record_flagged_call(FlaggedCall(
+                        call_id=call_id, session_id=state.session_id,
+                        action=decision.action,
+                        detector=_obs_detector, severity=_obs_severity,
+                        reason=decision.reason,
+                        model=model, input_messages=body.get("messages", []) if isinstance(body, dict) else [],
+                        output_text=output_text if decision.action == "flag" else None,
+                    )))
 
             if decision.action == "block":
                 log.warning("BLOCKED response %s: %s", call_id, decision.reason)
@@ -676,6 +813,18 @@ def create_proxy_app(
             all_signals = []
             decision = EnforcementDecision(action="pass")
             state.decisions.append(decision)
+            # --- OBSERVABILITY: enforcement + call_end (safety disabled) ---
+            if state.event_store:
+                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                    session_id=state.session_id, type="enforcement", call_id=call_id,
+                    action="pass", reason=None,
+                )))
+                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
+                    session_id=state.session_id, type="call_end", call_id=call_id,
+                    model=model, provider=_detect_provider(state.target_base_url),
+                    tokens_in=input_tokens, tokens_out=output_tokens,
+                    cost_usd=float(cost_node.compute_cost), latency_ms=span.duration_ms,
+                )))
 
         # --- PUBLISH EVENT TO REDIS ---
         _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
