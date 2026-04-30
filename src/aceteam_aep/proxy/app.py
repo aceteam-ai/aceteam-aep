@@ -1231,6 +1231,11 @@ def create_proxy_app(
         target = state.target_base_url
         target_label: str | None = None
         target_provider: str | None = None
+        # When the gateway is the middle hop, the actual upstream LLM URL
+        # depends on which model is requested (gateway routes openai-* to
+        # api.openai.com, claude-* to api.anthropic.com, etc.). Don't echo
+        # the gateway URL on the provider card — that just looks duplicated.
+        provider_url: str | None = target
         if "aceteam.ai" in target:
             hops.append(
                 {
@@ -1247,6 +1252,7 @@ def create_proxy_app(
             )
             target_label = "OpenAI / Anthropic"
             target_provider = "via aceteam.ai"
+            provider_url = None
         elif "anthropic" in target:
             target_label = "Anthropic"
             target_provider = "anthropic"
@@ -1269,7 +1275,7 @@ def create_proxy_app(
                 "name": "provider",
                 "label": target_label,
                 "scope": "provider",
-                "url": target,
+                "url": provider_url,
                 "provider": target_provider,
             }
         )
