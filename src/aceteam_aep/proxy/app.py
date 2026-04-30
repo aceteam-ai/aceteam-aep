@@ -1176,6 +1176,89 @@ def create_proxy_app(
             }
         )
 
+    # Routing topology — describes the chain of hops the proxy is configured
+    # to use, and what each hop enforces. Drives the dashboard's topology
+    # panel so the user can see "OpenClaw → aep-proxy → AceTeam Gateway →
+    # OpenAI" and which layer their policies live in.
+    async def routing_handler(request: Request) -> Response:
+        if request.method != "GET":
+            return JSONResponse({"error": "GET only"}, status_code=405)
+
+        # Layer 1: this proxy. Always present. List the active detectors and
+        # the count of enabled custom policies so the user can see what
+        # actually fires before traffic leaves the machine.
+        detector_names = [d.name for d in state.registry._detectors]  # noqa: SLF001
+        enabled_custom = sum(
+            1 for p in state.custom_policy_store.all() if p.enabled
+        )
+        local_hop: dict[str, Any] = {
+            "name": "aep-proxy",
+            "label": "Local proxy",
+            "scope": "local",
+            "url": "http://localhost:8899/v1",
+            "detectors": detector_names,
+            "custom_policies_enabled": enabled_custom,
+            "safety_enabled": state.safety_enabled,
+        }
+
+        # Layer 2 (optional): the AceTeam gateway, when target_base_url
+        # points at aceteam.ai. Otherwise we go straight to the provider
+        # (OpenAI/Anthropic/etc.) via the proxy's BYOK target.
+        hops: list[dict[str, Any]] = [local_hop]
+        target = state.target_base_url
+        target_label: str | None = None
+        target_provider: str | None = None
+        if "aceteam.ai" in target:
+            hops.append(
+                {
+                    "name": "aceteam-gateway",
+                    "label": "AceTeam Gateway",
+                    "scope": "upstream",
+                    "url": target,
+                    "enforces": [
+                        "auth (act_* key)",
+                        "credit accounting",
+                        "AceTeam baseline policies",
+                    ],
+                }
+            )
+            target_label = "OpenAI / Anthropic"
+            target_provider = "via aceteam.ai"
+        elif "anthropic" in target:
+            target_label = "Anthropic"
+            target_provider = "anthropic"
+        elif "openai" in target:
+            target_label = "OpenAI"
+            target_provider = "openai"
+        elif "palebluedot" in target or "tokenrouter" in target:
+            target_label = "TokenRouter (Pale Blue Dot)"
+            target_provider = "tokenrouter"
+        else:
+            # Custom BYOK target — show the host so the user knows where
+            # their traffic is going.
+            from urllib.parse import urlparse  # noqa: PLC0415
+
+            target_label = urlparse(target).netloc or target
+            target_provider = "byok"
+
+        hops.append(
+            {
+                "name": "provider",
+                "label": target_label,
+                "scope": "provider",
+                "url": target,
+                "provider": target_provider,
+            }
+        )
+
+        return JSONResponse(
+            {
+                "client": "OpenClaw",
+                "target_base_url": target,
+                "hops": hops,
+            }
+        )
+
     routes.extend(
         [
             Route("/dashboard/api/feedback", feedback_handler, methods=["POST"]),
@@ -1202,6 +1285,11 @@ def create_proxy_app(
                 "/dashboard/api/policy-test",
                 policy_test_handler,
                 methods=["POST"],
+            ),
+            Route(
+                "/dashboard/api/routing",
+                routing_handler,
+                methods=["GET"],
             ),
         ]
     )

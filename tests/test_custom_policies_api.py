@@ -344,6 +344,31 @@ class TestCustomPoliciesAPI:
         )
         assert client.post("/dashboard/api/api-key", json={}).status_code == 400
 
+    def test_routing_topology_endpoint(self) -> None:
+        """/api/routing reports the proxy hop, the (optional) gateway hop,
+        and the provider hop based on target_base_url."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        # Default target is api.openai.com — no AceTeam middle hop.
+        r = client.get("/dashboard/api/routing").json()
+        names = [h["name"] for h in r["hops"]]
+        assert names == ["aep-proxy", "provider"]
+        assert r["hops"][0]["scope"] == "local"
+        assert "noop" in r["hops"][0]["detectors"]
+        assert r["hops"][1]["label"] == "OpenAI"
+
+        # Switch target to aceteam.ai → middle hop appears.
+        client.post(
+            "/dashboard/api/api-key",
+            json={"api_key": "sk-x", "base_url": "https://aceteam.ai/api/gateway"},
+        )
+        r = client.get("/dashboard/api/routing").json()
+        names = [h["name"] for h in r["hops"]]
+        assert names == ["aep-proxy", "aceteam-gateway", "provider"]
+        assert r["hops"][1]["label"] == "AceTeam Gateway"
+        assert any("auth" in s for s in r["hops"][1]["enforces"])
+
     def test_api_key_strips_trailing_v1_from_base_url(self) -> None:
         """OpenAI-SDK convention is base_url ending in /v1; the proxy concatenates
         base_url with the request path (which already includes /v1/), so a
