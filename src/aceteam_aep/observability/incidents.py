@@ -26,9 +26,7 @@ async def build_incident_bundle(store: SqliteEventStore, call_id: str) -> bytes 
     if fc is None:
         return None
 
-    events: list[ObservabilityEvent] = await store.query_events(
-        session_id=fc.session_id, limit=500
-    )
+    events: list[ObservabilityEvent] = await store.query_events(session_id=fc.session_id, limit=500)
 
     exported_at = datetime.now(tz=UTC)
     dir_name = f"aep_incident_{exported_at.strftime('%Y%m%d_%H%M%S')}"
