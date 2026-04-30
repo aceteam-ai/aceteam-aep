@@ -1023,11 +1023,11 @@ def create_proxy_app(
                 return
             state.connected_account = {
                 "email": email.strip(),
-                "user_id": data.get("user_id")
-                if isinstance(data.get("user_id"), str)
-                else None,
                 "organization_id": data.get("organization_id")
                 if isinstance(data.get("organization_id"), str)
+                else None,
+                "organization_name": data.get("organization_name")
+                if isinstance(data.get("organization_name"), str)
                 else None,
             }
         except Exception as err:  # noqa: BLE001 — best-effort fetch
@@ -1106,11 +1106,11 @@ def create_proxy_app(
             if isinstance(email, str) and email.strip():
                 state.connected_account = {
                     "email": email.strip(),
-                    "user_id": connected.get("user_id")
-                    if isinstance(connected.get("user_id"), str)
-                    else None,
                     "organization_id": connected.get("organization_id")
                     if isinstance(connected.get("organization_id"), str)
+                    else None,
+                    "organization_name": connected.get("organization_name")
+                    if isinstance(connected.get("organization_name"), str)
                     else None,
                 }
         base_url = body.get("base_url")

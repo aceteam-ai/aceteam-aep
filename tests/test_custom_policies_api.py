@@ -207,14 +207,15 @@ class TestCustomPoliciesAPI:
                 "api_key": "act_xxxxxxxxxxxxxxxx",
                 "connected_account": {
                     "email": "jason@example.com",
-                    "user_id": "u_123",
+                    "organization_id": "org_123",
+                    "organization_name": "Acme Corp",
                 },
             },
         ).json()
         assert saved["connected_account"] == {
             "email": "jason@example.com",
-            "user_id": "u_123",
-            "organization_id": None,
+            "organization_id": "org_123",
+            "organization_name": "Acme Corp",
         }
         assert client.get("/dashboard/api/api-key").json()["connected_account"][
             "email"
@@ -240,6 +241,7 @@ class TestCustomPoliciesAPI:
                 "auth_type": "api_key",
                 "user_id": "u_42",
                 "organization_id": "org_42",
+                "organization_name": "Org Forty-Two",
                 "email": "introspected@example.com",
                 "key_id": "key_42",
                 "key_name": "Test key",
@@ -268,8 +270,8 @@ class TestCustomPoliciesAPI:
 
         assert saved["connected_account"] == {
             "email": "introspected@example.com",
-            "user_id": "u_42",
             "organization_id": "org_42",
+            "organization_name": "Org Forty-Two",
         }
         # Confirm the whoami URL was derived from base_url's host, not the
         # full gateway path.

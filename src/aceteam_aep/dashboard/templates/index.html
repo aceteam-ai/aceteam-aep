@@ -1770,12 +1770,8 @@
         <span class="profile-row-value" id="profile-key-hint">—</span>
       </div>
       <div class="profile-row">
-        <span class="profile-row-label">User ID</span>
-        <span class="profile-row-value muted" id="profile-user-id">—</span>
-      </div>
-      <div class="profile-row">
-        <span class="profile-row-label">Organization ID</span>
-        <span class="profile-row-value muted" id="profile-org-id">—</span>
+        <span class="profile-row-label">Organization</span>
+        <span class="profile-row-value" id="profile-org">—</span>
       </div>
     </div>
     <div class="profile-actions">
@@ -2176,8 +2172,9 @@
         var providerName = rawLabel ? rawLabel.split('·').pop().trim() : (info.provider || 'Unknown');
         document.getElementById('profile-provider').textContent = providerName;
         document.getElementById('profile-key-hint').textContent = info.hint || '—';
-        document.getElementById('profile-user-id').textContent = account.user_id || '—';
-        document.getElementById('profile-org-id').textContent = account.organization_id || '—';
+        // Prefer the human-readable org name; fall back to the UUID only when
+        // we couldn't look up a name (older keys, BYOK, transient lookup miss).
+        document.getElementById('profile-org').textContent = account.organization_name || account.organization_id || '—';
         var drawer = document.getElementById('profile-drawer');
         drawer.classList.add('open');
         drawer.setAttribute('aria-hidden', 'false');
@@ -2307,16 +2304,16 @@
       var key = params.get('aceteam_key');
       var baseUrl = params.get('aceteam_base');
       var email = params.get('aceteam_email');
-      var userId = params.get('aceteam_user_id');
       var orgId = params.get('aceteam_org_id');
+      var orgName = params.get('aceteam_org_name');
       if (!key) return false;
       history.replaceState(null, '', window.location.pathname);
       var body = { api_key: key, base_url: baseUrl || undefined };
-      if (email || userId || orgId) {
+      if (email || orgId || orgName) {
         body.connected_account = {};
         if (email) body.connected_account.email = email;
-        if (userId) body.connected_account.user_id = userId;
         if (orgId) body.connected_account.organization_id = orgId;
+        if (orgName) body.connected_account.organization_name = orgName;
       }
       fetch('api/api-key', {
         method: 'POST',
