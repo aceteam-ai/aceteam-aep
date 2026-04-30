@@ -1191,6 +1191,28 @@ def create_proxy_app(
         enabled_custom = sum(
             1 for p in state.custom_policy_store.all() if p.enabled
         )
+        # End-to-end LLM latency (proxy → upstream → response → proxy) — the
+        # only hop pair we can measure from inside the proxy. We surface it
+        # under the local-proxy card since that's where the timer lives, but
+        # it's really the full proxy↔provider round trip.
+        from statistics import stdev  # noqa: PLC0415
+
+        durations = [
+            s.duration_ms
+            for s in state.span_tracker.get_spans()
+            if s.executor_type == "llm" and s.duration_ms is not None
+        ]
+        latency_stats: dict[str, Any] | None
+        if durations:
+            avg = sum(durations) / len(durations)
+            sd = stdev(durations) if len(durations) > 1 else 0.0
+            latency_stats = {
+                "count": len(durations),
+                "avg_ms": round(avg, 1),
+                "stddev_ms": round(sd, 1),
+            }
+        else:
+            latency_stats = None
         local_hop: dict[str, Any] = {
             "name": "aep-proxy",
             "label": "Local proxy",
@@ -1199,6 +1221,7 @@ def create_proxy_app(
             "detectors": detector_names,
             "custom_policies_enabled": enabled_custom,
             "safety_enabled": state.safety_enabled,
+            "latency": latency_stats,
         }
 
         # Layer 2 (optional): the AceTeam gateway, when target_base_url

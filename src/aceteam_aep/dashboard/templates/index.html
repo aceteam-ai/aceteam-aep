@@ -1607,6 +1607,60 @@
       color: var(--text-dim);
     }
 
+    .topology-latency {
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      color: var(--accent-cyan);
+      margin-top: 2px;
+    }
+
+    .topology-latency .muted {
+      color: var(--text-dim);
+    }
+
+    .topology-mode-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 18px 6px 18px;
+    }
+
+    .topology-mode-toggle {
+      display: inline-flex;
+      gap: 0;
+      background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .topology-mode-toggle button {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-family: var(--font-label);
+      font-size: 11px;
+      letter-spacing: 0.4px;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .topology-mode-toggle button.active {
+      background: var(--accent-cyan);
+      color: var(--bg-base, #08111c);
+    }
+
+    .topology-mode-toggle button:not(.active):hover {
+      color: var(--text-primary);
+    }
+
+    .topology-mode-help {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
     @media (max-width: 720px) {
       .topology { flex-direction: column; }
       .topology-arrow { transform: rotate(90deg); flex-basis: auto; }
@@ -1736,8 +1790,35 @@
 
     <div class="section">
       <h2>Routing</h2>
+      <div class="topology-mode-bar">
+        <div class="topology-mode-toggle" role="tablist" aria-label="Routing mode">
+          <button id="mode-safe" class="active" onclick="showRoutingMode('safe')">Safe (default)</button>
+          <button id="mode-direct" onclick="showRoutingMode('direct')">Direct</button>
+        </div>
+        <span class="topology-mode-help" id="mode-help">Local proxy enforces your custom policies + DLP before traffic leaves the machine.</span>
+      </div>
       <div class="topology" id="routing-topology">
         <span style="color:var(--text-dim);font-size:12px;">Loading routing…</span>
+      </div>
+    </div>
+
+    <div class="setup-overlay" id="direct-mode-overlay" style="display:none;">
+      <div class="setup-card" style="max-width:600px;">
+        <button class="setup-close" onclick="closeDirectModeOverlay()" title="Close" aria-label="Close">&times;</button>
+        <h2>Switch to Direct mode</h2>
+        <p>Direct mode points OpenClaw straight at the AceTeam Gateway, bypassing this local proxy. You lose:</p>
+        <ul style="font-size:13px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
+          <li>Custom policies (the rules in the dashboard's Custom Policies section)</li>
+          <li>DLP / secret-leak scanning</li>
+          <li>Local audit log + cost dashboard</li>
+        </ul>
+        <p>You gain ~one network hop of latency.</p>
+        <p style="margin-top:14px;">Edit <code>~/safeclaw/config/openclaw.json</code> and replace <code>http://aep-proxy:8899/v1</code> with <code>https://aceteam.ai/api/gateway/v1</code> on both <code>openai</code> and <code>anthropic</code> providers, then restart OpenClaw:</p>
+        <div class="setup-code" id="direct-mode-cmd">
+          <button class="setup-copy" onclick="copySetupText('direct-mode-cmd')">Copy</button>
+          docker compose -f docker-compose.yml -f docker-compose.safe.yml restart openclaw-gateway openclaw-cli
+        </div>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">To return to Safe mode, swap the URLs back and restart again.</p>
       </div>
     </div>
 
@@ -1997,6 +2078,7 @@
           scope: h.scope,
           url: h.url || '',
           bullets: bullets,
+          latency: h.latency || null,
         };
       }));
 
@@ -2018,9 +2100,39 @@
           });
           html += '</ul>';
         }
+        if (hop.latency && hop.latency.count > 0) {
+          html += '<div class="topology-latency">';
+          html += escapeHtml(hop.latency.avg_ms) + 'ms <span class="muted">avg</span>';
+          if (hop.latency.count > 1) {
+            html += ' ± ' + escapeHtml(hop.latency.stddev_ms) + 'ms';
+          }
+          html += ' <span class="muted">(' + escapeHtml(hop.latency.count) + ' calls)</span>';
+          html += '</div>';
+        }
         html += '</div>';
       });
       container.innerHTML = html;
+    }
+
+    // Direct-mode toggle: clicking "Direct" opens the manual-instructions
+    // modal (we can't rewrite openclaw.json from the proxy without a new
+    // bind mount). Until the user actually edits the config, the UI stays
+    // on "Safe" — flipping the visual state would mislead them about the
+    // running config. We'll auto-detect mode in a future iteration when
+    // the proxy can read openclaw.json directly.
+    function showRoutingMode(mode) {
+      if (mode === 'direct') {
+        document.getElementById('direct-mode-overlay').style.display = 'flex';
+        return;
+      }
+      document.getElementById('mode-safe').classList.add('active');
+      document.getElementById('mode-direct').classList.remove('active');
+    }
+    function closeDirectModeOverlay() {
+      document.getElementById('direct-mode-overlay').style.display = 'none';
+      // Snap visual back to Safe — the user only cancelled out of the
+      // explainer, they didn't actually switch modes.
+      showRoutingMode('safe');
     }
 
     function refreshRouting() {
