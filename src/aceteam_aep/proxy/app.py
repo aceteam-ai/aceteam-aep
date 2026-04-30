@@ -37,6 +37,8 @@ from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
 from .logutil import configure_proxy_debug_logging
+from .openclaw_sync import get_configured_path as _openclaw_config_path
+from .openclaw_sync import refresh_openclaw_config
 from .redis_publisher import build_event, publish_event
 
 log = logging.getLogger(__name__)
@@ -176,6 +178,11 @@ class ProxyState:
         # /api/whoami introspect on existing keys). None for raw BYOK users
         # since we have no way to look them up.
         self.connected_account: dict[str, Any] | None = None
+        # Last status from the openclaw.json auto-sync (when AEP_OPENCLAW_CONFIG_PATH
+        # is configured). The dashboard polls this to surface a "catalog
+        # updated — restart gateway to apply" banner. None until the first
+        # sync attempt for this state.
+        self.openclaw_config_status: dict[str, Any] | None = None
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -1134,6 +1141,18 @@ def create_proxy_app(
         # upstream gateway. Skip for non-act_* keys inside _refresh_*.
         if state.connected_account is None:
             await _refresh_connected_account()
+        # Auto-sync the OpenClaw catalog from the AceTeam gateway whenever a
+        # fresh act_* key lands. Opt-in via env: when AEP_OPENCLAW_CONFIG_PATH
+        # is set (i.e., compose mounts the openclaw config dir into the proxy),
+        # we mirror /v1/models into openclaw.json so users don't have to
+        # hand-edit it as new models get seeded into the AceTeam catalog.
+        config_path = _openclaw_config_path()
+        if config_path and state.api_key and state.api_key.startswith("act_"):
+            state.openclaw_config_status = await refresh_openclaw_config(
+                api_key=state.api_key,
+                target_base_url=state.target_base_url,
+                config_path=config_path,
+            )
         return JSONResponse(_hint(state.api_key))
 
     # Policy tester — evaluate a single custom policy against arbitrary text,
@@ -1173,6 +1192,22 @@ def create_proxy_app(
                 "passes": passes,
                 "severity": policy.severity,
                 "applies_to": policy.applies_to,
+            }
+        )
+
+    # OpenClaw config sync status — drives the dashboard banner that tells
+    # users when openclaw.json was auto-refreshed from the AceTeam catalog
+    # and whether they need to restart the gateway to apply it. Status is
+    # populated by api_key_handler after a successful act_* connect.
+    async def openclaw_config_status_handler(request: Request) -> Response:
+        if request.method != "GET":
+            return JSONResponse({"error": "GET only"}, status_code=405)
+        config_path = _openclaw_config_path()
+        return JSONResponse(
+            {
+                "enabled": config_path is not None,
+                "config_path": config_path,
+                "status": state.openclaw_config_status,
             }
         )
 
@@ -1318,6 +1353,11 @@ def create_proxy_app(
             Route(
                 "/dashboard/api/routing",
                 routing_handler,
+                methods=["GET"],
+            ),
+            Route(
+                "/dashboard/api/openclaw-config-status",
+                openclaw_config_status_handler,
                 methods=["GET"],
             ),
         ]
