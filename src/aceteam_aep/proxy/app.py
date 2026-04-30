@@ -1512,6 +1512,148 @@ def create_proxy_app(
         ]
     )
 
+    # --- Observability API routes (require both dashboard and event_store) ---
+    if dashboard and event_store:
+        from ..observability.incidents import build_incident_bundle
+        from ..observability.views.timeline import get_timeline
+        from ..observability.views.topology import get_topology
+        from ..observability.views.traffic import get_traffic_stats
+
+        async def incidents_list_handler(request: Request) -> Response:
+            params = request.query_params
+            incidents = await event_store.query_flagged_calls(
+                session_id=params.get("session_id"),
+                verdict=params.get("verdict"),
+                limit=int(params.get("limit", "50")),
+            )
+            return Response(
+                json.dumps({"incidents": [fc.model_dump() for fc in incidents]}),
+                media_type="application/json",
+            )
+
+        async def incidents_detail_handler(request: Request) -> Response:
+            call_id = request.path_params["call_id"]
+            flagged = await event_store.query_flagged_calls()
+            match = [fc for fc in flagged if fc.call_id == call_id]
+            if not match:
+                return Response(
+                    '{"error": "not found"}',
+                    status_code=404,
+                    media_type="application/json",
+                )
+            fc = match[0]
+            events = await event_store.query_events(session_id=fc.session_id, limit=500)
+            return Response(
+                json.dumps(
+                    {
+                        "flagged_call": fc.model_dump(),
+                        "events": [e.model_dump() for e in events],
+                    }
+                ),
+                media_type="application/json",
+            )
+
+        async def incidents_export_handler(request: Request) -> Response:
+            call_id = request.path_params["call_id"]
+            bundle = await build_incident_bundle(event_store, call_id=call_id)
+            if bundle is None:
+                return Response(
+                    '{"error": "not found"}',
+                    status_code=404,
+                    media_type="application/json",
+                )
+            return Response(
+                content=bundle,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f"attachment; filename=incident_{call_id}.zip"
+                },
+            )
+
+        async def incidents_verdict_handler(request: Request) -> Response:
+            call_id = request.path_params["call_id"]
+            try:
+                body = await request.json()
+            except Exception:
+                return Response(
+                    '{"error": "invalid JSON"}',
+                    status_code=400,
+                    media_type="application/json",
+                )
+            verdict = body.get("verdict")
+            if verdict not in ("confirmed", "dismissed"):
+                return Response(
+                    '{"error": "verdict must be confirmed or dismissed"}',
+                    status_code=400,
+                    media_type="application/json",
+                )
+            await event_store.update_verdict(
+                call_id=call_id,
+                verdict=verdict,
+                verdict_by=body.get("verdict_by", "unknown"),
+                verdict_note=body.get("verdict_note"),
+            )
+            return Response(json.dumps({"ok": True}), media_type="application/json")
+
+        async def timeline_handler(request: Request) -> Response:
+            params = request.query_params
+            spans = await get_timeline(
+                event_store,
+                session_id=params.get("session_id"),
+                since=params.get("since"),
+                limit=int(params.get("limit", "200")),
+            )
+            return Response(
+                json.dumps({"spans": spans}),
+                media_type="application/json",
+            )
+
+        async def traffic_handler(request: Request) -> Response:
+            params = request.query_params
+            stats = await get_traffic_stats(
+                event_store,
+                session_id=params.get("session_id"),
+                since=params.get("since"),
+            )
+            return Response(json.dumps(stats), media_type="application/json")
+
+        async def topology_handler(request: Request) -> Response:
+            params = request.query_params
+            topo = await get_topology(
+                event_store,
+                session_id=params.get("session_id"),
+                since=params.get("since"),
+            )
+            return Response(json.dumps(topo), media_type="application/json")
+
+        routes.extend(
+            [
+                Route(
+                    "/dashboard/api/incidents",
+                    incidents_list_handler,
+                    methods=["GET"],
+                ),
+                Route(
+                    "/dashboard/api/incidents/{call_id}/export",
+                    incidents_export_handler,
+                    methods=["GET"],
+                ),
+                Route(
+                    "/dashboard/api/incidents/{call_id}/verdict",
+                    incidents_verdict_handler,
+                    methods=["PATCH"],
+                ),
+                Route(
+                    "/dashboard/api/incidents/{call_id}",
+                    incidents_detail_handler,
+                    methods=["GET"],
+                ),
+                Route("/dashboard/api/timeline", timeline_handler, methods=["GET"]),
+                Route("/dashboard/api/traffic", traffic_handler, methods=["GET"]),
+                Route("/dashboard/api/topology", topology_handler, methods=["GET"]),
+            ]
+        )
+
     # Mount MCP gateway if fastmcp is installed
     mcp_http_app = None
     try:
