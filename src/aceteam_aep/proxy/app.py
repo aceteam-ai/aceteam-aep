@@ -1059,10 +1059,19 @@ def create_proxy_app(
                     "provider": None,
                     "connected_account": None,
                 }
-            visible = key[:7] if len(key) > 7 else key[:3]
+            # prefix + suffix lets users match the hint against entries in
+            # their AceTeam API keys list. 7+4 keeps the surface area visible
+            # but reveals less than half of any reasonable-length key (act_*
+            # is 32 chars, sk-* is 51, sk-ant-* is 100+).
+            if len(key) >= 12:
+                hint = f"{key[:7]}...{key[-4:]}"
+            elif len(key) > 7:
+                hint = f"{key[:7]}..."
+            else:
+                hint = f"{key[:3]}..."
             return {
                 "set": True,
-                "hint": f"{visible}...",
+                "hint": hint,
                 "provider": _classify(key),
                 "connected_account": state.connected_account,
             }

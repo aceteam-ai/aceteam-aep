@@ -1383,6 +1383,126 @@
       color: var(--accent-red);
     }
 
+    /* ── Profile drawer (slides in when email chip is clicked) ── */
+    .profile-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 360px;
+      max-width: 92vw;
+      background: var(--bg-surface);
+      border-left: 1px solid var(--border);
+      box-shadow: -16px 0 60px rgba(0, 0, 0, 0.4);
+      transform: translateX(100%);
+      transition: transform 0.18s ease-out;
+      z-index: 900;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .profile-drawer.open {
+      transform: translateX(0);
+    }
+
+    .profile-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .profile-drawer-title {
+      font-family: var(--font-label);
+      font-size: 12px;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .profile-drawer-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0 6px;
+      line-height: 1;
+    }
+
+    .profile-drawer-close:hover {
+      color: var(--text-primary);
+    }
+
+    .profile-drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+    }
+
+    .profile-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .profile-row:last-of-type {
+      border-bottom: none;
+    }
+
+    .profile-row-label {
+      font-family: var(--font-label);
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+
+    .profile-row-value {
+      font-size: 14px;
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+
+    .profile-row-value.muted {
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .profile-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+    }
+
+    .profile-action-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-family: var(--font-label);
+      font-size: 12px;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .profile-action-btn:hover {
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    .profile-action-btn.danger:hover {
+      border-color: var(--accent-red);
+      color: var(--accent-red);
+    }
+
     /* ── Header settings (open setup wizard after first run) ── */
     .settings-btn {
       background: transparent;
@@ -1464,10 +1584,42 @@
       <button id="btn-dev" class="active" onclick="setView('dev')">Developer</button>
       <button id="btn-ciso" onclick="setView('ciso')">Executive</button>
     </div>
-    <button class="settings-btn" id="settings-btn" onclick="openSetup()" title="API key &amp; agent setup">
+    <button class="settings-btn" id="settings-btn" onclick="openProfile()" title="API key &amp; agent setup">
       <span id="settings-btn-label">SETUP</span>
     </button>
   </h1>
+  <aside class="profile-drawer" id="profile-drawer" aria-hidden="true">
+    <div class="profile-drawer-header">
+      <span class="profile-drawer-title">Connected account</span>
+      <button class="profile-drawer-close" onclick="closeProfile()" aria-label="Close">&times;</button>
+    </div>
+    <div class="profile-drawer-body">
+      <div class="profile-row">
+        <span class="profile-row-label">Email</span>
+        <span class="profile-row-value" id="profile-email">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="profile-row-label">Provider</span>
+        <span class="profile-row-value" id="profile-provider">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="profile-row-label">Key (hint)</span>
+        <span class="profile-row-value" id="profile-key-hint">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="profile-row-label">User ID</span>
+        <span class="profile-row-value muted" id="profile-user-id">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="profile-row-label">Organization ID</span>
+        <span class="profile-row-value muted" id="profile-org-id">—</span>
+      </div>
+    </div>
+    <div class="profile-actions">
+      <button class="profile-action-btn" onclick="openSetup(); closeProfile();">Reconfigure / change provider</button>
+      <button class="profile-action-btn danger" onclick="disconnectKey()">Disconnect</button>
+    </div>
+  </aside>
 
   <!-- ===== DEVELOPER VIEW ===== -->
   <div id="view-dev">
@@ -1696,6 +1848,58 @@
       }).catch(function () { });
     }
 
+    // Profile drawer — opens on email-chip click for an already-connected user.
+    // First-run (no key set) falls back to the setup overlay so the user has a
+    // way to provision a key. Reconfigure / disconnect actions live in the
+    // drawer; the overlay is reserved for initial provisioning.
+    function openProfile() {
+      fetch('api/api-key').then(function (r) { return r.json(); }).then(function (info) {
+        if (!info || !info.set) {
+          openSetup();
+          return;
+        }
+        var account = info.connected_account || {};
+        document.getElementById('profile-email').textContent = account.email || '(no email — direct BYOK)';
+        // KEY_CHIP_LABELS look like "CONNECTED · AceTeam" / "KEY · OpenAI". Pop
+        // the part after the · separator for a clean provider name; fall back
+        // to the raw provider id (or "Unknown") when no friendly label exists.
+        var rawLabel = KEY_CHIP_LABELS[info.provider];
+        var providerName = rawLabel ? rawLabel.split('·').pop().trim() : (info.provider || 'Unknown');
+        document.getElementById('profile-provider').textContent = providerName;
+        document.getElementById('profile-key-hint').textContent = info.hint || '—';
+        document.getElementById('profile-user-id').textContent = account.user_id || '—';
+        document.getElementById('profile-org-id').textContent = account.organization_id || '—';
+        var drawer = document.getElementById('profile-drawer');
+        drawer.classList.add('open');
+        drawer.setAttribute('aria-hidden', 'false');
+      }).catch(function () {
+        openSetup();
+      });
+    }
+
+    function closeProfile() {
+      var drawer = document.getElementById('profile-drawer');
+      drawer.classList.remove('open');
+      drawer.setAttribute('aria-hidden', 'true');
+    }
+
+    function disconnectKey() {
+      if (!confirm('Disconnect from AceTeam? You will need to sign in again to use SafeClaw.')) return;
+      fetch('api/api-key', { method: 'DELETE' })
+        .then(function (r) { return r.json(); })
+        .then(function (info) {
+          refreshKeyHint(info);
+          closeProfile();
+          // Surface the setup overlay so user can reconnect (or pick a different provider).
+          var overlay = document.getElementById('setup-overlay');
+          var closeBtn = document.getElementById('setup-close-btn');
+          if (closeBtn) closeBtn.style.display = 'block';
+          overlay.style.display = 'flex';
+        }).catch(function () {
+          alert('Failed to disconnect. Is the proxy running?');
+        });
+    }
+
     function openSetup() {
       document.getElementById('setup-step-1').classList.add('active');
       document.getElementById('setup-step-2').classList.remove('active');
@@ -1794,10 +1998,17 @@
       var key = params.get('aceteam_key');
       var baseUrl = params.get('aceteam_base');
       var email = params.get('aceteam_email');
+      var userId = params.get('aceteam_user_id');
+      var orgId = params.get('aceteam_org_id');
       if (!key) return false;
       history.replaceState(null, '', window.location.pathname);
       var body = { api_key: key, base_url: baseUrl || undefined };
-      if (email) body.connected_account = { email: email };
+      if (email || userId || orgId) {
+        body.connected_account = {};
+        if (email) body.connected_account.email = email;
+        if (userId) body.connected_account.user_id = userId;
+        if (orgId) body.connected_account.organization_id = orgId;
+      }
       fetch('api/api-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
