@@ -1,6 +1,6 @@
 [project]
 name = "aceteam-aep"
-version = "0.9.1"
+version = "0.10.0"
 description = "Agentic Execution Protocol™ (AEP™) - trust & safety infrastructure for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,14 +32,15 @@ ollama = ["ollama>=0.4.0,<1.0.0"]
 safety = ["programasweights>=0.4.2", "transformers>=4.40", "torch>=2.0"]
 safety_lite = ["programasweights>=0.4.2"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
-proxy = ["aceteam-aep[dashboard,safety_lite]"]
+observability = ["aiosqlite>=0.20"]
+proxy = ["aceteam-aep[dashboard,safety_lite,observability]"]
 events = ["redis[hiredis]>=5.0"]
 mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
 feedback = ["lancedb>=0.30"]
 top = ["rich>=13.0"]
 all = [
-    "aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events]",
+    "aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events,observability]",
 ]
 dev = [
     "aceteam-aep[all]",
