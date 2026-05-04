@@ -115,10 +115,18 @@ def _splice_into_existing(
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Write content via tmp+rename so a crash mid-write can't leave a half file."""
+    """Write content via tmp+rename so a crash mid-write can't leave a half file.
+
+    The proxy container typically runs as root, so files it writes to a
+    bind-mounted host path land as ``root:root``. Setting mode ``0o666`` lets
+    the host user edit ``openclaw.json`` directly without sudo, regardless of
+    who owns it. The parent directory still gates access — a wide mode here
+    is fine because the dir is the user's own ``~/safeclaw/config``.
+    """
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content)
     tmp.replace(path)
+    os.chmod(path, 0o666)
 
 
 async def refresh_openclaw_config(

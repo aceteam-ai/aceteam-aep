@@ -234,6 +234,10 @@ class TestRefreshOpenclawConfig:
         assert "deepseek" in written["models"]["providers"]
         assert written["gateway"] == {"mode": "local"}  # preserved
 
+        # File mode is world-writable so a host user (jason) can edit even
+        # when aep-proxy wrote it as root inside its container.
+        assert (target.stat().st_mode & 0o777) == 0o666
+
         # Confirm the gateway URL was constructed correctly.
         assert (
             mock_client.get.await_args.args[0]
