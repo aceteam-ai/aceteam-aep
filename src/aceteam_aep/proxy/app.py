@@ -481,37 +481,37 @@ def create_proxy_app(
                 input_decision = evaluate(input_signals, state.policy) if input_signals else EnforcementDecision(action="pass")
 
             if input_decision.action == "block":
-                    state.signals.extend(input_signals)
-                    state.decisions.append(input_decision)
-                    state.call_count += 1
-                    state.blocked_count += 1
-                    log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
-                    _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
-                    if _instance_id:
-                        _detector = input_signals[0].detector if input_signals else None
-                        _severity = input_signals[0].severity if input_signals else None
-                        await publish_event(
-                            build_event(
-                                instance_id=_instance_id,
-                                event_type="safety_block",
-                                action="block",
-                                message=input_decision.reason or "Input blocked by safety filter",
-                                detector=_detector,
-                                severity=_severity,
-                            )
+                state.signals.extend(input_signals)
+                state.decisions.append(input_decision)
+                state.call_count += 1
+                state.blocked_count += 1
+                log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
+                _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
+                if _instance_id:
+                    _detector = input_signals[0].detector if input_signals else None
+                    _severity = input_signals[0].severity if input_signals else None
+                    await publish_event(
+                        build_event(
+                            instance_id=_instance_id,
+                            event_type="safety_block",
+                            action="block",
+                            message=input_decision.reason or "Input blocked by safety filter",
+                            detector=_detector,
+                            severity=_severity,
                         )
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "error": {
-                                "message": (
-                                    f"AEP safety: request blocked — {input_decision.reason}"
-                                ),
-                                "type": "aep_safety_block",
-                                "code": "safety_block",
-                            }
-                        },
                     )
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": {
+                            "message": (
+                                f"AEP safety: request blocked — {input_decision.reason}"
+                            ),
+                            "type": "aep_safety_block",
+                            "code": "safety_block",
+                        }
+                    },
+                )
         else:
             input_signals = ()
 

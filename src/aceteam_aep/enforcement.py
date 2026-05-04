@@ -44,9 +44,7 @@ class PipelinePolicy:
     enabled: bool = False
     pass_below: float = 0.3
     block_above: float = 0.7
-    confidence_threshold: float = 0.7
     layers: list[dict[str, Any]] = field(default_factory=list)
-    layer_weights: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,13 +84,7 @@ class EnforcementPolicy:
             enabled=pipeline_data.get("enabled", False),
             pass_below=pipeline_data.get("pass_below", 0.3),
             block_above=pipeline_data.get("block_above", 0.7),
-            confidence_threshold=pipeline_data.get("confidence_threshold", 0.7),
             layers=pipeline_data.get("layers", []),
-            layer_weights={
-                l["name"]: l.get("weight", 1.0)
-                for l in pipeline_data.get("layers", [])
-                if isinstance(l, dict) and "name" in l
-            },
         )
 
         return cls(
