@@ -278,6 +278,26 @@ class AnthropicClient:
                         output_tokens = event.usage.output_tokens
                     finish = getattr(event.delta, "stop_reason", None)
                     if finish:
+                        # Flush any in-progress tool call that was truncated
+                        # (e.g. by max_tokens). Anthropic skips content_block_stop
+                        # when the response is cut short, so the accumulated
+                        # partial JSON would otherwise be silently dropped.
+                        if current_tool:
+                            try:
+                                raw_args = current_tool["arguments"]
+                                args = json.loads(raw_args) if raw_args.strip() else {}
+                            except (json.JSONDecodeError, TypeError):
+                                args = {"raw": current_tool["arguments"]}
+                            yield StreamChunk(
+                                delta_tool_calls=[
+                                    ToolCallRequest(
+                                        id=current_tool["id"],
+                                        name=current_tool["name"],
+                                        arguments=args,
+                                    )
+                                ]
+                            )
+                            current_tool = None
                         yield StreamChunk(
                             finish_reason=finish,
                             usage=Usage(

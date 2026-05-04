@@ -300,9 +300,32 @@ async def run_agent_loop_stream(
             )
             working.append(assistant_msg)
 
-            # No tool calls → done
+            # No tool calls -> done
             if not accumulated_tool_calls:
                 break
+
+            # If the response was truncated by max_tokens, tool call arguments
+            # are likely incomplete (truncated JSON).  Rather than executing
+            # broken calls or giving up, remove the partial assistant message
+            # and ask the model to retry with a more concise approach.
+            if last_finish_reason == "max_tokens":
+                working.pop()  # remove partial assistant message
+                working.append(
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "Your previous response was cut off because it exceeded the "
+                            "output token limit. Please try again with a more concise "
+                            "version. If the content is too large for a single tool call, "
+                            "split it into smaller parts across multiple calls."
+                        ),
+                    )
+                )
+                yield chunk_event(
+                    "[Retrying -- previous response exceeded token limit]\n\n"
+                )
+                last_finish_reason = None
+                continue
 
             # Execute tool calls
             for tc in accumulated_tool_calls:
