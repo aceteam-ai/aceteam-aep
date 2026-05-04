@@ -1,25 +1,35 @@
 """Cascading confidence pipeline — sequential safety evaluation with short-circuit.
 
-Layers run in order. Each produces a probability (not a boolean). The pipeline
-short-circuits when combined confidence is high enough to decide PASS or BLOCK
-without running more expensive downstream layers.
+Each layer evaluates one safety criterion and returns P(safe) for that criterion.
+The overall P(safe) is the product of all per-criterion P(safe_i), under a
+conditional independence assumption (analogous to naive Bayes).
 
-    Layer 0: Deterministic (regex)     — free, <1ms
-    Layer 1: PAW local classifier      — free, ~50ms, needs logprobs
-    Layer 2: Content model (toxicity)   — free, ~100ms, local transformer
-    Layer 3: TrustEngine API           — ~$0.001, ~500ms, structured reasoning
+Layers that haven't run yet contribute their prior_p_safe to the product.
+Running a layer replaces its prior with the computed posterior. The cascade
+short-circuits when the product crosses the block or pass threshold — no need
+to run expensive downstream layers.
+
+The independence assumption can distort in both directions:
+- Positively correlated criteria → over-penalizes (conservative, safe default)
+- Negatively correlated criteria → under-penalizes (only with contradictory rules)
+This is a known limitation; the research track explores probabilistic graphical
+models (DAGs) for modeling inter-criterion dependencies (Bishop Ch. 8).
+
+Alternative combination approaches considered but not implemented:
+- max(p_unsafe): simple but ignores AND semantics
+- Bayesian update: principled for overlapping criteria but requires calibrated
+  likelihoods (the research gap Gustavo's linear probes address)
+- Graphical model factorization: chain rule with LLM-generated dependency graph;
+  principled but combinatorially expensive
 
 Usage::
 
-    from aceteam_aep.safety.pipeline import SafetyPipeline, RegexLayer, PawLayer
-
     pipeline = SafetyPipeline(layers=[
-        RegexLayer(pii=pii_detector, agent_threat=threat_detector),
+        RegexLayer(detectors=[pii, threat]),
         PawLayer(custom_detector),
         TrustEngineLayer(trust_detector),
     ])
     result = await pipeline.evaluate(input_text="...", output_text="...", call_id="x")
-    # result.p_unsafe, result.confidence, result.verdict, result.layers_executed
 """
 
 from __future__ import annotations
@@ -45,8 +55,7 @@ class LayerResult:
     """Output from a single cascade layer."""
 
     layer_name: str
-    p_unsafe: float  # 0.0 = certainly safe, 1.0 = certainly unsafe
-    confidence: float  # 0.0 = no opinion, 1.0 = fully certain
+    p_safe: float
     signals: list[SafetySignal] = field(default_factory=list)
     latency_ms: float = 0.0
 
@@ -56,6 +65,7 @@ class CascadeLayer(Protocol):
     """Protocol for layers in the safety cascade."""
 
     name: str
+    prior_p_safe: float
 
     async def score(
         self,
@@ -63,27 +73,28 @@ class CascadeLayer(Protocol):
         input_text: str,
         output_text: str,
         call_id: str,
-        prior_results: list[LayerResult],
+        prior_results: Sequence[LayerResult],
         **kwargs,
     ) -> LayerResult: ...
 
 
 # ---------------------------------------------------------------------------
-# Layer adapters — wrap existing detectors
+# Layer adapters
 # ---------------------------------------------------------------------------
 
 
-class RegexLayer:
-    """Layer 0: Deterministic regex detectors (PII, agent threat, FERPA).
+class RegexLayer(CascadeLayer):
+    """Deterministic regex detectors (PII, agent threat, FERPA, secrets).
 
-    On hit → p_unsafe=1.0, confidence=1.0 (certain).
-    On miss → p_unsafe=0.0, confidence=0.1 (regex miss doesn't mean safe).
+    Hit → p_safe near 0 (certain violation). Miss → prior unchanged.
     """
 
     name = "regex"
+    prior_p_safe = 0.95
 
-    def __init__(self, detectors: list) -> None:
+    def __init__(self, detectors: list, *, prior_p_safe: float = 0.95) -> None:
         self._detectors = detectors
+        self.prior_p_safe = prior_p_safe
 
     async def score(
         self,
@@ -91,10 +102,10 @@ class RegexLayer:
         input_text: str,
         output_text: str,
         call_id: str,
-        prior_results: list[LayerResult],
+        prior_results: Sequence[LayerResult],
         **kwargs,
     ) -> LayerResult:
-        start = time.monotonic()
+        start = time.monotonic_ns()
         all_signals: list[SafetySignal] = []
 
         for detector in self._detectors:
@@ -111,43 +122,42 @@ class RegexLayer:
             except Exception:
                 log.warning("Regex layer detector %s failed", detector.name, exc_info=True)
 
-        latency = (time.monotonic() - start) * 1000
+        latency = (time.monotonic_ns() - start) / 1_000_000
 
         if all_signals:
             max_score = max((s.score or 1.0) for s in all_signals)
             return LayerResult(
                 layer_name=self.name,
-                p_unsafe=max_score,
-                confidence=1.0,
+                p_safe=1.0 - max_score,
                 signals=all_signals,
                 latency_ms=latency,
             )
 
         return LayerResult(
             layer_name=self.name,
-            p_unsafe=0.0,
-            confidence=0.1,
+            p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
         )
 
 
-class PawLayer:
-    """Layer 1: PAW local classifier with logprob confidence.
+class PawLayer(CascadeLayer):
+    """PAW local classifier with logprob confidence.
 
-    Uses CustomSafetyDetector with the new confidence-aware path.
-    p_unsafe comes from 1 - p_compliant (logprob softmax).
-    confidence is the distance from 0.5 (how decisive the model was).
+    p_safe comes directly from the logprob softmax P(Y) extracted from
+    the llama.cpp inference. Falls back to prior when no signals.
     """
 
     name = "paw"
+    prior_p_safe = 0.5
 
-    def __init__(self, detector) -> None:
+    def __init__(self, detector, *, prior_p_safe: float = 0.5) -> None:
         from .custom import CustomSafetyDetector
 
         if not isinstance(detector, CustomSafetyDetector):
             raise TypeError(f"Expected CustomSafetyDetector, got {type(detector).__name__}")
         self._detector = detector
+        self.prior_p_safe = prior_p_safe
 
     async def score(
         self,
@@ -155,10 +165,10 @@ class PawLayer:
         input_text: str,
         output_text: str,
         call_id: str,
-        prior_results: list[LayerResult],
+        prior_results: Sequence[LayerResult],
         **kwargs,
     ) -> LayerResult:
-        start = time.monotonic()
+        start = time.monotonic_ns()
 
         signals = list(
             await self._detector.check(
@@ -169,43 +179,42 @@ class PawLayer:
             )
         )
 
-        latency = (time.monotonic() - start) * 1000
+        latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
             scores = [s.score for s in signals if s.score is not None]
-            p_unsafe = max(scores) if scores else 0.8
-            confidence = abs(p_unsafe - 0.5) * 2 if scores else 0.5
+            if scores:
+                p_safe = 1.0 - max(scores)
+            else:
+                p_safe = 0.2
             return LayerResult(
                 layer_name=self.name,
-                p_unsafe=p_unsafe,
-                confidence=confidence,
+                p_safe=p_safe,
                 signals=signals,
                 latency_ms=latency,
             )
 
         return LayerResult(
             layer_name=self.name,
-            p_unsafe=0.0,
-            confidence=0.6,
+            p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
         )
 
 
-class ContentModelLayer:
-    """Layer 2: Local toxicity classifier.
-
-    Wraps ContentSafetyDetector. Score maps directly to p_unsafe.
-    """
+class ContentModelLayer(CascadeLayer):
+    """Local toxicity classifier. Score maps directly to p_unsafe."""
 
     name = "content_model"
+    prior_p_safe = 0.9
 
-    def __init__(self, detector) -> None:
+    def __init__(self, detector, *, prior_p_safe: float = 0.9) -> None:
         from .content import ContentSafetyDetector
 
         if not isinstance(detector, ContentSafetyDetector):
             raise TypeError(f"Expected ContentSafetyDetector, got {type(detector).__name__}")
         self._detector = detector
+        self.prior_p_safe = prior_p_safe
 
     async def score(
         self,
@@ -213,10 +222,10 @@ class ContentModelLayer:
         input_text: str,
         output_text: str,
         call_id: str,
-        prior_results: list[LayerResult],
+        prior_results: Sequence[LayerResult],
         **kwargs,
     ) -> LayerResult:
-        start = time.monotonic()
+        start = time.monotonic_ns()
 
         signals = list(
             await self._detector.check(
@@ -227,42 +236,42 @@ class ContentModelLayer:
             )
         )
 
-        latency = (time.monotonic() - start) * 1000
+        latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
             max_score = max((s.score or 0.8) for s in signals)
             return LayerResult(
                 layer_name=self.name,
-                p_unsafe=max_score,
-                confidence=max_score,
+                p_safe=1.0 - max_score,
                 signals=signals,
                 latency_ms=latency,
             )
 
         return LayerResult(
             layer_name=self.name,
-            p_unsafe=0.0,
-            confidence=0.5,
+            p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
         )
 
 
-class TrustEngineLayer:
-    """Layer 3: LLM-based multi-perspective evaluation via API.
+class TrustEngineLayer(CascadeLayer):
+    """LLM-based multi-perspective evaluation via API.
 
-    Wraps TrustEngineDetector. Already produces structured P(safe) with
-    per-dimension confidence and reasoning.
+    TrustEngineDetector already produces P(safe) with per-dimension
+    confidence and reasoning. Signals carry score = P(safe).
     """
 
     name = "trust_engine"
+    prior_p_safe = 0.5
 
-    def __init__(self, detector) -> None:
+    def __init__(self, detector, *, prior_p_safe: float = 0.5) -> None:
         from .trust_engine import TrustEngineDetector
 
         if not isinstance(detector, TrustEngineDetector):
             raise TypeError(f"Expected TrustEngineDetector, got {type(detector).__name__}")
         self._detector = detector
+        self.prior_p_safe = prior_p_safe
 
     async def score(
         self,
@@ -270,10 +279,10 @@ class TrustEngineLayer:
         input_text: str,
         output_text: str,
         call_id: str,
-        prior_results: list[LayerResult],
+        prior_results: Sequence[LayerResult],
         **kwargs,
     ) -> LayerResult:
-        start = time.monotonic()
+        start = time.monotonic_ns()
 
         signals = list(
             await self._detector.check(
@@ -284,23 +293,21 @@ class TrustEngineLayer:
             )
         )
 
-        latency = (time.monotonic() - start) * 1000
+        latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
             scores = [s.score for s in signals if s.score is not None]
-            p_unsafe = 1.0 - min(scores) if scores else 0.7
+            p_safe = min(scores) if scores else 0.3
             return LayerResult(
                 layer_name=self.name,
-                p_unsafe=p_unsafe,
-                confidence=0.9,
+                p_safe=p_safe,
                 signals=signals,
                 latency_ms=latency,
             )
 
         return LayerResult(
             layer_name=self.name,
-            p_unsafe=0.0,
-            confidence=0.9,
+            p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
         )
@@ -315,8 +322,7 @@ class TrustEngineLayer:
 class PipelineResult:
     """Aggregate result from the full cascade."""
 
-    p_unsafe: float
-    confidence: float
+    p_safe: float
     verdict: str  # "pass", "flag", "block"
     signals: list[SafetySignal] = field(default_factory=list)
     layer_results: list[LayerResult] = field(default_factory=list)
@@ -324,53 +330,49 @@ class PipelineResult:
     short_circuited_at: str | None = None
     total_latency_ms: float = 0.0
 
+    @property
+    def p_unsafe(self) -> float:
+        return round(1.0 - self.p_safe, 4)
+
+    @property
+    def confidence(self) -> float:
+        return round(abs(self.p_safe - 0.5) * 2, 4)
+
 
 class SafetyPipeline:
-    """Sequential cascade of safety layers with short-circuit logic.
+    """Sequential cascade with product-based combination.
 
-    Runs layers in order. After each layer, checks whether the combined
-    confidence is high enough to make a decision without running the
-    remaining (more expensive) layers.
+    P(safe) = product of P(safe_i) across all criteria. Layers that haven't
+    run contribute their prior_p_safe; running a layer replaces its prior
+    with the computed posterior. Short-circuits when P(safe) crosses a threshold.
     """
 
     def __init__(
         self,
-        layers: list[CascadeLayer],
+        layers: Sequence[CascadeLayer],
         *,
-        pass_below: float = 0.3,
-        block_above: float = 0.7,
-        confidence_threshold: float = 0.7,
-        layer_weights: dict[str, float] | None = None,
+        pass_above: float = 0.7,
+        block_below: float = 0.3,
     ) -> None:
-        self._layers = layers
-        self._pass_below = pass_below
-        self._block_above = block_above
-        self._confidence_threshold = confidence_threshold
-        self._layer_weights = layer_weights or {}
+        self._layers = list(layers)
+        self._pass_above = pass_above
+        self._block_below = block_below
 
-    def _combine(self, results: list[LayerResult]) -> tuple[float, float]:
-        """Weighted average of layer results → (p_unsafe, confidence)."""
-        total_weight = 0.0
-        weighted_p = 0.0
-        weighted_c = 0.0
+    def _compute_p_safe(
+        self,
+        layer_results: dict[str, LayerResult],
+    ) -> float:
+        """Product of per-layer P(safe). Unrun layers contribute their prior."""
+        p = 1.0
+        for layer in self._layers:
+            result = layer_results.get(layer.name)
+            p *= result.p_safe if result else layer.prior_p_safe
+        return p
 
-        for r in results:
-            w = self._layer_weights.get(r.layer_name, 1.0) * r.confidence
-            if w <= 0:
-                continue
-            weighted_p += r.p_unsafe * w
-            weighted_c += r.confidence * w
-            total_weight += w
-
-        if total_weight == 0:
-            return 0.5, 0.0
-
-        return weighted_p / total_weight, weighted_c / total_weight
-
-    def _verdict(self, p_unsafe: float) -> str:
-        if p_unsafe >= self._block_above:
+    def _verdict(self, p_safe: float) -> str:
+        if p_safe <= self._block_below:
             return "block"
-        if p_unsafe < self._pass_below:
+        if p_safe >= self._pass_above:
             return "pass"
         return "flag"
 
@@ -382,8 +384,9 @@ class SafetyPipeline:
         call_id: str,
         **kwargs,
     ) -> PipelineResult:
-        pipeline_start = time.monotonic()
-        layer_results: list[LayerResult] = []
+        start = time.monotonic_ns()
+        results_map: dict[str, LayerResult] = {}
+        ordered_results: list[LayerResult] = []
         all_signals: list[SafetySignal] = []
         short_circuited_at: str | None = None
 
@@ -393,33 +396,31 @@ class SafetyPipeline:
                     input_text=input_text,
                     output_text=output_text,
                     call_id=call_id,
-                    prior_results=layer_results,
+                    prior_results=ordered_results,
                     **kwargs,
                 )
             except Exception:
                 log.warning("Pipeline layer %s failed, skipping", layer.name, exc_info=True)
                 continue
 
-            layer_results.append(result)
+            results_map[layer.name] = result
+            ordered_results.append(result)
             all_signals.extend(result.signals)
 
-            p_unsafe, confidence = self._combine(layer_results)
+            p_safe = self._compute_p_safe(results_map)
+            if p_safe <= self._block_below or p_safe >= self._pass_above:
+                short_circuited_at = layer.name
+                break
 
-            if confidence >= self._confidence_threshold:
-                if p_unsafe >= self._block_above or p_unsafe < self._pass_below:
-                    short_circuited_at = layer.name
-                    break
-
-        p_unsafe, confidence = self._combine(layer_results)
-        total_latency = (time.monotonic() - pipeline_start) * 1000
+        p_safe = self._compute_p_safe(results_map)
+        total_latency = (time.monotonic_ns() - start) / 1_000_000
 
         return PipelineResult(
-            p_unsafe=round(p_unsafe, 4),
-            confidence=round(confidence, 4),
-            verdict=self._verdict(p_unsafe),
+            p_safe=round(p_safe, 6),
+            verdict=self._verdict(p_safe),
             signals=all_signals,
-            layer_results=layer_results,
-            layers_executed=len(layer_results),
+            layer_results=ordered_results,
+            layers_executed=len(ordered_results),
             short_circuited_at=short_circuited_at,
             total_latency_ms=round(total_latency, 1),
         )

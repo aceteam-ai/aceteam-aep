@@ -304,6 +304,7 @@ class ProxyState:
         pr = self._last_pipeline_result
         if pr is not None:
             info["last_result"] = {
+                "p_safe": pr.p_safe,
                 "p_unsafe": pr.p_unsafe,
                 "confidence": pr.confidence,
                 "verdict": pr.verdict,
@@ -313,8 +314,8 @@ class ProxyState:
                 "layer_results": [
                     {
                         "layer_name": lr.layer_name,
-                        "p_unsafe": lr.p_unsafe,
-                        "confidence": lr.confidence,
+                        "p_safe": lr.p_safe,
+                        "p_unsafe": round(1.0 - lr.p_safe, 4),
                         "latency_ms": lr.latency_ms,
                         "signal_count": len(lr.signals),
                     }

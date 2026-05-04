@@ -288,7 +288,7 @@ def evaluate_pipeline(
 ) -> EnforcementDecision:
     """Convert a PipelineResult into an EnforcementDecision.
 
-    Uses the pipeline's own verdict (based on calibrated p_unsafe thresholds)
+    Uses the pipeline's own verdict (product-based P(safe) thresholds)
     and merges any signals raised by individual layers.
     """
     from .safety.pipeline import PipelineResult
@@ -299,8 +299,7 @@ def evaluate_pipeline(
     reasons: list[str] = []
     if pipeline_result.verdict in ("block", "flag"):
         reasons.append(
-            f"pipeline: p_unsafe={pipeline_result.p_unsafe:.2f} "
-            f"confidence={pipeline_result.confidence:.2f} "
+            f"pipeline: P(safe)={pipeline_result.p_safe:.4f} "
             f"({pipeline_result.layers_executed} layers"
             + (f", short-circuited at {pipeline_result.short_circuited_at})" if pipeline_result.short_circuited_at else ")")
         )
@@ -369,10 +368,8 @@ def build_pipeline_from_policy(
 
     return SafetyPipeline(
         layers=layers,
-        pass_below=policy.pipeline.pass_below,
-        block_above=policy.pipeline.block_above,
-        confidence_threshold=policy.pipeline.confidence_threshold,
-        layer_weights=policy.pipeline.layer_weights,
+        pass_above=1.0 - policy.pipeline.pass_below,
+        block_below=1.0 - policy.pipeline.block_above,
     )
 
 
