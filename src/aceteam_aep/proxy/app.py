@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,6 +43,13 @@ from .logutil import configure_proxy_debug_logging
 from .openclaw_sync import get_configured_path as _openclaw_config_path
 from .openclaw_sync import refresh_openclaw_config
 from .redis_publisher import build_event, publish_event
+from .state_persistence import (
+    get_configured_path as _state_persistence_path,
+)
+from .state_persistence import (
+    load_persisted_state,
+    save_persisted_state,
+)
 
 log = logging.getLogger(__name__)
 
@@ -166,9 +174,15 @@ class ProxyState:
         budget: float | None = None,
         budget_per_session: float | None = None,
         event_store: EventStore | None = None,
+        state_path: Path | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
         self.event_store = event_store
+        # When set, ProxyState mirrors a small slice of itself (api_key,
+        # connected_account, target_base_url, safety_enabled) to this file
+        # so a restart doesn't wipe the dashboard-configured state. None
+        # disables persistence — that's the wrap()/test path.
+        self._state_path = state_path
         self.session_id = uuid.uuid4().hex
         self.cost_tracker = CostTracker()
         self.span_tracker = SpanTracker()
@@ -223,6 +237,44 @@ class ProxyState:
             to_register.append(CustomSafetyDetector(self.custom_policy_store))
         for det in to_register:
             self.registry.add(det)
+
+        # Apply any state from a prior run last, so the persisted api_key
+        # (e.g. an act_* from a dashboard connect) overrides the env-seeded
+        # one above. Persistence is opt-in via state_path; wrap()/tests pass
+        # None and get the original in-memory behavior.
+        if self._state_path is not None:
+            persisted = load_persisted_state(self._state_path)
+            if persisted is not None:
+                self._apply_persisted(persisted)
+
+    def _apply_persisted(self, fields: dict[str, Any]) -> None:
+        """Restore fields from a prior run. Silently skips bad/missing values."""
+        api_key = fields.get("api_key")
+        if isinstance(api_key, str) and api_key:
+            self.api_key = api_key
+        connected = fields.get("connected_account")
+        if isinstance(connected, dict) or connected is None:
+            self.connected_account = connected
+        url = fields.get("target_base_url")
+        if isinstance(url, str) and url:
+            self.target_base_url = url.rstrip("/")
+        enabled = fields.get("safety_enabled")
+        if isinstance(enabled, bool):
+            self.safety_enabled = enabled
+
+    def _persist(self) -> None:
+        """Write the current control-plane slice to disk; no-op if disabled."""
+        if self._state_path is None:
+            return
+        save_persisted_state(
+            self._state_path,
+            {
+                "api_key": self.api_key,
+                "connected_account": self.connected_account,
+                "target_base_url": self.target_base_url,
+                "safety_enabled": self.safety_enabled,
+            },
+        )
 
     @property
     def cost_usd(self) -> Decimal:
@@ -357,6 +409,7 @@ def create_proxy_app(
         budget=budget,
         budget_per_session=budget_per_session,
         event_store=event_store,
+        state_path=_state_persistence_path(),
     )
 
     # Enable debug logging if requested (see logutil; uvicorn/defaults drop DEBUG)
@@ -1039,6 +1092,7 @@ def create_proxy_app(
         if "enabled" in body:
             state.safety_enabled = bool(body["enabled"])
             log.info("Safety %s", "enabled" if state.safety_enabled else "disabled")
+            state._persist()
 
         # Hot-swap policy from inline dict (not file paths — prevents path traversal)
         if "policy" in body:
@@ -1238,6 +1292,7 @@ def create_proxy_app(
         if request.method == "DELETE":
             state.api_key = None
             state.connected_account = None
+            state._persist()
             return JSONResponse(_hint(None))
 
         body, json_err = await _read_json_body(request)
@@ -1302,6 +1357,10 @@ def create_proxy_app(
                 target_base_url=state.target_base_url,
                 config_path=config_path,
             )
+        # Persist after _refresh_connected_account / catalog sync so the
+        # written file reflects the post-refresh identity, not just the raw
+        # caller-supplied bits.
+        state._persist()
         return JSONResponse(_hint(state.api_key))
 
     # Policy tester — evaluate a single custom policy against arbitrary text,
