@@ -111,10 +111,12 @@ def save_persisted_state(path: Path, fields: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2) + "\n")
+        # Tighten the mode BEFORE the rename so there's no window where the
+        # destination file exists with the umask-default mode (typically 0o644)
+        # — the API key inside would otherwise be world-readable for the
+        # microseconds between rename and chmod on shared systems.
+        os.chmod(tmp, 0o600)
         tmp.replace(path)
-        # 0o600 — the API key is in here. Parent dir gates browse access too,
-        # but a tight file mode is cheap insurance against a stray world-read.
-        os.chmod(path, 0o600)
     except OSError as err:
         log.warning("state persistence: cannot write %s: %s", path, err)
 
