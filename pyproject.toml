@@ -29,18 +29,26 @@ dependencies = [
 [project.optional-dependencies]
 xai = ["openai>=1.65.0,<2.0.0"]
 ollama = ["ollama>=0.4.0,<1.0.0"]
-safety = ["programasweights>=0.4.2", "transformers>=4.40", "torch>=2.0"]
-safety_lite = ["programasweights>=0.4.2"]
+# Natural-language custom policies (programasweights → llama-cpp-python).
+# Heavyweight: large native build, platform-sensitive. Opt-in only.
+custom-policies = ["programasweights>=0.4.2"]
+# ML-based PII / content-safety detectors (transformers + torch).
+safety = ["transformers>=4.40", "torch>=2.0"]
+# Deprecated alias for custom-policies — kept so old installs don't break.
+safety_lite = ["aceteam-aep[custom-policies]"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
 observability = ["aiosqlite>=0.20"]
-proxy = ["aceteam-aep[dashboard,safety_lite,observability]"]
+# Proxy stays lightweight: regex/threshold detectors (secrets, agent_threat,
+# cost_anomaly) work without ML deps. For ML-based detection install [proxy,safety];
+# for natural-language custom policies install [proxy,custom-policies].
+proxy = ["aceteam-aep[dashboard,observability]"]
 events = ["redis[hiredis]>=5.0"]
 mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
 feedback = ["lancedb>=0.30"]
 top = ["rich>=13.0"]
 all = [
-    "aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events,observability]",
+    "aceteam-aep[xai,ollama,custom-policies,safety,dashboard,proxy,yaml,mcp,feedback,top,events,observability]",
 ]
 dev = [
     "aceteam-aep[all]",

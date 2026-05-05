@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "aceteam-aep"
-version = "0.10.1"
+version = "0.10.2"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -32,6 +32,9 @@ all = [
     { name = "torch" },
     { name = "transformers" },
     { name = "uvicorn" },
+]
+custom-policies = [
+    { name = "programasweights" },
 ]
 dashboard = [
     { name = "jinja2" },
@@ -77,12 +80,10 @@ ollama = [
 proxy = [
     { name = "aiosqlite" },
     { name = "jinja2" },
-    { name = "programasweights" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
 safety = [
-    { name = "programasweights" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -102,8 +103,9 @@ yaml = [
 [package.metadata]
 requires-dist = [
     { name = "aceteam-aep", extras = ["all"], marker = "extra == 'dev'" },
-    { name = "aceteam-aep", extras = ["dashboard", "safety-lite", "observability"], marker = "extra == 'proxy'" },
-    { name = "aceteam-aep", extras = ["xai", "ollama", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events", "observability"], marker = "extra == 'all'" },
+    { name = "aceteam-aep", extras = ["custom-policies"], marker = "extra == 'safety-lite'" },
+    { name = "aceteam-aep", extras = ["dashboard", "observability"], marker = "extra == 'proxy'" },
+    { name = "aceteam-aep", extras = ["xai", "ollama", "custom-policies", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events", "observability"], marker = "extra == 'all'" },
     { name = "aiosqlite", marker = "extra == 'observability'", specifier = ">=0.20" },
     { name = "anthropic", specifier = ">=0.45.0,<1.0.0" },
     { name = "anyio", specifier = ">=4.12" },
@@ -117,8 +119,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.65.0,<2.0.0" },
     { name = "openai", marker = "extra == 'xai'", specifier = ">=1.65.0,<2.0.0" },
     { name = "overrides", specifier = ">=7.7.0" },
-    { name = "programasweights", marker = "extra == 'safety'", specifier = ">=0.4.2" },
-    { name = "programasweights", marker = "extra == 'safety-lite'", specifier = ">=0.4.2" },
+    { name = "programasweights", marker = "extra == 'custom-policies'", specifier = ">=0.4.2" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -132,7 +133,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'safety'", specifier = ">=4.40" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.30" },
 ]
-provides-extras = ["xai", "ollama", "safety", "safety-lite", "dashboard", "observability", "proxy", "events", "mcp", "yaml", "feedback", "top", "all", "dev"]
+provides-extras = ["xai", "ollama", "custom-policies", "safety", "safety-lite", "dashboard", "observability", "proxy", "events", "mcp", "yaml", "feedback", "top", "all", "dev"]
 
 [[package]]
 name = "aiofile"
