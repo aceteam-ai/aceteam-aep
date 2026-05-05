@@ -33,7 +33,10 @@ ollama = ["ollama>=0.4.0,<1.0.0"]
 # Heavyweight: large native build, platform-sensitive. Opt-in only.
 custom-policies = ["programasweights>=0.4.2"]
 # ML-based PII / content-safety detectors (transformers + torch).
-safety = ["transformers>=4.40", "torch>=2.0"]
+# Includes custom-policies for backward compat — pre-split [safety] users
+# had programasweights bundled in, and we don't want them silently losing
+# custom-policy support after upgrade.
+safety = ["aceteam-aep[custom-policies]", "transformers>=4.40", "torch>=2.0"]
 # Deprecated alias for custom-policies — kept so old installs don't break.
 safety_lite = ["aceteam-aep[custom-policies]"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]

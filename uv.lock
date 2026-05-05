@@ -84,6 +84,7 @@ proxy = [
     { name = "uvicorn" },
 ]
 safety = [
+    { name = "programasweights" },
     { name = "torch" },
     { name = "transformers" },
 ]
@@ -103,6 +104,7 @@ yaml = [
 [package.metadata]
 requires-dist = [
     { name = "aceteam-aep", extras = ["all"], marker = "extra == 'dev'" },
+    { name = "aceteam-aep", extras = ["custom-policies"], marker = "extra == 'safety'" },
     { name = "aceteam-aep", extras = ["custom-policies"], marker = "extra == 'safety-lite'" },
     { name = "aceteam-aep", extras = ["dashboard", "observability"], marker = "extra == 'proxy'" },
     { name = "aceteam-aep", extras = ["xai", "ollama", "custom-policies", "safety", "dashboard", "proxy", "yaml", "mcp", "feedback", "top", "events", "observability"], marker = "extra == 'all'" },
