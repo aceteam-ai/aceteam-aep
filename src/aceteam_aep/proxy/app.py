@@ -43,6 +43,12 @@ from .logutil import configure_proxy_debug_logging
 from .openclaw_sync import get_configured_path as _openclaw_config_path
 from .openclaw_sync import refresh_openclaw_config
 from .redis_publisher import build_event, publish_event
+from .state_manager import (
+    ProxyStateManager,
+    get_max_entities,
+    is_multi_tenant_enabled,
+    per_entity_state_path,
+)
 from .state_persistence import (
     get_configured_path as _state_persistence_path,
 )
@@ -402,6 +408,8 @@ def create_proxy_app(
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
+    base_state_path = _state_persistence_path()
+
     state = ProxyState(
         target_base_url=target_base_url,
         detectors=detectors,
@@ -409,7 +417,31 @@ def create_proxy_app(
         budget=budget,
         budget_per_session=budget_per_session,
         event_store=event_store,
-        state_path=_state_persistence_path(),
+        state_path=base_state_path,
+    )
+
+    # Multi-tenant manager — opt-in via AEP_MULTI_TENANT=1. When the env flag
+    # is unset (the default), the manager always returns the singleton ``state``
+    # so existing single-tenant deployments and tests are unaffected. When
+    # enabled, requests with ``X-AEP-Entity`` (or distinct ``Authorization``
+    # bearer keys) get isolated ``ProxyState`` buckets, capped at
+    # ``AEP_MAX_ENTITIES`` (default 64) with LRU eviction.
+    def _entity_state_factory(entity_id: str) -> ProxyState:
+        return ProxyState(
+            target_base_url=target_base_url,
+            detectors=detectors,
+            policy=policy,
+            budget=budget,
+            budget_per_session=budget_per_session,
+            event_store=event_store,
+            state_path=per_entity_state_path(base_state_path, entity_id),
+        )
+
+    state_manager = ProxyStateManager(
+        multi_tenant=is_multi_tenant_enabled(),
+        max_entities=get_max_entities(),
+        default=state,
+        factory=_entity_state_factory,
     )
 
     # Enable debug logging if requested (see logutil; uvicorn/defaults drop DEBUG)
@@ -444,6 +476,11 @@ def create_proxy_app(
 
     async def proxy_handler(request: Request) -> Response:
         """Forward request to target API with safety interception."""
+        # Resolve per-request state at the very top so any deferred work
+        # (streaming on-complete callbacks, asyncio.ensure_future events)
+        # captures *this* request's state via closure rather than re-resolving
+        # later when the contextual entity may differ.
+        state = state_manager.get_for_request(request)
         call_id = uuid.uuid4().hex[:8]
         path = request.url.path
         body_bytes = await request.body()
@@ -1059,6 +1096,7 @@ def create_proxy_app(
 
         GET returns current state. POST accepts {"enabled": bool} and/or {"policy": dict}.
         """
+        state = state_manager.get_for_request(request)
         if request.method == "GET":
             return Response(
                 json.dumps(
@@ -1137,6 +1175,7 @@ def create_proxy_app(
 
     # Custom policies CRUD (collection + item routes below).
     async def custom_policies_collection_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
         if request.method == "GET":
             policies = [p.model_dump() for p in state.custom_policy_store.all()]
             return Response(
@@ -1161,6 +1200,7 @@ def create_proxy_app(
         )
 
     async def custom_policy_item_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
         raw_id = request.path_params["policy_id"]
         policy_id = _normalize_policy_id(raw_id)
         if policy_id is None:
@@ -1206,7 +1246,7 @@ def create_proxy_app(
     # then renders "Connected as <email>" instead of the cryptic prefix.
     # No-op for BYOK keys (sk-/sk-ant-) since OpenAI/Anthropic don't expose
     # a comparable identity endpoint and we have no way to look up identity.
-    async def _refresh_connected_account() -> None:
+    async def _refresh_connected_account(state: ProxyState = state) -> None:
         key = state.api_key
         if not key or not key.startswith("act_"):
             return
@@ -1247,6 +1287,8 @@ def create_proxy_app(
     # The raw key is only held in process memory (never written to disk) and is used
     # as the fallback Authorization header when a /v1/* request arrives without one.
     async def api_key_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
+
         def _classify(key: str) -> str:
             # Surface where the key came from so the dashboard can show
             # "Connected to AceTeam" instead of the cryptic "KEY: act_bb3..."
@@ -1344,7 +1386,7 @@ def create_proxy_app(
         # If the caller didn't pre-supply identity, try fetching it from the
         # upstream gateway. Skip for non-act_* keys inside _refresh_*.
         if state.connected_account is None:
-            await _refresh_connected_account()
+            await _refresh_connected_account(state)
         # Auto-sync the OpenClaw catalog from the AceTeam gateway whenever a
         # fresh act_* key lands. Opt-in via env: when AEP_OPENCLAW_CONFIG_PATH
         # is set (i.e., compose mounts the openclaw config dir into the proxy),
@@ -1368,6 +1410,7 @@ def create_proxy_app(
     # agent. Mirrors programasweights.com/browser but against policies that
     # already live in this process.
     async def policy_test_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
         body, json_err = await _read_json_body(request)
         if json_err is not None:
             return json_err
@@ -1426,6 +1469,7 @@ def create_proxy_app(
     async def routing_handler(request: Request) -> Response:
         if request.method != "GET":
             return JSONResponse({"error": "GET only"}, status_code=405)
+        state = state_manager.get_for_request(request)
 
         # Layer 1: this proxy. Always present. List the active detectors and
         # the count of enabled custom policies so the user can see what
