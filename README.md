@@ -16,10 +16,16 @@ The gateway runs a single process on one port with three interfaces:
 ## Installation
 
 ```bash
-pip install aceteam-aep[all]               # Everything (recommended)
-pip install aceteam-aep[safety,proxy]      # Safety detectors + proxy
-pip install aceteam-aep                    # Core only (cost tracking + regex safety)
+pip install aceteam-aep[all]                       # Everything (recommended)
+pip install aceteam-aep[proxy,safety]              # Proxy + ML detectors (PII, content safety)
+pip install aceteam-aep[proxy,custom-policies]     # Proxy + natural-language policies (PAW)
+pip install aceteam-aep[proxy]                     # Lightweight proxy: regex + threshold detectors only
+pip install aceteam-aep                            # Core: cost tracking + regex safety
 ```
+
+The `safety` extra pulls in `transformers` + `torch` (ML detectors). The `custom-policies`
+extra pulls in `programasweights` (natural-language policy compilation, large native build).
+Both are opt-in so a default `[proxy]` install stays slim.
 
 ## Quick Start
 
