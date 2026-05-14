@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
+from .errors import ProviderResponseError
 
 
 def _format_contents(
@@ -231,6 +232,17 @@ class GoogleClient:
         if tools:
             config.tools = _tools_to_google(tools)
 
+        # Tracks whether the stream produced anything callers can use.
+        # A legitimate Gemini stream emits at least one of: a text part,
+        # a function-call part, a candidate-level finish_reason, or a
+        # usage_metadata frame. If all four stay false the upstream
+        # silently rejected the request (revoked API key, quota miss,
+        # certain safety blocks that bypass the normal block_reason path)
+        # and we raise so callers don't render a blank reply.
+        produced_text = False
+        produced_tool_call = False
+        produced_finish = False
+
         async for chunk in await self._client.aio.models.generate_content_stream(
             model=self._model,
             contents=contents,
@@ -254,6 +266,13 @@ class GoogleClient:
                             )
                         )
 
+            if text:
+                produced_text = True
+            if tool_call_list:
+                produced_tool_call = True
+            if chunk.candidates and chunk.candidates[0].finish_reason:
+                produced_finish = True
+
             usage_chunk: Usage | None = None
             if chunk.usage_metadata:
                 usage_chunk = Usage(
@@ -261,11 +280,21 @@ class GoogleClient:
                     completion_tokens=chunk.usage_metadata.candidates_token_count or 0,
                     total_tokens=chunk.usage_metadata.total_token_count or 0,
                 )
+                # On Gemini, usage_metadata is the most reliable terminal
+                # signal — present on every legitimate completion, absent
+                # on silent rejections.
+                produced_finish = True
 
             yield StreamChunk(
                 delta_text=text,
                 delta_tool_calls=tool_call_list if tool_call_list else None,
                 usage=usage_chunk,
+            )
+
+        if not (produced_text or produced_tool_call or produced_finish):
+            raise ProviderResponseError(
+                f"Google stream closed with no content for model {self._model!r}",
+                provider="google",
             )
 
 

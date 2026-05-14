@@ -10,6 +10,8 @@ XAI_BASE_URL = "https://api.x.ai/v1"
 class XAIClient(OpenAIClient):
     """xAI/Grok client using OpenAI-compatible API."""
 
+    _provider_slug = "xai"
+
     def __init__(
         self,
         api_key: str,
