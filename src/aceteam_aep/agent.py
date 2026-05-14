@@ -251,24 +251,38 @@ async def run_agent_loop_stream(
             accumulated_tool_calls = []
             call_usage = Usage()
 
-            async for stream_chunk in client.chat_stream(
-                working,
-                tools=tool_schemas,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            ):
-                if stream_chunk.delta_text:
-                    accumulated_text += stream_chunk.delta_text
-                    yield chunk_event(stream_chunk.delta_text)
+            # If chat_stream raises (e.g. ProviderResponseError on a
+            # silent upstream rejection), the budget reservation and the
+            # llm_span would otherwise be leaked — they're settled/ended
+            # only on the success path below. Close them out here before
+            # the exception propagates, so callers with budget/span
+            # trackers don't accumulate stuck reservations.
+            try:
+                async for stream_chunk in client.chat_stream(
+                    working,
+                    tools=tool_schemas,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    if stream_chunk.delta_text:
+                        accumulated_text += stream_chunk.delta_text
+                        yield chunk_event(stream_chunk.delta_text)
 
-                if stream_chunk.delta_tool_calls:
-                    accumulated_tool_calls.extend(stream_chunk.delta_tool_calls)
+                    if stream_chunk.delta_tool_calls:
+                        accumulated_tool_calls.extend(stream_chunk.delta_tool_calls)
 
-                if stream_chunk.usage:
-                    call_usage = stream_chunk.usage
+                    if stream_chunk.usage:
+                        call_usage = stream_chunk.usage
 
-                if stream_chunk.finish_reason:
-                    last_finish_reason = stream_chunk.finish_reason
+                    if stream_chunk.finish_reason:
+                        last_finish_reason = stream_chunk.finish_reason
+            except Exception:
+                if llm_span and span_tracker:
+                    span_tracker.end_span(llm_span.span_id, status="ERROR")
+                    yield span_end_event(llm_span.span_id, status="ERROR")
+                if budget and reservation:
+                    budget.settle(reservation, Decimal("0"))
+                raise
 
             total_usage = total_usage + call_usage
 
@@ -321,9 +335,7 @@ async def run_agent_loop_stream(
                         ),
                     )
                 )
-                yield chunk_event(
-                    "[Retrying -- previous response exceeded token limit]\n\n"
-                )
+                yield chunk_event("[Retrying -- previous response exceeded token limit]\n\n")
                 last_finish_reason = None
                 continue
 

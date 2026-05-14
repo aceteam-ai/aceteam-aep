@@ -66,6 +66,34 @@ def _finish_event(stop_reason: str = "end_turn") -> MagicMock:
     return event
 
 
+def _tool_use_start_event(tool_id: str, tool_name: str) -> MagicMock:
+    event = MagicMock()
+    event.type = "content_block_start"
+    event.content_block = MagicMock()
+    event.content_block.type = "tool_use"
+    event.content_block.id = tool_id
+    event.content_block.name = tool_name
+    return event
+
+
+def _tool_input_delta_event(partial_json: str) -> MagicMock:
+    event = MagicMock()
+    event.type = "content_block_delta"
+    event.delta = MagicMock()
+    # Mirror the real Anthropic SDK: a tool-input delta has
+    # ``partial_json`` and no ``text``. The provider distinguishes
+    # via hasattr on each, so explicitly delete the wrong-shape attrs.
+    event.delta.partial_json = partial_json
+    del event.delta.text
+    return event
+
+
+def _content_block_stop_event() -> MagicMock:
+    event = MagicMock()
+    event.type = "content_block_stop"
+    return event
+
+
 @pytest.mark.asyncio
 async def test_chat_stream_raises_on_empty_stream() -> None:
     """Stream with zero events == upstream silent rejection."""
@@ -104,6 +132,36 @@ async def test_chat_stream_does_not_raise_when_only_finish_reason() -> None:
         chunks.append(chunk)
 
     assert any(c.finish_reason == "end_turn" for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_does_not_raise_on_tool_only_response() -> None:
+    """A tool-only response (no text) is a normal path when tools are
+    enabled. The empty-stream guard must not misfire here.
+    """
+    client = _make_client(
+        events=[
+            _tool_use_start_event(tool_id="toolu_1", tool_name="search"),
+            _tool_input_delta_event(partial_json='{"query": '),
+            _tool_input_delta_event(partial_json='"hello"}'),
+            _content_block_stop_event(),
+            _finish_event(stop_reason="tool_use"),
+        ]
+    )
+
+    chunks: list[Any] = []
+    async for chunk in client.chat_stream(messages=[]):
+        chunks.append(chunk)
+
+    # No text deltas — but the tool call must be emitted as a StreamChunk
+    # with parsed arguments, and the run must not raise.
+    tool_chunks = [c for c in chunks if c.delta_tool_calls]
+    assert len(tool_chunks) == 1
+    tool_call = tool_chunks[0].delta_tool_calls[0]
+    assert tool_call.id == "toolu_1"
+    assert tool_call.name == "search"
+    assert tool_call.arguments == {"query": "hello"}
+    assert any(c.finish_reason == "tool_use" for c in chunks)
 
 
 def test_provider_response_error_carries_user_message() -> None:
