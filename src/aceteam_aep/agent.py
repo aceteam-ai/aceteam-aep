@@ -276,10 +276,18 @@ async def run_agent_loop_stream(
 
                     if stream_chunk.finish_reason:
                         last_finish_reason = stream_chunk.finish_reason
-            except Exception:
+            except BaseException as exc:
                 if llm_span and span_tracker:
                     span_tracker.end_span(llm_span.span_id, status="ERROR")
-                    yield span_end_event(llm_span.span_id, status="ERROR")
+                    # Yielding during a forced close (GeneratorExit) or
+                    # cancellation (CancelledError) either drops the
+                    # event or raises RuntimeError. Span state is still
+                    # ended in the tracker above; observers can rebuild
+                    # the trace from that. Only emit the end event on
+                    # normal exceptions where the consumer is still
+                    # reading.
+                    if isinstance(exc, Exception):
+                        yield span_end_event(llm_span.span_id, status="ERROR")
                 if budget and reservation:
                     budget.settle(reservation, Decimal("0"))
                 raise
