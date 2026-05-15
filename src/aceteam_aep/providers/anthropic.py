@@ -9,7 +9,7 @@ from typing import Any
 import anthropic
 
 from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
-from .errors import ProviderResponseError
+from .errors import StreamFailedError
 
 
 def _extract_json_schema(response_format: dict[str, Any]) -> dict[str, Any] | None:
@@ -233,13 +233,14 @@ class AnthropicClient:
             current_tool: dict[str, Any] | None = None
             input_tokens = 0
             output_tokens = 0
-            # Tracks whether the stream produced anything callers can use.
-            # If a stream closes with all of these still false, the upstream
-            # request was silently rejected (e.g., a revoked BYOK key) and
-            # we raise instead of letting callers render a blank reply.
-            produced_text = False
-            produced_tool_call = False
-            produced_finish = False
+            # If the stream closes with this still false, Anthropic
+            # accepted the request and returned an SSE stream that
+            # closed without emitting a single text, tool-call, or
+            # stop-reason event. Observed in production from revoked
+            # BYOK keys where the upstream rejection arrives as a soft
+            # close. Raise so callers see a real error rather than a
+            # blank assistant reply.
+            produced_anything = False
 
             async for event in stream:
                 if event.type == "message_start":
@@ -259,7 +260,7 @@ class AnthropicClient:
 
                 elif event.type == "content_block_delta":
                     if hasattr(event.delta, "text"):
-                        produced_text = True
+                        produced_anything = True
                         yield StreamChunk(delta_text=event.delta.text)
                     elif hasattr(event.delta, "partial_json") and current_tool:
                         current_tool["arguments"] += event.delta.partial_json
@@ -271,7 +272,7 @@ class AnthropicClient:
                             args = json.loads(raw_args) if raw_args.strip() else {}
                         except (json.JSONDecodeError, TypeError):
                             args = {"raw": current_tool["arguments"]}
-                        produced_tool_call = True
+                        produced_anything = True
                         yield StreamChunk(
                             delta_tool_calls=[
                                 ToolCallRequest(
@@ -288,7 +289,7 @@ class AnthropicClient:
                         output_tokens = event.usage.output_tokens
                     finish = getattr(event.delta, "stop_reason", None)
                     if finish:
-                        produced_finish = True
+                        produced_anything = True
                         # Flush any in-progress tool call that was truncated
                         # (e.g. by max_tokens). Anthropic skips content_block_stop
                         # when the response is cut short, so the accumulated
@@ -318,14 +319,8 @@ class AnthropicClient:
                             ),
                         )
 
-        if not (produced_text or produced_tool_call or produced_finish):
-            # Anthropic accepted the request, opened the SSE stream, then
-            # closed it without emitting a single text, tool-call, or
-            # stop-reason event. Observed in production from a revoked
-            # BYOK key where the upstream rejection arrives as a soft
-            # close rather than an exception. Raise so callers can
-            # surface a real error instead of an empty assistant reply.
-            raise ProviderResponseError(
+        if not produced_anything:
+            raise StreamFailedError(
                 f"Anthropic stream closed with no content for model {self._model!r}",
                 provider="anthropic",
             )

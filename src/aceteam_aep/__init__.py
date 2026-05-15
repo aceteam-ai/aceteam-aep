@@ -26,7 +26,7 @@ from .models import MODEL_REGISTRY, ModelInfo, detect_provider, get_model_info
 from .pricing import DefaultPricingProvider, PricingProvider
 from .prompt import wrap_context, wrap_examples, wrap_file, wrap_xml
 from .protocols import HasCitations, UsageCollector
-from .providers import ProviderResponseError
+from .providers import StreamFailedError
 from .spans import Span, SpanTracker
 from .stream import StreamEvent
 from .structured import structured_output
@@ -87,7 +87,7 @@ __all__ = [
     "DefaultPricingProvider",
     "PricingProvider",
     # Providers
-    "ProviderResponseError",
+    "StreamFailedError",
     # Embeddings
     "CohereEmbeddings",
     "EmbeddingClient",

@@ -10,6 +10,8 @@ OLLAMA_BASE_URL = "http://localhost:11434/v1"
 class OllamaClient(OpenAIClient):
     """Ollama client using OpenAI-compatible API."""
 
+    _provider_slug = "ollama"
+
     def __init__(
         self,
         model: str = "llama3",

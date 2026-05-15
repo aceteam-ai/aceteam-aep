@@ -9,6 +9,7 @@ import openai
 
 from ..models import get_model_info
 from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
+from .errors import StreamFailedError
 
 
 def _format_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
@@ -120,6 +121,12 @@ class OpenAIClient:
     OpenAI-compatible endpoint.
     """
 
+    # Provider slug stamped on ``StreamFailedError`` when the upstream
+    # silently closes a stream. Subclasses targeting a specific vendor
+    # (xAI, Ollama) override this so downstream callers can distinguish
+    # the actual provider from the wire protocol shared with OpenAI.
+    _provider_slug: str = "openai"
+
     def __init__(
         self,
         api_key: str,
@@ -213,9 +220,18 @@ class OpenAIClient:
 
         partial_tool_calls: dict[int, dict[str, Any]] = {}
 
+        # If the stream closes with this still false, the upstream
+        # accepted the request and returned a 200 SSE stream that closed
+        # without a single content delta, tool-call delta, or finish
+        # reason. Observed on revoked BYOK keys / silent aggregator
+        # rejections. Raise so callers don't render a blank reply.
+        # Usage-only chunks (no choices) don't flip this — some
+        # OpenAI-compatible aggregators emit a usage frame even when
+        # the underlying choices stream was silently rejected.
+        produced_anything = False
+
         async for chunk in stream:
             if not chunk.choices:
-                # Final chunk with usage
                 if chunk.usage:
                     yield StreamChunk(usage=_extract_usage(chunk.usage))
                 continue
@@ -224,6 +240,8 @@ class OpenAIClient:
 
             # Handle text
             text = delta.content or ""
+            if text:
+                produced_anything = True
 
             # Handle tool calls
             completed_tool_calls: list[ToolCallRequest] | None = None
@@ -247,6 +265,8 @@ class OpenAIClient:
 
             # Check for finished tool calls
             finish = chunk.choices[0].finish_reason
+            if finish:
+                produced_anything = True
             if finish == "tool_calls" and partial_tool_calls:
                 completed_tool_calls = []
                 for tc_data in partial_tool_calls.values():
@@ -264,11 +284,21 @@ class OpenAIClient:
                     )
                 partial_tool_calls.clear()
 
+            if completed_tool_calls:
+                produced_anything = True
+
             yield StreamChunk(
                 delta_text=text,
                 delta_tool_calls=completed_tool_calls,
                 finish_reason=finish,
                 model=chunk.model,
+            )
+
+        if not produced_anything:
+            raise StreamFailedError(
+                f"{self._provider_slug.capitalize()} stream closed with no "
+                f"content for model {self._model!r}",
+                provider=self._provider_slug,
             )
 
 

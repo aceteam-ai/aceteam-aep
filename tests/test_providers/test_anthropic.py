@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aceteam_aep.providers import ProviderResponseError
+from aceteam_aep.providers import StreamFailedError
 from aceteam_aep.providers.anthropic import AnthropicClient
 
 
@@ -99,13 +99,12 @@ async def test_chat_stream_raises_on_empty_stream() -> None:
     """Stream with zero events == upstream silent rejection."""
     client = _make_client(events=[])
 
-    with pytest.raises(ProviderResponseError) as exc_info:
+    with pytest.raises(StreamFailedError) as exc_info:
         async for _ in client.chat_stream(messages=[]):
             pass
 
     assert exc_info.value.provider == "anthropic"
     assert "claude-test" in str(exc_info.value)
-    assert exc_info.value.user_message  # always present
 
 
 @pytest.mark.asyncio
@@ -164,15 +163,7 @@ async def test_chat_stream_does_not_raise_on_tool_only_response() -> None:
     assert any(c.finish_reason == "tool_use" for c in chunks)
 
 
-def test_provider_response_error_carries_user_message() -> None:
-    err = ProviderResponseError("upstream rejected", provider="anthropic")
+def test_stream_failed_error_carries_provider_slug() -> None:
+    err = StreamFailedError("upstream rejected", provider="anthropic")
     assert err.provider == "anthropic"
-    assert err.user_message
-    assert "API key" in err.user_message
-
-    err2 = ProviderResponseError(
-        "x",
-        provider="anthropic",
-        user_message="custom user-facing copy",
-    )
-    assert err2.user_message == "custom user-facing copy"
+    assert "upstream rejected" in str(err)
