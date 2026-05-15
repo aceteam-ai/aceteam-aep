@@ -1,5 +1,5 @@
 """Tests for the xAI/Grok provider — wire protocol is OpenAI-compatible,
-so we only verify that ``ProviderResponseError`` carries the xAI slug
+so we only verify that ``StreamFailedError`` carries the xAI slug
 when the inherited empty-stream guard fires.
 """
 
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aceteam_aep.providers import ProviderResponseError
+from aceteam_aep.providers import StreamFailedError
 from aceteam_aep.providers.xai import XAIClient
 
 
@@ -50,10 +50,9 @@ def test_xai_client_uses_xai_provider_slug() -> None:
 async def test_chat_stream_raises_with_xai_slug_on_empty_stream() -> None:
     client = _make_stream_client(chunks=[])
 
-    with pytest.raises(ProviderResponseError) as exc_info:
+    with pytest.raises(StreamFailedError) as exc_info:
         async for _ in client.chat_stream(messages=[]):
             pass
 
     assert exc_info.value.provider == "xai"
     assert "grok-test" in str(exc_info.value)
-    assert exc_info.value.user_message

@@ -251,8 +251,8 @@ async def run_agent_loop_stream(
             accumulated_tool_calls = []
             call_usage = Usage()
 
-            # If chat_stream raises (e.g. ProviderResponseError on a
-            # silent upstream rejection), the budget reservation and the
+            # If chat_stream raises (e.g. StreamFailedError on a silent
+            # upstream rejection), the budget reservation and the
             # llm_span would otherwise be leaked — they're settled/ended
             # only on the success path below. Close them out here before
             # the exception propagates, so callers with budget/span

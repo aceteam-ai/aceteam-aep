@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from aceteam_aep.models import MODEL_REGISTRY, get_model_info
-from aceteam_aep.providers import ProviderResponseError
+from aceteam_aep.providers import StreamFailedError
 from aceteam_aep.providers.openai import OpenAIClient, _format_messages, _uses_max_completion_tokens
 from aceteam_aep.types import ChatMessage, ContentBlock, ToolCallRequest
 
@@ -194,13 +194,12 @@ async def test_chat_stream_raises_on_empty_stream() -> None:
     """Zero choice-bearing chunks == upstream silent rejection."""
     client = _make_stream_client(chunks=[])
 
-    with pytest.raises(ProviderResponseError) as exc_info:
+    with pytest.raises(StreamFailedError) as exc_info:
         async for _ in client.chat_stream(messages=[]):
             pass
 
     assert exc_info.value.provider == "openai"
     assert "gpt-test" in str(exc_info.value)
-    assert exc_info.value.user_message
 
 
 @pytest.mark.asyncio
@@ -277,7 +276,7 @@ async def test_chat_stream_usage_only_chunk_does_not_satisfy_guard() -> None:
     """
     client = _make_stream_client(chunks=[_make_usage_only_chunk()])
 
-    with pytest.raises(ProviderResponseError) as exc_info:
+    with pytest.raises(StreamFailedError) as exc_info:
         async for _ in client.chat_stream(messages=[]):
             pass
 

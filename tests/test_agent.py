@@ -9,7 +9,7 @@ import pytest
 from aceteam_aep.agent import run_agent_loop, run_agent_loop_stream
 from aceteam_aep.budget import BudgetEnforcer
 from aceteam_aep.costs import CostTracker
-from aceteam_aep.providers.errors import ProviderResponseError
+from aceteam_aep.providers.errors import StreamFailedError
 from aceteam_aep.spans import SpanTracker
 from aceteam_aep.tools import tool
 from aceteam_aep.types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
@@ -355,13 +355,13 @@ async def test_stream_releases_reservation_on_provider_error():
     chat_stream raises, otherwise the reserved amount stays held and
     eventually starves the budget for subsequent calls.
 
-    Regression guard for the ProviderResponseError cleanup path
+    Regression guard for the StreamFailedError cleanup path
     introduced in aceteam-aep#115.
     """
-    client = _RaisingStreamClient(ProviderResponseError("upstream rejected", provider="anthropic"))
+    client = _RaisingStreamClient(StreamFailedError("upstream rejected", provider="anthropic"))
     budget = BudgetEnforcer(total="1.00")
 
-    with pytest.raises(ProviderResponseError):
+    with pytest.raises(StreamFailedError):
         async for _ in run_agent_loop_stream(
             client,
             [ChatMessage(role="user", content="Hi")],
@@ -380,10 +380,10 @@ async def test_stream_closes_llm_span_on_provider_error():
     chat_stream raises, so observability doesn't see it as still
     in-flight after the overall run aborts.
     """
-    client = _RaisingStreamClient(ProviderResponseError("upstream rejected", provider="anthropic"))
+    client = _RaisingStreamClient(StreamFailedError("upstream rejected", provider="anthropic"))
     tracker = SpanTracker(trace_id="test-trace")
 
-    with pytest.raises(ProviderResponseError):
+    with pytest.raises(StreamFailedError):
         async for _ in run_agent_loop_stream(
             client,
             [ChatMessage(role="user", content="Hi")],

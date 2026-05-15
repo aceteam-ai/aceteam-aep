@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aceteam_aep.providers import ProviderResponseError
+from aceteam_aep.providers import StreamFailedError
 from aceteam_aep.providers.google import GoogleClient, _strip_additional_properties
 
 
@@ -149,13 +149,12 @@ async def test_chat_stream_raises_on_empty_stream() -> None:
     """Zero chunks == silent rejection."""
     client = _make_stream_client(chunks=[])
 
-    with pytest.raises(ProviderResponseError) as exc_info:
+    with pytest.raises(StreamFailedError) as exc_info:
         async for _ in client.chat_stream(messages=[]):
             pass
 
     assert exc_info.value.provider == "google"
     assert "gemini-test" in str(exc_info.value)
-    assert exc_info.value.user_message
 
 
 @pytest.mark.asyncio
@@ -209,7 +208,6 @@ async def test_chat_stream_does_not_raise_on_tool_only_response() -> None:
     assert call.arguments == {"query": "hi"}
 
 
-def test_provider_response_error_carries_google_slug() -> None:
-    err = ProviderResponseError("upstream rejected", provider="google")
+def test_stream_failed_error_carries_google_slug() -> None:
+    err = StreamFailedError("upstream rejected", provider="google")
     assert err.provider == "google"
-    assert err.user_message
