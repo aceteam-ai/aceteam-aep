@@ -250,13 +250,17 @@ async def run_agent_loop_stream(
             accumulated_text = ""
             accumulated_tool_calls = []
             call_usage = Usage()
+            cost_node = None
+            ok = False
 
-            # If chat_stream raises (e.g. StreamFailedError on a silent
-            # upstream rejection), the budget reservation and the
-            # llm_span would otherwise be leaked — they're settled/ended
-            # only on the success path below. Close them out here before
-            # the exception propagates, so callers with budget/span
-            # trackers don't accumulate stuck reservations.
+            # `finally` runs on any exit — exception, cancellation, or
+            # forced close — so the llm_span ends and the reservation
+            # settles even when chat_stream raises (e.g.
+            # StreamFailedError on a silent upstream rejection). On
+            # success we additionally yield the cost + span_end events
+            # below; on failure observers can reconstruct the span
+            # status from the tracker (we can't safely yield during
+            # cancellation or forced close).
             try:
                 async for stream_chunk in client.chat_stream(
                     working,
@@ -276,43 +280,27 @@ async def run_agent_loop_stream(
 
                     if stream_chunk.finish_reason:
                         last_finish_reason = stream_chunk.finish_reason
-            except BaseException as exc:
+
+                total_usage = total_usage + call_usage
+
+                if cost_tracker and llm_span:
+                    cost_node = cost_tracker.record_llm_cost(
+                        span_id=llm_span.span_id,
+                        model=client.model_name,
+                        usage=call_usage,
+                    )
+                    yield cost_event(cost_node)
+
+                ok = True
+            finally:
                 if llm_span and span_tracker:
-                    span_tracker.end_span(llm_span.span_id, status="ERROR")
-                    # Yielding during a forced close (GeneratorExit) or
-                    # cancellation (CancelledError) either drops the
-                    # event or raises RuntimeError. Span state is still
-                    # ended in the tracker above; observers can rebuild
-                    # the trace from that. Only emit the end event on
-                    # normal exceptions where the consumer is still
-                    # reading.
-                    if isinstance(exc, Exception):
-                        yield span_end_event(llm_span.span_id, status="ERROR")
+                    span_tracker.end_span(llm_span.span_id, status="OK" if ok else "ERROR")
                 if budget and reservation:
-                    budget.settle(reservation, Decimal("0"))
-                raise
-
-            total_usage = total_usage + call_usage
-
-            # Record cost
-            cost_node = None
-            if cost_tracker and llm_span:
-                cost_node = cost_tracker.record_llm_cost(
-                    span_id=llm_span.span_id,
-                    model=client.model_name,
-                    usage=call_usage,
-                )
-                yield cost_event(cost_node)
+                    actual_cost = cost_node.total_cost() if ok and cost_node else Decimal("0")
+                    budget.settle(reservation, actual_cost)
 
             if llm_span and span_tracker:
-                span_tracker.end_span(llm_span.span_id)
                 yield span_end_event(llm_span.span_id)
-
-            # Settle budget
-            if budget and reservation and cost_node:
-                budget.settle(reservation, cost_node.total_cost())
-            elif budget and reservation:
-                budget.settle(reservation, Decimal("0"))
 
             # Build assistant message
             assistant_msg = ChatMessage(
