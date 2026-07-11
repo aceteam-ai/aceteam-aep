@@ -20,6 +20,7 @@ def create_client(
     temperature: float = 0.7,
     max_tokens: int = 4096,
     supports_temperature: bool = True,
+    uses_max_completion_tokens: bool | None = None,
     **kwargs: Any,
 ) -> ChatClient:
     """Create a ChatClient for the given model.
@@ -42,6 +43,13 @@ def create_client(
             without an aceteam-aep release. Defaults to True (unchanged
             behavior). Currently honored by the Anthropic and OpenAI-family
             clients.
+        uses_max_completion_tokens: When not None, overrides the OpenAI-family
+            client's ``max_completion_tokens`` vs. ``max_tokens`` heuristic.
+            Defaults to None, in which case the registry/prefix-driven
+            ``_uses_max_completion_tokens(model)`` check in
+            ``providers/openai.py`` decides (unchanged behavior). Only
+            honored by the OpenAI-family client (OpenAI, xAI, Ollama, and
+            other OpenAI-compatible endpoints go through ``OpenAIClient``).
 
     Returns:
         A ChatClient instance for the detected/specified provider.
@@ -95,6 +103,7 @@ def create_client(
         temperature=temperature,
         max_tokens=max_tokens,
         supports_temperature=supports_temperature,
+        uses_max_completion_tokens=uses_max_completion_tokens,
     )
 
 
