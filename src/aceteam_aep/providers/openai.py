@@ -134,11 +134,17 @@ class OpenAIClient:
         base_url: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        supports_temperature: bool = True,
     ) -> None:
         self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        # Explicit caller-supplied override. When False, ``temperature`` is
+        # never sent regardless of the registry guard below. Defaults to True
+        # so the registry-driven ``_supports_temperature(model)`` check remains
+        # the sole gate for existing callers (backward compatible).
+        self._supports_temperature = supports_temperature
 
     @property
     def model_name(self) -> str:
@@ -162,7 +168,7 @@ class OpenAIClient:
             token_param: max_tokens if max_tokens is not None else self._max_tokens,
         }
 
-        if _supports_temperature(self._model):
+        if self._supports_temperature and _supports_temperature(self._model):
             kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if tools:
@@ -207,7 +213,7 @@ class OpenAIClient:
             "stream_options": {"include_usage": True},
         }
 
-        if _supports_temperature(self._model):
+        if self._supports_temperature and _supports_temperature(self._model):
             kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if tools:

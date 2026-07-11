@@ -124,11 +124,18 @@ class AnthropicClient:
         model: str,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        supports_temperature: bool = True,
     ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        # When False, the ``temperature`` key is never sent to the API.
+        # Newer Anthropic models (e.g. claude-opus-4-8, claude-sonnet-5)
+        # reject the request outright if ``temperature`` is present. The
+        # caller drives this from the model catalog rather than a hardcoded
+        # registry so new no-temperature models don't require an AEP release.
+        self._supports_temperature = supports_temperature
 
     @property
     def model_name(self) -> str:
@@ -148,9 +155,11 @@ class AnthropicClient:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": formatted,
-            "temperature": temperature if temperature is not None else self._temperature,
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
         }
+
+        if self._supports_temperature:
+            kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if system_prompt:
             kwargs["system"] = system_prompt
@@ -219,9 +228,11 @@ class AnthropicClient:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": formatted,
-            "temperature": temperature if temperature is not None else self._temperature,
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
         }
+
+        if self._supports_temperature:
+            kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if system_prompt:
             kwargs["system"] = system_prompt

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from aceteam_aep import create_client
 from aceteam_aep.providers import StreamFailedError
 from aceteam_aep.providers.anthropic import AnthropicClient
 
@@ -167,3 +168,86 @@ def test_stream_failed_error_carries_provider_slug() -> None:
     err = StreamFailedError("upstream rejected", provider="anthropic")
     assert err.provider == "anthropic"
     assert "upstream rejected" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# supports_temperature — newer Anthropic models (claude-opus-4-8,
+# claude-sonnet-5) 400 if ``temperature`` is sent at all. The caller drives
+# omission via ``create_client(..., supports_temperature=False)``, which must
+# keep the key out of the kwargs passed to the underlying SDK entirely.
+# ---------------------------------------------------------------------------
+
+
+def _make_nonstream_response() -> MagicMock:
+    """A minimal ``messages.create`` return value that ``chat()`` can parse.
+
+    ``content`` must be a real (empty) list so the block-iteration loop
+    doesn't blow up, and usage/model/stop_reason must be real scalars.
+    """
+    response = MagicMock()
+    response.content = []
+    response.usage = MagicMock()
+    response.usage.input_tokens = 3
+    response.usage.output_tokens = 5
+    response.model = "claude-opus-4-8"
+    response.stop_reason = "end_turn"
+    return response
+
+
+def _make_factory_client(*, supports_temperature: bool) -> AnthropicClient:
+    """Build the client through the public factory, then swap in a mock SDK."""
+    client = create_client(
+        model="claude-opus-4-8",
+        api_key="test",
+        provider="anthropic",
+        supports_temperature=supports_temperature,
+    )
+    assert isinstance(client, AnthropicClient)
+    client._client = MagicMock()
+    return client
+
+
+@pytest.mark.asyncio
+async def test_chat_omits_temperature_when_unsupported() -> None:
+    client = _make_factory_client(supports_temperature=False)
+    create_mock = AsyncMock(return_value=_make_nonstream_response())
+    client._client.messages.create = create_mock
+
+    await client.chat(messages=[])
+
+    assert "temperature" not in create_mock.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_chat_includes_temperature_by_default() -> None:
+    client = _make_factory_client(supports_temperature=True)
+    create_mock = AsyncMock(return_value=_make_nonstream_response())
+    client._client.messages.create = create_mock
+
+    await client.chat(messages=[])
+
+    assert "temperature" in create_mock.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_omits_temperature_when_unsupported() -> None:
+    client = _make_factory_client(supports_temperature=False)
+    stream_mock = MagicMock(return_value=_FakeAsyncStream([_finish_event()]))
+    client._client.messages.stream = stream_mock
+
+    async for _ in client.chat_stream(messages=[]):
+        pass
+
+    assert "temperature" not in stream_mock.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_includes_temperature_by_default() -> None:
+    client = _make_factory_client(supports_temperature=True)
+    stream_mock = MagicMock(return_value=_FakeAsyncStream([_finish_event()]))
+    client._client.messages.stream = stream_mock
+
+    async for _ in client.chat_stream(messages=[]):
+        pass
+
+    assert "temperature" in stream_mock.call_args.kwargs

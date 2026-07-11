@@ -19,6 +19,7 @@ def create_client(
     base_url: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 4096,
+    supports_temperature: bool = True,
     **kwargs: Any,
 ) -> ChatClient:
     """Create a ChatClient for the given model.
@@ -33,6 +34,14 @@ def create_client(
         base_url: Custom API base URL.
         temperature: Default temperature.
         max_tokens: Default max output tokens.
+        supports_temperature: When False, the ``temperature`` parameter is
+            never sent to the provider. Callers should drive this from their
+            model catalog (e.g. ``model_pricing.no_temperature``) so that new
+            no-temperature models — claude-opus-4-8, claude-sonnet-5 and
+            successors that 400 when ``temperature`` is present — are handled
+            without an aceteam-aep release. Defaults to True (unchanged
+            behavior). Currently honored by the Anthropic and OpenAI-family
+            clients.
 
     Returns:
         A ChatClient instance for the detected/specified provider.
@@ -45,6 +54,7 @@ def create_client(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            supports_temperature=supports_temperature,
         )
 
     if detected == "google":
@@ -84,6 +94,7 @@ def create_client(
         base_url=url,
         temperature=temperature,
         max_tokens=max_tokens,
+        supports_temperature=supports_temperature,
     )
 
 
