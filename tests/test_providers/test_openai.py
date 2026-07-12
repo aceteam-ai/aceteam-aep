@@ -10,7 +10,12 @@ import pytest
 
 from aceteam_aep.models import MODEL_REGISTRY, get_model_info
 from aceteam_aep.providers import StreamFailedError
-from aceteam_aep.providers.openai import OpenAIClient, _format_messages, _uses_max_completion_tokens
+from aceteam_aep.providers.openai import (
+    OpenAIClient,
+    _format_messages,
+    _supports_temperature,
+    _uses_max_completion_tokens,
+)
 from aceteam_aep.types import ChatMessage, ContentBlock, ToolCallRequest
 
 
@@ -95,6 +100,50 @@ def test_uses_max_completion_tokens():
         assert not _uses_max_completion_tokens(model), f"{model} should use max_tokens"
 
 
+def test_uses_max_completion_tokens_dotted_gpt5_variants():
+    """Dotted point-release gpt-5.x names (not yet in the registry) must
+    still hit the max_completion_tokens fallback via prefix matching.
+
+    Regression test for aceteam-ai/aceteam#5566: OpenAI's dotted names
+    (gpt-5.6-terra, gpt-5.4, ...) previously fell through the dash-only
+    prefix check and 400'd with "max_tokens is not supported".
+    """
+    dotted_mct_models = (
+        "gpt-5.6-terra",
+        "gpt-5.6-sol",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.1",
+        "gpt-5",
+        "o3-mini",
+    )
+    for model in dotted_mct_models:
+        assert _uses_max_completion_tokens(model), f"{model} should use max_completion_tokens"
+
+    for model in ("gpt-4o", "gpt-4.5-preview"):
+        assert not _uses_max_completion_tokens(model), f"{model} should use max_tokens"
+
+
+def test_supports_temperature_dotted_gpt5_variants():
+    """The parallel fallback for temperature support must not drift from
+    _uses_max_completion_tokens - both consult the same _matches_family
+    helper so a dotted gpt-5.x model (not yet in the registry) is treated
+    as no-temperature too."""
+    for model in ("gpt-5.6-terra", "gpt-5.4"):
+        assert not _supports_temperature(model), f"{model} should not support temperature"
+
+    assert _supports_temperature("gpt-4o")
+
+    # Exact "gpt-5" is a registry hit, not a fallback case: the registry
+    # entry for gpt-5 doesn't set supports_temperature=False, so this
+    # fallback fix does not change (and must not be asserted about) its
+    # temperature behavior. See MODEL_REGISTRY in models.py.
+    assert _supports_temperature("gpt-5")
+
+
 def test_registry_drives_max_completion_tokens():
     """_uses_max_completion_tokens must agree with the registry for all known models."""
     for model, info in MODEL_REGISTRY.items():
@@ -141,6 +190,79 @@ def _make_stream_client(chunks: list[Any]) -> OpenAIClient:
 
     client._client.chat.completions.create = _fake_create
     return client
+
+
+def _make_completion_response(model: str = "gpt-test") -> MagicMock:
+    """Stand-in for the OpenAI SDK's non-streaming ChatCompletion object."""
+    response = MagicMock()
+    response.model = model
+    response.usage = None
+    choice = MagicMock()
+    choice.message = MagicMock()
+    choice.message.content = "ok"
+    choice.message.tool_calls = None
+    choice.finish_reason = "stop"
+    response.choices = [choice]
+    return response
+
+
+def _make_capturing_client(
+    model: str = "gpt-test", **client_kwargs: Any
+) -> tuple[OpenAIClient, dict[str, Any]]:
+    """Return an OpenAIClient plus a dict that captures the kwargs passed to
+    the underlying SDK ``create`` call (for both chat() and chat_stream())."""
+    client = OpenAIClient(api_key="test", model=model, **client_kwargs)
+    client._client = MagicMock()
+    captured: dict[str, Any] = {}
+
+    async def _fake_create(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        if kwargs.get("stream"):
+            return _AsyncChunkIterator([_make_choice_chunk(content="hi", finish_reason="stop")])
+        return _make_completion_response(model=model)
+
+    client._client.chat.completions.create = _fake_create
+    return client, captured
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_max_completion_tokens_override_true() -> None:
+    """A model that would normally use max_tokens (gpt-4o) must send
+    max_completion_tokens when the override forces it True."""
+    client, captured = _make_capturing_client(model="gpt-4o", uses_max_completion_tokens=True)
+    await client.chat(messages=[])
+    assert "max_completion_tokens" in captured
+    assert "max_tokens" not in captured
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_max_completion_tokens_override_false() -> None:
+    """A model that would normally use max_completion_tokens (gpt-5) must
+    send max_tokens when the override forces it False."""
+    client, captured = _make_capturing_client(model="gpt-5", uses_max_completion_tokens=False)
+    await client.chat(messages=[])
+    assert "max_tokens" in captured
+    assert "max_completion_tokens" not in captured
+
+
+@pytest.mark.asyncio
+async def test_chat_uses_max_completion_tokens_default_follows_heuristic() -> None:
+    """With no override (the default), behavior is unchanged: the dotted
+    gpt-5.x fallback heuristic decides."""
+    client, captured = _make_capturing_client(model="gpt-5.6-terra")
+    await client.chat(messages=[])
+    assert "max_completion_tokens" in captured
+    assert "max_tokens" not in captured
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_uses_max_completion_tokens_override() -> None:
+    """The same override must also apply to chat_stream()'s token param."""
+    client, captured = _make_capturing_client(model="gpt-4o", uses_max_completion_tokens=True)
+    async for _ in client.chat_stream(messages=[]):
+        pass
+    assert "max_completion_tokens" in captured
+    assert "max_tokens" not in captured
 
 
 def _make_choice_chunk(

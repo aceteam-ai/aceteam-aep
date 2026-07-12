@@ -84,14 +84,35 @@ def _parse_tool_calls(
     return result
 
 
+def _matches_family(model: str, prefixes: tuple[str, ...]) -> bool:
+    """Match a model against family prefixes, tolerating both dash- and
+    dot-separated variants (``gpt-5-mini``, ``gpt-5.6-terra``) and the bare
+    family name (``gpt-5``).
+
+    OpenAI has started shipping dotted point-release names for the ``gpt-5``
+    family (``gpt-5.1``, ``gpt-5.4-mini``, ``gpt-5.6-terra``, ...). A naive
+    ``model.startswith(prefix + "-")`` check misses these because the
+    separator after the family name is a dot, not a dash. This helper is the
+    single place both fallback heuristics below consult so they can never
+    drift apart again.
+    """
+    return any(model == p or model.startswith((p + "-", p + ".")) for p in prefixes)
+
+
+# Family prefixes for OpenAI reasoning models that (a) require
+# max_completion_tokens instead of max_tokens and (b) don't accept a
+# temperature parameter. Used as a fallback for models not yet seeded into
+# the registry (see MODEL_REGISTRY in models.py).
+_REASONING_FAMILY_PREFIXES: tuple[str, ...] = ("o1", "o3", "gpt-5")
+
+
 def _uses_max_completion_tokens(model: str) -> bool:
     """Return True if the model requires max_completion_tokens instead of max_tokens."""
     info = get_model_info(model)
     if info is not None:
         return info.uses_max_completion_tokens
     # Fallback prefix check for models not yet in the registry.
-    prefixes = ("o1", "o3", "gpt-5")
-    return any(model == p or model.startswith(p + "-") for p in prefixes)
+    return _matches_family(model, _REASONING_FAMILY_PREFIXES)
 
 
 def _supports_temperature(model: str) -> bool:
@@ -99,9 +120,8 @@ def _supports_temperature(model: str) -> bool:
     info = get_model_info(model)
     if info is not None:
         return info.supports_temperature
-    # Fallback: o1, o3, gpt-5 don't support temperature
-    prefixes = ("o1", "o3", "gpt-5")
-    return not any(model == p or model.startswith(p + "-") for p in prefixes)
+    # Fallback: o1, o3, gpt-5 (and dotted point releases) don't support temperature.
+    return not _matches_family(model, _REASONING_FAMILY_PREFIXES)
 
 
 def _extract_usage(usage: Any) -> Usage:
@@ -135,6 +155,7 @@ class OpenAIClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         supports_temperature: bool = True,
+        uses_max_completion_tokens: bool | None = None,
     ) -> None:
         self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
@@ -145,6 +166,13 @@ class OpenAIClient:
         # so the registry-driven ``_supports_temperature(model)`` check remains
         # the sole gate for existing callers (backward compatible).
         self._supports_temperature = supports_temperature
+        # Explicit caller-supplied override for which token-limit param to
+        # send. When None (the default), the registry/prefix-driven
+        # ``_uses_max_completion_tokens(model)`` heuristic decides, so
+        # existing callers are unaffected. Mirrors ``supports_temperature``
+        # above: an inert lever for the aceteam side to flip per-model
+        # without waiting on an aceteam-aep release.
+        self._uses_max_completion_tokens = uses_max_completion_tokens
 
     @property
     def model_name(self) -> str:
@@ -159,9 +187,11 @@ class OpenAIClient:
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
-        token_param = (
-            "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
-        )
+        if self._uses_max_completion_tokens is not None:
+            uses_mct = self._uses_max_completion_tokens
+        else:
+            uses_mct = _uses_max_completion_tokens(self._model)
+        token_param = "max_completion_tokens" if uses_mct else "max_tokens"
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
@@ -202,9 +232,11 @@ class OpenAIClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        token_param = (
-            "max_completion_tokens" if _uses_max_completion_tokens(self._model) else "max_tokens"
-        )
+        if self._uses_max_completion_tokens is not None:
+            uses_mct = self._uses_max_completion_tokens
+        else:
+            uses_mct = _uses_max_completion_tokens(self._model)
+        token_param = "max_completion_tokens" if uses_mct else "max_tokens"
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": _format_messages(messages),
