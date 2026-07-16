@@ -6,6 +6,11 @@
 ### Changed
 ### Fixed
 
+## [0.11.4] - 2026-07-16
+
+### Fixed
+- **PII detector no longer emits every entity at `severity="high"`.** Both the NER model path and the regex path now use a per-entity-type severity map: SSN and CREDIT_CARD are "high", ID_NUM is "medium", EMAIL/PHONE/IP_ADDRESS/PERSON are "low", and unknown entity types default to "medium". Previously any email address in input (e.g. `noreply@anthropic.com` in Claude Code's system prompt) produced a "high" signal, and default enforcement policies block on "high", so the whole request was blocked. Signal emission is otherwise unchanged (spans, scores, detail strings, detector name, signal_type). Fixes aceteam-ai/aceteam#5944.
+
 ## [0.11.3] - 2026-07-11
 
 ### Fixed
