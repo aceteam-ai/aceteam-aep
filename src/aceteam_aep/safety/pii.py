@@ -21,6 +21,25 @@ _PII_ENTITIES = {
     "ID_NUM",
 }
 
+# Per-entity-type severity. Identifiers that enable direct financial/identity
+# fraud are "high"; contact info and names are "low". Unknown entity types
+# default to "medium" via _severity_for().
+_ENTITY_SEVERITY: dict[str, str] = {
+    "SSN": "high",
+    "CREDIT_CARD": "high",
+    "ID_NUM": "medium",
+    "EMAIL": "low",
+    "PHONE": "low",
+    "IP_ADDRESS": "low",
+    "PERSON": "low",
+}
+
+_DEFAULT_SEVERITY = "medium"
+
+
+def _severity_for(entity_type: str) -> str:
+    return _ENTITY_SEVERITY.get(entity_type, _DEFAULT_SEVERITY)
+
 
 def _normalize_entity_label(raw: str) -> str:
     """Strip B-/I- BIO prefixes from token-classification labels."""
@@ -168,7 +187,7 @@ class PiiDetector(SafetyDetector):
                 span_start=span_start,
                 span_end=span_end,
                 signal_type="pii",
-                severity="high",
+                severity=_severity_for(ent_type),
                 call_id=call_id,
                 detail=(
                     f"PII detected: {ent_type} "
@@ -194,7 +213,7 @@ class PiiDetector(SafetyDetector):
                     span_start=span_start,
                     span_end=span_end,
                     signal_type="pii",
-                    severity="high",
+                    severity=_severity_for(pii_type),
                     call_id=call_id,
                     detail=(f"PII pattern detected: {pii_type} [{span_start}:{span_end}] ({tag})"),
                     score=1.0,
