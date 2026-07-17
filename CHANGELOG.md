@@ -6,6 +6,11 @@
 ### Changed
 ### Fixed
 
+## [0.11.5] - 2026-07-16
+
+### Fixed
+- **Streaming proxy no longer swallows upstream errors into an empty 200 SSE stream.** `handle_streaming_request` opened the upstream connection inside the response generator, after `StreamingResponse` had already committed HTTP 200 headers, and never checked the upstream status. A non-2xx upstream (e.g. Anthropic 400 rejecting a beta-gated param) produced a 200 response with a zero-byte body; clients (Claude Code / Anthropic SDK) waited indefinitely on an SSE stream that never emitted, ending in Cloudflare 524s and silent retry loops. The upstream response is now opened and status-checked BEFORE the streaming response is constructed: a pre-stream non-2xx is passed through as-is (upstream status code + verbatim JSON error body, Anthropic/OpenAI error shape preserved, no SSE wrapping), and a mid-stream failure emits a final SSE `event: error` with an Anthropic-format `{"type": "error", "error": {"type": "api_error", ...}}` payload before closing so clients terminate instead of hanging. Upstream error status + first 500 bytes of the body are logged at warning level. Successful-stream metering/telemetry is unchanged; error paths no longer fire `on_complete` with zero tokens (which recorded a bogus "unknown model" call) — the pre-stream error path instead ends the span with `status="ERROR"`, mirroring the non-streaming error branch, and mid-stream interruptions are not metered as completions. Fixes aceteam-ai/aceteam#5988.
+
 ## [0.11.4] - 2026-07-16
 
 ### Fixed
