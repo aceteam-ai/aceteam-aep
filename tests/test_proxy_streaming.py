@@ -260,3 +260,44 @@ async def test_mid_stream_failure_emits_error_event(
 
     # Interrupted streams are not metered as successful completions
     assert completions == []
+
+
+def test_app_streaming_400_passes_through_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Full proxy route: stream=true + upstream 400 -> 400 JSON, not empty 200 SSE."""
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.proxy.app import create_proxy_app
+
+    error = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "context-management-2025-06-27 requires the beta header",
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            content=json.dumps(error).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    app = create_proxy_app(detectors=[])
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json() == error
+    assert resp.headers["content-type"].startswith("application/json")

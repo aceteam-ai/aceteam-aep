@@ -680,6 +680,8 @@ def create_proxy_app(
             _ensure_openai_stream_usage(body, path)
             body_bytes = json.dumps(body).encode()
 
+            from starlette.responses import StreamingResponse
+
             from .streaming import handle_streaming_request
 
             # Start span BEFORE the stream begins to measure actual latency
@@ -772,7 +774,7 @@ def create_proxy_app(
                             output_text=_s_output if decision.action == "flag" else None,
                         )))
 
-            return await handle_streaming_request(
+            stream_response = await handle_streaming_request(
                 target_url=target_url,
                 body_bytes=body_bytes,
                 headers=forward_headers,
@@ -783,6 +785,13 @@ def create_proxy_app(
                 on_complete=on_stream_complete,
                 debug=debug,
             )
+            # Upstream rejected the request before any bytes streamed: the
+            # error is passed through as a plain response and on_complete
+            # never fires, so close the span here (mirrors the non-streaming
+            # error branch below).
+            if not isinstance(stream_response, StreamingResponse):
+                state.span_tracker.end_span(stream_span.span_id, status="ERROR")
+            return stream_response
 
         # --- NON-STREAMING BRANCH ---
         # Start span BEFORE the upstream call to measure actual latency
