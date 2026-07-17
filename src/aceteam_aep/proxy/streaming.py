@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from ..enforcement import EnforcementPolicy, evaluate
 from ..safety.base import DetectorRegistry
@@ -79,8 +79,14 @@ async def handle_streaming_request(
     policy: EnforcementPolicy,
     on_complete: Any = None,
     debug: bool = False,
-) -> StreamingResponse:
+) -> Response:
     """Handle a streaming request through the proxy.
+
+    Opens the upstream connection and checks its status BEFORE committing to a
+    200 SSE response. A non-2xx upstream is passed through as-is (status code +
+    error body, JSON not SSE) so clients see the provider's real error instead
+    of hanging on an empty stream. A mid-stream failure emits a final SSE
+    ``event: error`` with an Anthropic-format payload before closing.
 
     Args:
         target_url: Full URL to forward to (e.g., https://api.openai.com/v1/chat/completions)
@@ -93,22 +99,50 @@ async def handle_streaming_request(
         on_complete: Callback(model, input_tokens, output_tokens, output_text, signals, decision)
         debug: Enable debug logging for the stream
     """
+    if debug:
+        log.debug("STREAM REQUEST %s: %s", call_id, target_url)
 
-    async def stream_generator() -> AsyncGenerator[str, None]:
-        accumulated_chunks: list[dict[str, Any]] = []
-
-        if debug:
-            log.debug("STREAM REQUEST %s: %s", call_id, target_url)
-
-        async with (
-            httpx.AsyncClient(timeout=120.0) as client,
-            client.stream(
+    client = httpx.AsyncClient(timeout=120.0)
+    try:
+        upstream = await client.send(
+            client.build_request(
                 "POST",
                 target_url,
                 content=body_bytes,
                 headers=headers,
-            ) as upstream,
-        ):
+            ),
+            stream=True,
+        )
+    except Exception:
+        await client.aclose()
+        raise
+
+    # Upstream rejected the request before any bytes were streamed: pass the
+    # provider's status + error body through verbatim (Anthropic/OpenAI error
+    # shape preserved) instead of returning an empty 200 SSE stream.
+    if upstream.status_code < 200 or upstream.status_code >= 300:
+        try:
+            error_body = await upstream.aread()
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+        log.warning(
+            "STREAM UPSTREAM ERROR %s: status=%d body=%s",
+            call_id,
+            upstream.status_code,
+            error_body[:500].decode("utf-8", errors="replace"),
+        )
+        return Response(
+            content=error_body,
+            status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type", "application/json"),
+            headers={"X-AEP-Call-ID": call_id},
+        )
+
+    async def stream_generator() -> AsyncGenerator[str, None]:
+        accumulated_chunks: list[dict[str, Any]] = []
+
+        try:
             # Pass through each line immediately
             async for line in upstream.aiter_lines():
                 # Buffer for post-stream safety
@@ -122,6 +156,24 @@ async def handle_streaming_request(
 
                 # Pass through to client immediately
                 yield f"{line}\n"
+        except Exception as exc:
+            # Bytes were already sent under a 200; the status can't change.
+            # Emit a final Anthropic-format SSE error event so clients
+            # terminate instead of waiting forever, then close the stream.
+            log.warning("STREAM INTERRUPTED %s: %s: %s", call_id, type(exc).__name__, exc)
+            error_event = {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": f"AEP proxy: upstream stream interrupted: {exc}",
+                },
+            }
+            yield "event: error\n"
+            yield f"data: {json.dumps(error_event)}\n\n"
+            return
+        finally:
+            await upstream.aclose()
+            await client.aclose()
 
         # Stream complete — run safety checks on accumulated output
         model, output_text, input_tokens, output_tokens = _accumulate_stream_chunks(
