@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Sequence
 
 from .base import SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
+
+# The transformers pipeline is an immutable, read-only artifact — ``check()`` only
+# runs inference. Cache it at module level, keyed by model name, so per-session
+# detector instances share one in-memory copy instead of each rebuilding the model.
+_PIPELINE_CACHE: dict[str, object] = {}
+_PIPELINE_LOCK = threading.Lock()
 
 
 class ContentSafetyDetector(SafetyDetector):
@@ -32,20 +39,26 @@ class ContentSafetyDetector(SafetyDetector):
 
     def _load(self) -> None:
         self._load_attempted = True
-        try:
-            from transformers import pipeline
+        with _PIPELINE_LOCK:
+            cached = _PIPELINE_CACHE.get(self._model_name)
+            if cached is not None:
+                self._pipeline = cached
+                return
+            try:
+                from transformers import pipeline
 
-            self._pipeline = pipeline(
-                "text-classification",
-                model=self._model_name,
-                device=-1,
-            )
-        except ImportError:
-            log.warning("transformers not installed, content safety detector disabled")
-            self._available = False
-        except Exception:
-            log.warning("Content safety model unavailable", exc_info=True)
-            self._available = False
+                self._pipeline = pipeline(
+                    "text-classification",
+                    model=self._model_name,
+                    device=-1,
+                )
+                _PIPELINE_CACHE[self._model_name] = self._pipeline
+            except ImportError:
+                log.warning("transformers not installed, content safety detector disabled")
+                self._available = False
+            except Exception:
+                log.warning("Content safety model unavailable", exc_info=True)
+                self._available = False
 
     async def check(
         self,

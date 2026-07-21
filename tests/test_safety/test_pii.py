@@ -49,6 +49,23 @@ async def test_detects_phone_number(detector: PiiDetector) -> None:
     assert any(s.signal_type == "pii" for s in signals)
 
 
+def test_pipeline_shared_across_instances() -> None:
+    """Two detectors for the same model share one cached pipeline (no rebuild)."""
+    from aceteam_aep.safety import pii
+
+    if "transformers" not in __import__("sys").modules:
+        pytest.importorskip("transformers")
+
+    d1 = PiiDetector()
+    d1._load()
+    if d1._fallback:
+        pytest.skip("model unavailable, cache not exercised")
+    d2 = PiiDetector()
+    d2._load()
+    assert d1._pipeline is d2._pipeline
+    assert pii._PIPELINE_CACHE[d1._model_name] is d1._pipeline
+
+
 async def test_regex_fallback_works() -> None:
     """Force regex fallback and verify it works."""
     det = PiiDetector(model_name="nonexistent/model-that-will-fail")

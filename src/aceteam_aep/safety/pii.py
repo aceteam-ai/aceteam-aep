@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from .base import SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
+
+# The transformers pipeline is an immutable, read-only artifact — ``check()`` only
+# runs inference. Cache it at module level, keyed by model name, so per-session
+# detector instances share one in-memory copy instead of each rebuilding the model.
+_PIPELINE_CACHE: dict[str, object] = {}
+_PIPELINE_LOCK = threading.Lock()
 
 _PII_ENTITIES = {
     "SSN",
@@ -104,25 +111,32 @@ class PiiDetector(SafetyDetector):
 
     def _load(self) -> None:
         self._load_attempted = True
-        try:
-            from transformers import pipeline
+        with _PIPELINE_LOCK:
+            cached = _PIPELINE_CACHE.get(self._model_name)
+            if cached is not None:
+                self._pipeline = cached
+                return
+            try:
+                from transformers import pipeline
 
-            self._pipeline = pipeline(
-                "token-classification",
-                model=self._model_name,
-                aggregation_strategy="simple",
-                device=-1,
-            )
-        except ImportError:
-            log.warning("transformers not installed, PII detector falling back to regex")
-            self._fallback = True
-        except Exception:
-            log.warning(
-                "Failed to load PII model %s, falling back to regex",
-                self._model_name,
-                exc_info=True,
-            )
-            self._fallback = True
+                self._pipeline = pipeline(
+                    "token-classification",
+                    model=self._model_name,
+                    aggregation_strategy="simple",
+                    device=-1,
+                )
+                _PIPELINE_CACHE[self._model_name] = self._pipeline
+                return
+            except ImportError:
+                log.warning("transformers not installed, PII detector falling back to regex")
+                self._fallback = True
+            except Exception:
+                log.warning(
+                    "Failed to load PII model %s, falling back to regex",
+                    self._model_name,
+                    exc_info=True,
+                )
+                self._fallback = True
 
     async def check(
         self,
