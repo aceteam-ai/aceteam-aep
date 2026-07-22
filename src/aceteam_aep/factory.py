@@ -21,6 +21,7 @@ def create_client(
     max_tokens: int = 4096,
     supports_temperature: bool = True,
     uses_max_completion_tokens: bool | None = None,
+    prompt_caching: bool | None = None,
     **kwargs: Any,
 ) -> ChatClient:
     """Create a ChatClient for the given model.
@@ -55,6 +56,12 @@ def create_client(
             ``XAIClient`` or ``OllamaClient`` — those subclasses'
             ``__init__`` don't accept it yet, same as ``supports_temperature``
             above, so setting it has no effect for xai/ollama models.
+        prompt_caching: Controls Anthropic prompt caching (``cache_control``
+            breakpoints on the static system-prompt + tool-definitions prefix).
+            When None (default), the ``AEP_PROMPT_CACHING`` env toggle decides
+            (ON unless set to a false value). Pass ``False`` to force it off.
+            Behavior-neutral (identical outputs, lower cost). Only honored by
+            the Anthropic client; ignored by other providers.
 
     Returns:
         A ChatClient instance for the detected/specified provider.
@@ -68,6 +75,7 @@ def create_client(
             temperature=temperature,
             max_tokens=max_tokens,
             supports_temperature=supports_temperature,
+            prompt_caching=prompt_caching,
         )
 
     if detected == "google":

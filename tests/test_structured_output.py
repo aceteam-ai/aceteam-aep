@@ -34,6 +34,18 @@ TEST_RESPONSE_FORMAT = {
 TEST_MESSAGES = [ChatMessage(role="user", content="Extract the data")]
 
 
+def _system_text(system) -> str:
+    """Extract the system text regardless of shape.
+
+    With Anthropic prompt caching enabled (the default), the ``system`` param
+    is a list of text blocks carrying a ``cache_control`` breakpoint; without
+    it, it's a plain string. Both forms hold identical text.
+    """
+    if isinstance(system, str):
+        return system
+    return "".join(block.get("text", "") for block in system)
+
+
 class TestOpenAIResponseFormat:
     """OpenAI provider passes response_format directly to the API."""
 
@@ -124,7 +136,7 @@ class TestAnthropicResponseFormat:
             call_kwargs = mock_client.messages.create.call_args
             # Schema should be in the system prompt
             assert "system" in call_kwargs.kwargs
-            system = call_kwargs.kwargs["system"]
+            system = _system_text(call_kwargs.kwargs["system"])
             assert "first_name" in system
             assert "school" in system
             assert "major" in system
@@ -154,7 +166,7 @@ class TestAnthropicResponseFormat:
             await client.chat(messages, response_format=TEST_RESPONSE_FORMAT)
 
             call_kwargs = mock_client.messages.create.call_args
-            system = call_kwargs.kwargs["system"]
+            system = _system_text(call_kwargs.kwargs["system"])
             # Should contain BOTH the original system prompt and the schema
             assert "data extractor" in system
             assert "first_name" in system
