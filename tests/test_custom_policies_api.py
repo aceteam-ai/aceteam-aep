@@ -27,7 +27,7 @@ class TestCustomPoliciesAPI:
 
         listed = client.get("/dashboard/api/custom-policies").json()
         names = {p["name"] for p in listed["policies"]}
-        assert names == {"English only", "US SSN pattern (input)"}
+        assert names == {"English only", "Social Security Number"}
         assert all(p["enabled"] is False for p in listed["policies"])
 
         create = client.post(
@@ -44,7 +44,7 @@ class TestCustomPoliciesAPI:
         assert body["severity"] == "high"
 
         listed = client.get("/dashboard/api/custom-policies").json()
-        assert len(listed["policies"]) == 4
+        assert len(listed["policies"]) == 3
         assert any(p["id"] == policy_id for p in listed["policies"])
 
         one = client.get(f"/dashboard/api/custom-policies/{policy_id}")

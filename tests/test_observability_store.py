@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,11 @@ from aceteam_aep.observability import FlaggedCall, ObservabilityEvent, SqliteEve
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> SqliteEventStore:
+async def store(tmp_path: Path) -> AsyncIterator[SqliteEventStore]:
     s = SqliteEventStore(str(tmp_path / "test.db"))
     await s.initialize()
-    return s
+    yield s
+    await s.close()
 
 
 def _make_event(**kwargs) -> ObservabilityEvent:

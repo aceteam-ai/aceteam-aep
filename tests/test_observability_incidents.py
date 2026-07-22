@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from collections.abc import AsyncIterator
 from io import BytesIO
 from pathlib import Path
 
@@ -14,10 +15,11 @@ from aceteam_aep.observability.incidents import build_incident_bundle
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> SqliteEventStore:
+async def store(tmp_path: Path) -> AsyncIterator[SqliteEventStore]:
     s = SqliteEventStore(str(tmp_path / "test.db"))
     await s.initialize()
-    return s
+    yield s
+    await s.close()
 
 
 async def test_build_incident_bundle(store: SqliteEventStore) -> None:

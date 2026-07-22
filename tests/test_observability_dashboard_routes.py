@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from aceteam_aep.observability.store import SqliteEventStore
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> SqliteEventStore:
+async def store(tmp_path: Path) -> AsyncIterator[SqliteEventStore]:
     s = SqliteEventStore(str(tmp_path / "test.db"))
     await s.initialize()
     await s.record_flagged_call(
@@ -25,7 +26,8 @@ async def store(tmp_path: Path) -> SqliteEventStore:
             output_text="response with PII",
         )
     )
-    return s
+    yield s
+    await s.close()
 
 
 @pytest.fixture

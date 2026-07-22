@@ -275,7 +275,7 @@ class TestProxyDashboard:
         client = TestClient(app)
         resp = client.get("/dashboard/")
         assert resp.status_code == 200
-        assert "AEP Dashboard" in resp.text
+        assert "Agent Safety Net Dashboard" in resp.text
 
     def test_dashboard_redirects_without_trailing_slash(self) -> None:
         app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
