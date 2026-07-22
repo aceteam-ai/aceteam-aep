@@ -15,10 +15,10 @@ def _parse_sse_json(resp):
     return None
 
 
-def _init_mcp_session(client):
+def _init_mcp_session(client, path="/mcp/mcp/"):
     """Initialize an MCP session and return (session_headers, init_data)."""
     resp = client.post(
-        "/mcp/mcp/",
+        path,
         json={
             "jsonrpc": "2.0",
             "id": 1,
@@ -39,7 +39,7 @@ def _init_mcp_session(client):
 
     # Send initialized notification
     client.post(
-        "/mcp/mcp/",
+        path,
         json={
             "jsonrpc": "2.0",
             "method": "notifications/initialized",
@@ -331,3 +331,52 @@ def test_mcp_set_policy_with_detectors():
         detectors = result.get("policy", {}).get("detectors", {})
         assert detectors.get("pii", {}).get("enabled") is False
         assert detectors.get("agent_threat", {}).get("action") == "block"
+
+
+def test_mcp_get_cost_summary_with_span_costs():
+    """get_cost_summary must handle spans that carry a CostNode.
+
+    span.cost is a CostNode, not a number. The per-model breakdown used to call
+    float() on it directly, which raised TypeError — but only once a span
+    actually had a cost attached, so an empty session hid the bug.
+    """
+    import json as _json
+    from decimal import Decimal
+
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.costs import CostNode
+    from aceteam_aep.mcp_gateway import create_mcp_app
+    from aceteam_aep.proxy.app import ProxyState
+
+    state = ProxyState()
+    span = state.span_tracker.start_span(executor_type="llm", executor_id="gpt-4o")
+    span.cost = CostNode(
+        id="n1",
+        parent_id=None,
+        entity="gpt-4o",
+        category="llm",
+        compute_cost=Decimal("0.10"),
+        value_added_fee=Decimal("0.02"),
+        platform_fee=Decimal("0.01"),
+    )
+
+    with TestClient(create_mcp_app(state)) as client:
+        headers, _ = _init_mcp_session(client, path="/mcp/")
+        resp = client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "get_cost_summary", "arguments": {}},
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = _parse_sse_json(resp)
+        content = data.get("result", {}).get("content", [{}])[0].get("text", "")
+        result = _json.loads(content)
+
+        # Fees count toward the reported cost, not compute_cost alone.
+        assert result["cost_by_model"]["gpt-4o"] == 0.13
