@@ -159,9 +159,7 @@ class TestCustomPoliciesAPI:
             "connected_account": None,
         }
 
-        saved = client.post(
-            "/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}
-        ).json()
+        saved = client.post("/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}).json()
         assert saved["set"] is True
         assert saved["hint"].startswith("sk-abc1")
         assert saved["provider"] == "openai"
@@ -217,14 +215,13 @@ class TestCustomPoliciesAPI:
             "organization_id": "org_123",
             "organization_name": "Acme Corp",
         }
-        assert client.get("/dashboard/api/api-key").json()["connected_account"][
-            "email"
-        ] == "jason@example.com"
+        assert (
+            client.get("/dashboard/api/api-key").json()["connected_account"]["email"]
+            == "jason@example.com"
+        )
 
         # Replacing the key without supplying identity clears the stale account.
-        replaced = client.post(
-            "/dashboard/api/api-key", json={"api_key": "sk-fresh-byok"}
-        ).json()
+        replaced = client.post("/dashboard/api/api-key", json={"api_key": "sk-fresh-byok"}).json()
         assert replaced["connected_account"] is None
 
     def test_api_key_act_prefix_introspects_via_whoami(self) -> None:
@@ -341,9 +338,7 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         assert client.post("/dashboard/api/api-key", json={"api_key": ""}).status_code == 400
-        assert (
-            client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
-        )
+        assert client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
         assert client.post("/dashboard/api/api-key", json={}).status_code == 400
 
     def test_routing_topology_endpoint(self) -> None:
@@ -441,9 +436,7 @@ class TestCustomPoliciesAPI:
         # Missing fields
         assert client.post("/dashboard/api/policy-test", json={}).status_code == 400
         # Bogus id
-        bad = client.post(
-            "/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"}
-        )
+        bad = client.post("/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"})
         assert bad.status_code == 400
         # Valid uuid but unknown policy
         from uuid import uuid4

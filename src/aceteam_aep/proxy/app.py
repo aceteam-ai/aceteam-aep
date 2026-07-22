@@ -492,11 +492,17 @@ def create_proxy_app(
         except json.JSONDecodeError:
             _body_peek = {}
         if state.event_store:
-            asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                session_id=state.session_id, type="call_start", call_id=call_id,
-                model=_body_peek.get("model") if isinstance(_body_peek, dict) else None,
-                provider=_detect_provider(state.target_base_url),
-            )))
+            asyncio.ensure_future(
+                state.event_store.record(
+                    ObservabilityEvent(
+                        session_id=state.session_id,
+                        type="call_start",
+                        call_id=call_id,
+                        model=_body_peek.get("model") if isinstance(_body_peek, dict) else None,
+                        provider=_detect_provider(state.target_base_url),
+                    )
+                )
+            )
 
         # Debug logging for all requests (both input and output)
         if debug:
@@ -598,32 +604,69 @@ def create_proxy_app(
                     # --- OBSERVABILITY: input-blocked early return ---
                     if state.event_store:
                         for sig in input_signals:
-                            asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                                session_id=state.session_id, type="safety_signal", call_id=call_id,
-                                detector=sig.detector, severity=sig.severity, reason=sig.detail,
-                            )))
-                        asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                            session_id=state.session_id, type="enforcement", call_id=call_id,
-                            action="block", reason=input_decision.reason,
-                            metadata={"policy": {"block_on": sorted(state.policy.block_on), "flag_on": sorted(state.policy.flag_on)}},
-                        )))
+                            asyncio.ensure_future(
+                                state.event_store.record(
+                                    ObservabilityEvent(
+                                        session_id=state.session_id,
+                                        type="safety_signal",
+                                        call_id=call_id,
+                                        detector=sig.detector,
+                                        severity=sig.severity,
+                                        reason=sig.detail,
+                                    )
+                                )
+                            )
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="enforcement",
+                                    call_id=call_id,
+                                    action="block",
+                                    reason=input_decision.reason,
+                                    metadata={
+                                        "policy": {
+                                            "block_on": sorted(state.policy.block_on),
+                                            "flag_on": sorted(state.policy.flag_on),
+                                        }
+                                    },
+                                )
+                            )
+                        )
                         _block_detector = input_signals[0].detector if input_signals else None
                         _block_severity = input_signals[0].severity if input_signals else None
-                        asyncio.ensure_future(state.event_store.record_flagged_call(FlaggedCall(
-                            call_id=call_id, session_id=state.session_id,
-                            action="block",
-                            detector=_block_detector, severity=_block_severity,
-                            reason=input_decision.reason,
-                            model=body.get("model") if isinstance(body, dict) else None,
-                            input_messages=body.get("messages", []) if isinstance(body, dict) else [],
-                            output_text=None,
-                        )))
-                        asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                            session_id=state.session_id, type="call_end", call_id=call_id,
-                            model=body.get("model") if isinstance(body, dict) else None,
-                            provider=_detect_provider(state.target_base_url),
-                            tokens_in=0, tokens_out=0, cost_usd=0.0, latency_ms=None,
-                        )))
+                        asyncio.ensure_future(
+                            state.event_store.record_flagged_call(
+                                FlaggedCall(
+                                    call_id=call_id,
+                                    session_id=state.session_id,
+                                    action="block",
+                                    detector=_block_detector,
+                                    severity=_block_severity,
+                                    reason=input_decision.reason,
+                                    model=body.get("model") if isinstance(body, dict) else None,
+                                    input_messages=body.get("messages", [])
+                                    if isinstance(body, dict)
+                                    else [],
+                                    output_text=None,
+                                )
+                            )
+                        )
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="call_end",
+                                    call_id=call_id,
+                                    model=body.get("model") if isinstance(body, dict) else None,
+                                    provider=_detect_provider(state.target_base_url),
+                                    tokens_in=0,
+                                    tokens_out=0,
+                                    cost_usd=0.0,
+                                    latency_ms=None,
+                                )
+                            )
+                        )
                     return JSONResponse(
                         status_code=400,
                         content={
@@ -639,10 +682,18 @@ def create_proxy_app(
             # Emit safety_signal events for non-blocked input signals
             if state.event_store and len(input_signals) > 0:
                 for sig in input_signals:
-                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                        session_id=state.session_id, type="safety_signal", call_id=call_id,
-                        detector=sig.detector, severity=sig.severity, reason=sig.detail,
-                    )))
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="safety_signal",
+                                call_id=call_id,
+                                detector=sig.detector,
+                                severity=sig.severity,
+                                reason=sig.detail,
+                            )
+                        )
+                    )
         else:
             input_signals = ()
 
@@ -743,36 +794,73 @@ def create_proxy_app(
                 # --- OBSERVABILITY: streaming call_end + enforcement + flagged_call ---
                 if state.event_store:
                     for sig in signals:
-                        asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                            session_id=state.session_id, type="safety_signal", call_id=call_id,
-                            detector=sig.detector, severity=sig.severity, reason=sig.detail,
-                        )))
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="safety_signal",
+                                    call_id=call_id,
+                                    detector=sig.detector,
+                                    severity=sig.severity,
+                                    reason=sig.detail,
+                                )
+                            )
+                        )
                     _stream_action = decision.action if decision else "pass"
                     _stream_reason = decision.reason if decision else None
-                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                        session_id=state.session_id, type="enforcement", call_id=call_id,
-                        action=_stream_action, reason=_stream_reason,
-                        metadata={"policy": {"block_on": sorted(state.policy.block_on), "flag_on": sorted(state.policy.flag_on)}},
-                    )))
-                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                        session_id=state.session_id, type="call_end", call_id=call_id,
-                        model=model, provider=_detect_provider(state.target_base_url),
-                        tokens_in=inp, tokens_out=out,
-                        cost_usd=float(cost_node.compute_cost), latency_ms=stream_span.duration_ms,
-                    )))
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="enforcement",
+                                call_id=call_id,
+                                action=_stream_action,
+                                reason=_stream_reason,
+                                metadata={
+                                    "policy": {
+                                        "block_on": sorted(state.policy.block_on),
+                                        "flag_on": sorted(state.policy.flag_on),
+                                    }
+                                },
+                            )
+                        )
+                    )
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="call_end",
+                                call_id=call_id,
+                                model=model,
+                                provider=_detect_provider(state.target_base_url),
+                                tokens_in=inp,
+                                tokens_out=out,
+                                cost_usd=float(cost_node.compute_cost),
+                                latency_ms=stream_span.duration_ms,
+                            )
+                        )
+                    )
                     if decision and decision.action in ("flag", "block"):
                         _s_detector = signals[0].detector if signals else None
                         _s_severity = signals[0].severity if signals else None
                         _s_output = kwargs.get("output_text")
-                        asyncio.ensure_future(state.event_store.record_flagged_call(FlaggedCall(
-                            call_id=call_id, session_id=state.session_id,
-                            action=decision.action,
-                            detector=_s_detector, severity=_s_severity,
-                            reason=decision.reason,
-                            model=model,
-                            input_messages=body.get("messages", []) if isinstance(body, dict) else [],
-                            output_text=_s_output if decision.action == "flag" else None,
-                        )))
+                        asyncio.ensure_future(
+                            state.event_store.record_flagged_call(
+                                FlaggedCall(
+                                    call_id=call_id,
+                                    session_id=state.session_id,
+                                    action=decision.action,
+                                    detector=_s_detector,
+                                    severity=_s_severity,
+                                    reason=decision.reason,
+                                    model=model,
+                                    input_messages=body.get("messages", [])
+                                    if isinstance(body, dict)
+                                    else [],
+                                    output_text=_s_output if decision.action == "flag" else None,
+                                )
+                            )
+                        )
 
             stream_response = await handle_streaming_request(
                 target_url=target_url,
@@ -860,10 +948,18 @@ def create_proxy_app(
             # Emit safety_signal events for output signals
             if state.event_store:
                 for sig in output_signals:
-                    asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                        session_id=state.session_id, type="safety_signal", call_id=call_id,
-                        detector=sig.detector, severity=sig.severity, reason=sig.detail,
-                    )))
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="safety_signal",
+                                call_id=call_id,
+                                detector=sig.detector,
+                                severity=sig.severity,
+                                reason=sig.detail,
+                            )
+                        )
+                    )
 
             all_signals = (*input_signals, *output_signals)
             state.signals.extend(all_signals)
@@ -873,28 +969,58 @@ def create_proxy_app(
 
             # --- OBSERVABILITY: enforcement + call_end + flagged_call ---
             if state.event_store:
-                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                    session_id=state.session_id, type="enforcement", call_id=call_id,
-                    action=decision.action, reason=decision.reason,
-                    metadata={"policy": {"block_on": sorted(state.policy.block_on), "flag_on": sorted(state.policy.flag_on)}},
-                )))
-                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                    session_id=state.session_id, type="call_end", call_id=call_id,
-                    model=model, provider=_detect_provider(state.target_base_url),
-                    tokens_in=input_tokens, tokens_out=output_tokens,
-                    cost_usd=float(cost_node.compute_cost), latency_ms=span.duration_ms,
-                )))
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="enforcement",
+                            call_id=call_id,
+                            action=decision.action,
+                            reason=decision.reason,
+                            metadata={
+                                "policy": {
+                                    "block_on": sorted(state.policy.block_on),
+                                    "flag_on": sorted(state.policy.flag_on),
+                                }
+                            },
+                        )
+                    )
+                )
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="call_end",
+                            call_id=call_id,
+                            model=model,
+                            provider=_detect_provider(state.target_base_url),
+                            tokens_in=input_tokens,
+                            tokens_out=output_tokens,
+                            cost_usd=float(cost_node.compute_cost),
+                            latency_ms=span.duration_ms,
+                        )
+                    )
+                )
                 if decision.action in ("flag", "block"):
                     _obs_detector = all_signals[0].detector if all_signals else None
                     _obs_severity = all_signals[0].severity if all_signals else None
-                    asyncio.ensure_future(state.event_store.record_flagged_call(FlaggedCall(
-                        call_id=call_id, session_id=state.session_id,
-                        action=decision.action,
-                        detector=_obs_detector, severity=_obs_severity,
-                        reason=decision.reason,
-                        model=model, input_messages=body.get("messages", []) if isinstance(body, dict) else [],
-                        output_text=output_text if decision.action == "flag" else None,
-                    )))
+                    asyncio.ensure_future(
+                        state.event_store.record_flagged_call(
+                            FlaggedCall(
+                                call_id=call_id,
+                                session_id=state.session_id,
+                                action=decision.action,
+                                detector=_obs_detector,
+                                severity=_obs_severity,
+                                reason=decision.reason,
+                                model=model,
+                                input_messages=body.get("messages", [])
+                                if isinstance(body, dict)
+                                else [],
+                                output_text=output_text if decision.action == "flag" else None,
+                            )
+                        )
+                    )
 
             if decision.action == "block":
                 log.warning("BLOCKED response %s: %s", call_id, decision.reason)
@@ -914,16 +1040,32 @@ def create_proxy_app(
             state.decisions.append(decision)
             # --- OBSERVABILITY: enforcement + call_end (safety disabled) ---
             if state.event_store:
-                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                    session_id=state.session_id, type="enforcement", call_id=call_id,
-                    action="pass", reason=None,
-                )))
-                asyncio.ensure_future(state.event_store.record(ObservabilityEvent(
-                    session_id=state.session_id, type="call_end", call_id=call_id,
-                    model=model, provider=_detect_provider(state.target_base_url),
-                    tokens_in=input_tokens, tokens_out=output_tokens,
-                    cost_usd=float(cost_node.compute_cost), latency_ms=span.duration_ms,
-                )))
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="enforcement",
+                            call_id=call_id,
+                            action="pass",
+                            reason=None,
+                        )
+                    )
+                )
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="call_end",
+                            call_id=call_id,
+                            model=model,
+                            provider=_detect_provider(state.target_base_url),
+                            tokens_in=input_tokens,
+                            tokens_out=output_tokens,
+                            cost_usd=float(cost_node.compute_cost),
+                            latency_ms=span.duration_ms,
+                        )
+                    )
+                )
 
         # --- PUBLISH EVENT TO REDIS ---
         _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
@@ -1265,13 +1407,9 @@ def create_proxy_app(
         whoami_url = f"{parsed.scheme}://{parsed.netloc}/api/whoami"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    whoami_url, headers={"Authorization": f"Bearer {key}"}
-                )
+                resp = await client.get(whoami_url, headers={"Authorization": f"Bearer {key}"})
             if resp.status_code != 200:
-                log.warning(
-                    "whoami refresh: %s returned %d", whoami_url, resp.status_code
-                )
+                log.warning("whoami refresh: %s returned %d", whoami_url, resp.status_code)
                 return
             data = resp.json()
             email = data.get("email")
@@ -1353,9 +1491,7 @@ def create_proxy_app(
             return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
         key = body.get("api_key")
         if not isinstance(key, str) or not key.strip():
-            return JSONResponse(
-                {"error": "api_key must be a non-empty string"}, status_code=400
-            )
+            return JSONResponse({"error": "api_key must be a non-empty string"}, status_code=400)
         state.api_key = key.strip()
         # Reset identity so a stale account doesn't shadow the new key.
         # The dashboard re-supplies identity for keys minted via the connect
@@ -1484,9 +1620,7 @@ def create_proxy_app(
         # the count of enabled custom policies so the user can see what
         # actually fires before traffic leaves the machine.
         detector_names = [d.name for d in state.registry._detectors]  # noqa: SLF001
-        enabled_custom = sum(
-            1 for p in state.custom_policy_store.all() if p.enabled
-        )
+        enabled_custom = sum(1 for p in state.custom_policy_store.all() if p.enabled)
         # End-to-end LLM latency (proxy → upstream → response → proxy) — the
         # only hop pair we can measure from inside the proxy. We surface it
         # under the local-proxy card since that's where the timer lives, but
@@ -1587,9 +1721,7 @@ def create_proxy_app(
     routes.extend(
         [
             Route("/dashboard/api/feedback", feedback_handler, methods=["POST"]),
-            Route(
-                "/dashboard/api/feedback/summary", feedback_summary_handler, methods=["GET"]
-            ),
+            Route("/dashboard/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
             Route("/dashboard/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
             Route(
                 "/dashboard/api/custom-policies/{policy_id}",
@@ -1677,9 +1809,7 @@ def create_proxy_app(
             return Response(
                 content=bundle,
                 media_type="application/zip",
-                headers={
-                    "Content-Disposition": f"attachment; filename=incident_{call_id}.zip"
-                },
+                headers={"Content-Disposition": f"attachment; filename=incident_{call_id}.zip"},
             )
 
         async def incidents_verdict_handler(request: Request) -> Response:

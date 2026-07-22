@@ -123,10 +123,7 @@ class TestProxyForwarding:
             client.post("/v1/chat/completions", json=_openai_request())
 
             call_kwargs = mock_client.request.call_args
-            assert (
-                call_kwargs.kwargs["headers"]["Authorization"]
-                == "Bearer sk-byok-from-dashboard"
-            )
+            assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-byok-from-dashboard"
 
     def test_byok_overrides_caller_auth(self) -> None:
         """When the proxy has a managed key (env or dashboard BYOK), it
@@ -152,13 +149,9 @@ class TestProxyForwarding:
             )
 
             call_kwargs = mock_client.request.call_args
-            assert (
-                call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-proxy-managed"
-            )
+            assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-proxy-managed"
 
-    def test_proxy_state_inits_api_key_from_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_proxy_state_inits_api_key_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """ProxyState picks up OPENAI_API_KEY / ANTHROPIC_API_KEY from env at
         startup, matching the provider implied by target_base_url."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-openai-env")
