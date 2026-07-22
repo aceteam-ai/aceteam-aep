@@ -6,6 +6,12 @@
 ### Changed
 ### Fixed
 
+## [0.11.6] - 2026-07-22
+
+### Fixed
+- **Safety detectors no longer rebuild their transformers model per instance.** `PiiDetector` and `ContentSafetyDetector` held the pipeline as instance state with no shared cache, so every construction re-materialized the immutable model into memory — ~0.25–0.55s each even with a warm HuggingFace disk cache, plus N duplicate copies of identical read-only weights resident at once. Consumers that build detectors per session (a reasonable thing to do, since `ProxyState` owns genuinely mutable per-session state) and test suites that reset per-session state paid that cost on every construction. The built pipeline is now cached at module level, keyed by model name, behind a lock so concurrent first-loads don't each build a copy. Only the immutable pipeline is shared; per-instance `_available`/fallback state stays per-instance, and `check()` only runs inference, so sharing is safe. Fixes #122.
+- **Test suite no longer hangs at exit.** All 628 tests passed but the pytest process never returned, so CI reported a timeout rather than a result. Two non-daemon threads outlived the run and blocked interpreter shutdown: `aiosqlite.Connection` is a plain `Thread`, and four observability `store` fixtures returned a `SqliteEventStore` without ever closing it (they now yield and close); and `transformers` spawns a `Thread-auto_conversion` that calls out to the HuggingFace safetensors-conversion Space because the safety models ship only `pytorch_model.bin` (now opted out via `DISABLE_SAFETENSORS_CONVERSION`, which exists for exactly this case). Also repaired four assertions still expecting pre-rename strings — the dashboard title is "Agent Safety Net Dashboard", and the default custom policy set is `{"English only", "Social Security Number"}`.
+
 ## [0.11.5] - 2026-07-16
 
 ### Fixed
