@@ -376,4 +376,4 @@ Add this badge to your repo's README to show it uses AEP safety enforcement:
 
 ## Trademarks
 
-"Agentic Execution Protocol," "AEP," and "AceTeam" are trademarks of AceTeam. The software is licensed under Apache 2.0. The trademark is not included in the license grant — you may not use these names to endorse or promote derivative works without written permission.
+"Agentic Execution Protocol," "AEP," and "AceTeam" are trademarks of AceTeam. The software is licensed under Elastic License 2.0. The trademark is not included in the license grant — you may not use these names to endorse or promote derivative works without written permission.
