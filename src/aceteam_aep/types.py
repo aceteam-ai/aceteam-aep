@@ -45,17 +45,32 @@ class ChatMessage:
 
 @dataclass
 class Usage:
-    """Token usage statistics from an LLM call."""
+    """Token usage statistics from an LLM call.
+
+    ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` surface
+    Anthropic prompt-caching activity so the host can log and bill it. When a
+    provider or model returns no caching data both stay 0, and
+    ``prompt_tokens`` retains its prior meaning (the provider's reported input
+    token count). Note that when caching is active on Anthropic,
+    ``prompt_tokens`` is the *uncached* remainder; the full prompt size is
+    ``prompt_tokens + cache_read_input_tokens + cache_creation_input_tokens``.
+    """
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
     def __add__(self, other: Usage) -> Usage:
         return Usage(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
+            cache_creation_input_tokens=(
+                self.cache_creation_input_tokens + other.cache_creation_input_tokens
+            ),
         )
 
 

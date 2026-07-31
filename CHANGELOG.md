@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- **Anthropic prompt caching on the static prefix.** The Anthropic client now attaches `cache_control: {"type": "ephemeral"}` breakpoints to the tool definitions and the system prompt (the last static block, which caches the tools+system prefix together). For agent/chat turns that re-send a large fixed prefix (system prompt + tool schemas) every round-trip, Anthropic now serves that prefix from cache at ~0.1x input price instead of re-billing it in full. Behavior-neutral: identical outputs, lower cost. Configurable via the `prompt_caching` param on `AnthropicClient`/`create_client()` or the `AEP_PROMPT_CACHING` env toggle (default ON; set to a false value for a byte-identical revert). Addresses aceteam-ai/aceteam#5856; follow-up to aceteam-ai/aceteam PR #5901.
+- **`Usage.cache_read_input_tokens` and `Usage.cache_creation_input_tokens`.** Anthropic's cache-token counts now surface on `Usage` (default 0; summed in `__add__`) so the host app can log and bill them. Populated from `response.usage` on the non-streaming path and from the `message_start` event on the streaming path.
+
 ### Changed
 ### Fixed
 
