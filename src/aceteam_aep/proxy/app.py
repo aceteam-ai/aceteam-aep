@@ -319,13 +319,17 @@ class ProxyState:
         return avg * self.blocked_count
 
     def _cost_by_span_id(self) -> dict[str, float]:
-        """Build a lookup of span_id → cost in USD."""
-        lookup: dict[str, float] = {}
+        """Build a lookup of span_id → cost in USD.
+
+        Accumulate in Decimal and convert once at the end: a span can own several
+        cost nodes, and summing them as floats lets rounding error compound.
+        """
+        totals: dict[str, Decimal] = {}
         for node in self.cost_tracker.get_cost_tree():
             sid = node.metadata.get("span_id")
             if sid:
-                lookup[sid] = lookup.get(sid, 0.0) + float(node.compute_cost)
-        return lookup
+                totals[sid] = totals.get(sid, Decimal("0")) + node.total_cost()
+        return {sid: float(total) for sid, total in totals.items()}
 
     def to_dict(self) -> dict[str, Any]:
         """State as JSON-serializable dict for the dashboard."""
@@ -761,7 +765,7 @@ def create_proxy_app(
                     model=model,
                     usage=usage,
                 )
-                state._call_costs.append(cost_node.compute_cost)
+                state._call_costs.append(cost_node.total_cost())
                 state.span_tracker.end_span(stream_span.span_id)
                 state.call_count += 1
                 state.signals.extend(signals)
@@ -781,7 +785,7 @@ def create_proxy_app(
                                 action=decision.action,
                                 message=decision.reason
                                 or f"{model} streaming call: {inp} in, {out} out",
-                                cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                                cost_usd=float(cost_node.total_cost()) if cost_node else 0,
                                 model=model,
                                 tokens_in=inp,
                                 tokens_out=out,
@@ -835,7 +839,7 @@ def create_proxy_app(
                                 provider=_detect_provider(state.target_base_url),
                                 tokens_in=inp,
                                 tokens_out=out,
-                                cost_usd=float(cost_node.compute_cost),
+                                cost_usd=float(cost_node.total_cost()),
                                 latency_ms=stream_span.duration_ms,
                             )
                         )
@@ -932,7 +936,7 @@ def create_proxy_app(
             model=model,
             usage=usage,
         )
-        state._call_costs.append(cost_node.compute_cost)
+        state._call_costs.append(cost_node.total_cost())
         state.span_tracker.end_span(span.span_id)
         state.call_count += 1
 
@@ -942,7 +946,7 @@ def create_proxy_app(
                 input_text=input_text,
                 output_text=output_text,
                 call_id=call_id,
-                call_cost=cost_node.compute_cost,
+                call_cost=cost_node.total_cost(),
             )
 
             # Emit safety_signal events for output signals
@@ -996,7 +1000,7 @@ def create_proxy_app(
                             provider=_detect_provider(state.target_base_url),
                             tokens_in=input_tokens,
                             tokens_out=output_tokens,
-                            cost_usd=float(cost_node.compute_cost),
+                            cost_usd=float(cost_node.total_cost()),
                             latency_ms=span.duration_ms,
                         )
                     )
@@ -1061,7 +1065,7 @@ def create_proxy_app(
                             provider=_detect_provider(state.target_base_url),
                             tokens_in=input_tokens,
                             tokens_out=output_tokens,
-                            cost_usd=float(cost_node.compute_cost),
+                            cost_usd=float(cost_node.total_cost()),
                             latency_ms=span.duration_ms,
                         )
                     )
@@ -1080,7 +1084,7 @@ def create_proxy_app(
                     action=decision.action,
                     message=decision.reason
                     or f"{model} call: {input_tokens} in, {output_tokens} out",
-                    cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                    cost_usd=float(cost_node.total_cost()) if cost_node else 0,
                     model=model,
                     tokens_in=input_tokens if usage else None,
                     tokens_out=output_tokens if usage else None,
@@ -1091,7 +1095,7 @@ def create_proxy_app(
 
         # --- PASS THROUGH (with AEP metadata header) ---
         resp_headers = build_response_headers(
-            cost=cost_node.compute_cost,
+            cost=cost_node.total_cost(),
             enforcement=decision.action,
             call_id=call_id,
             classification=aep_ctx.classification,
