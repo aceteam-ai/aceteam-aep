@@ -653,72 +653,72 @@ def create_proxy_app(
                             severity=_severity,
                         )
                     )
-                    # --- OBSERVABILITY: input-blocked early return ---
-                    if state.event_store:
-                        for sig in input_signals:
-                            asyncio.ensure_future(
-                                state.event_store.record(
-                                    ObservabilityEvent(
-                                        session_id=state.session_id,
-                                        type="safety_signal",
-                                        call_id=call_id,
-                                        detector=sig.detector,
-                                        severity=sig.severity,
-                                        reason=sig.detail,
-                                    )
-                                )
-                            )
+                # --- OBSERVABILITY: input-blocked early return ---
+                if state.event_store:
+                    for sig in input_signals:
                         asyncio.ensure_future(
                             state.event_store.record(
                                 ObservabilityEvent(
                                     session_id=state.session_id,
-                                    type="enforcement",
+                                    type="safety_signal",
                                     call_id=call_id,
-                                    action="block",
-                                    reason=input_decision.reason,
-                                    metadata={
-                                        "policy": {
-                                            "block_on": sorted(state.policy.block_on),
-                                            "flag_on": sorted(state.policy.flag_on),
-                                        }
-                                    },
+                                    detector=sig.detector,
+                                    severity=sig.severity,
+                                    reason=sig.detail,
                                 )
                             )
                         )
-                        _block_detector = input_signals[0].detector if input_signals else None
-                        _block_severity = input_signals[0].severity if input_signals else None
-                        asyncio.ensure_future(
-                            state.event_store.record_flagged_call(
-                                FlaggedCall(
-                                    call_id=call_id,
-                                    session_id=state.session_id,
-                                    action="block",
-                                    detector=_block_detector,
-                                    severity=_block_severity,
-                                    reason=input_decision.reason,
-                                    model=body.get("model") if isinstance(body, dict) else None,
-                                    input_messages=body.get("messages", [])
-                                    if isinstance(body, dict)
-                                    else [],
-                                    output_text=None,
-                                )
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="enforcement",
+                                call_id=call_id,
+                                action="block",
+                                reason=input_decision.reason,
+                                metadata={
+                                    "policy": {
+                                        "block_on": sorted(state.policy.block_on),
+                                        "flag_on": sorted(state.policy.flag_on),
+                                    }
+                                },
                             )
                         )
-                        asyncio.ensure_future(
-                            state.event_store.record(
-                                ObservabilityEvent(
-                                    session_id=state.session_id,
-                                    type="call_end",
-                                    call_id=call_id,
-                                    model=body.get("model") if isinstance(body, dict) else None,
-                                    provider=_detect_provider(state.target_base_url),
-                                    tokens_in=0,
-                                    tokens_out=0,
-                                    cost_usd=0.0,
-                                    latency_ms=None,
-                                )
+                    )
+                    _block_detector = input_signals[0].detector if input_signals else None
+                    _block_severity = input_signals[0].severity if input_signals else None
+                    asyncio.ensure_future(
+                        state.event_store.record_flagged_call(
+                            FlaggedCall(
+                                call_id=call_id,
+                                session_id=state.session_id,
+                                action="block",
+                                detector=_block_detector,
+                                severity=_block_severity,
+                                reason=input_decision.reason,
+                                model=body.get("model") if isinstance(body, dict) else None,
+                                input_messages=body.get("messages", [])
+                                if isinstance(body, dict)
+                                else [],
+                                output_text=None,
                             )
                         )
+                    )
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="call_end",
+                                call_id=call_id,
+                                model=body.get("model") if isinstance(body, dict) else None,
+                                provider=_detect_provider(state.target_base_url),
+                                tokens_in=0,
+                                tokens_out=0,
+                                cost_usd=0.0,
+                                latency_ms=None,
+                            )
+                        )
+                    )
                 return JSONResponse(
                     status_code=400,
                     content={
