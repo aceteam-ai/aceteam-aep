@@ -12,3 +12,9 @@ build/
 result
 result-*
 /aep-feedback.jsonl
+
+# Local env + git worktree checkouts (never publishable)
+.env
+.env.*
+.worktrees/
+system/

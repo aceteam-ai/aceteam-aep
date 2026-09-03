@@ -33,7 +33,7 @@ def test_dashboard_returns_200() -> None:
     client = TestClient(app)
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "AEP Dashboard" in resp.text
+    assert "Agent Safety Net Dashboard" in resp.text
 
 
 def test_dashboard_api_json() -> None:
@@ -81,7 +81,7 @@ def test_ciso_route_returns_200() -> None:
     client = TestClient(app)
     resp = client.get("/ciso")
     assert resp.status_code == 200
-    assert "AEP Dashboard" in resp.text
+    assert "Agent Safety Net Dashboard" in resp.text
     assert "var currentView = 'ciso';" in resp.text
 
 

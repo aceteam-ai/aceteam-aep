@@ -9,6 +9,7 @@ from typing import Any
 import anthropic
 
 from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
+from .errors import StreamFailedError
 
 
 def _extract_json_schema(response_format: dict[str, Any]) -> dict[str, Any] | None:
@@ -123,11 +124,18 @@ class AnthropicClient:
         model: str,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        supports_temperature: bool = True,
     ) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        # When False, the ``temperature`` key is never sent to the API.
+        # Newer Anthropic models (e.g. claude-opus-4-8, claude-sonnet-5)
+        # reject the request outright if ``temperature`` is present. The
+        # caller drives this from the model catalog rather than a hardcoded
+        # registry so new no-temperature models don't require an AEP release.
+        self._supports_temperature = supports_temperature
 
     @property
     def model_name(self) -> str:
@@ -147,9 +155,11 @@ class AnthropicClient:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": formatted,
-            "temperature": temperature if temperature is not None else self._temperature,
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
         }
+
+        if self._supports_temperature:
+            kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if system_prompt:
             kwargs["system"] = system_prompt
@@ -218,9 +228,11 @@ class AnthropicClient:
         kwargs: dict[str, Any] = {
             "model": self._model,
             "messages": formatted,
-            "temperature": temperature if temperature is not None else self._temperature,
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
         }
+
+        if self._supports_temperature:
+            kwargs["temperature"] = temperature if temperature is not None else self._temperature
 
         if system_prompt:
             kwargs["system"] = system_prompt
@@ -232,6 +244,14 @@ class AnthropicClient:
             current_tool: dict[str, Any] | None = None
             input_tokens = 0
             output_tokens = 0
+            # If the stream closes with this still false, Anthropic
+            # accepted the request and returned an SSE stream that
+            # closed without emitting a single text, tool-call, or
+            # stop-reason event. Observed in production from revoked
+            # BYOK keys where the upstream rejection arrives as a soft
+            # close. Raise so callers see a real error rather than a
+            # blank assistant reply.
+            produced_anything = False
 
             async for event in stream:
                 if event.type == "message_start":
@@ -251,6 +271,7 @@ class AnthropicClient:
 
                 elif event.type == "content_block_delta":
                     if hasattr(event.delta, "text"):
+                        produced_anything = True
                         yield StreamChunk(delta_text=event.delta.text)
                     elif hasattr(event.delta, "partial_json") and current_tool:
                         current_tool["arguments"] += event.delta.partial_json
@@ -262,6 +283,7 @@ class AnthropicClient:
                             args = json.loads(raw_args) if raw_args.strip() else {}
                         except (json.JSONDecodeError, TypeError):
                             args = {"raw": current_tool["arguments"]}
+                        produced_anything = True
                         yield StreamChunk(
                             delta_tool_calls=[
                                 ToolCallRequest(
@@ -278,6 +300,27 @@ class AnthropicClient:
                         output_tokens = event.usage.output_tokens
                     finish = getattr(event.delta, "stop_reason", None)
                     if finish:
+                        produced_anything = True
+                        # Flush any in-progress tool call that was truncated
+                        # (e.g. by max_tokens). Anthropic skips content_block_stop
+                        # when the response is cut short, so the accumulated
+                        # partial JSON would otherwise be silently dropped.
+                        if current_tool:
+                            try:
+                                raw_args = current_tool["arguments"]
+                                args = json.loads(raw_args) if raw_args.strip() else {}
+                            except (json.JSONDecodeError, TypeError):
+                                args = {"raw": current_tool["arguments"]}
+                            yield StreamChunk(
+                                delta_tool_calls=[
+                                    ToolCallRequest(
+                                        id=current_tool["id"],
+                                        name=current_tool["name"],
+                                        arguments=args,
+                                    )
+                                ]
+                            )
+                            current_tool = None
                         yield StreamChunk(
                             finish_reason=finish,
                             usage=Usage(
@@ -286,6 +329,12 @@ class AnthropicClient:
                                 total_tokens=input_tokens + output_tokens,
                             ),
                         )
+
+        if not produced_anything:
+            raise StreamFailedError(
+                f"Anthropic stream closed with no content for model {self._model!r}",
+                provider="anthropic",
+            )
 
 
 __all__ = ["AnthropicClient"]

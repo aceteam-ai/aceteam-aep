@@ -1,10 +1,15 @@
 """Tests for agent loop with mock provider."""
 
+import asyncio
+from collections.abc import AsyncIterator
+from decimal import Decimal
+
 import pytest
 
 from aceteam_aep.agent import run_agent_loop, run_agent_loop_stream
 from aceteam_aep.budget import BudgetEnforcer
 from aceteam_aep.costs import CostTracker
+from aceteam_aep.providers.errors import StreamFailedError
 from aceteam_aep.spans import SpanTracker
 from aceteam_aep.tools import tool
 from aceteam_aep.types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
@@ -320,3 +325,128 @@ async def test_max_iterations():
 
     # Should have stopped after 3 iterations
     assert client._call_count == 3
+
+
+class _RaisingStreamClient:
+    """ChatClient whose chat_stream raises before yielding any chunks.
+
+    Mirrors the shape of a real silent-rejection: chat_stream is an
+    async generator that, on first iteration, raises an exception.
+    """
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    @property
+    def model_name(self) -> str:
+        return "mock-raising"
+
+    async def chat(self, messages, **kwargs):  # pragma: no cover - unused
+        raise self._exc
+
+    async def chat_stream(self, messages, **kwargs) -> AsyncIterator[StreamChunk]:
+        raise self._exc
+        yield  # pragma: no cover - unreachable, marks this as an async gen
+
+
+@pytest.mark.asyncio
+async def test_stream_releases_reservation_on_provider_error():
+    """run_agent_loop_stream must settle the budget reservation when
+    chat_stream raises, otherwise the reserved amount stays held and
+    eventually starves the budget for subsequent calls.
+
+    Regression guard for the StreamFailedError cleanup path
+    introduced in aceteam-aep#115.
+    """
+    client = _RaisingStreamClient(StreamFailedError("upstream rejected", provider="anthropic"))
+    budget = BudgetEnforcer(total="1.00")
+
+    with pytest.raises(StreamFailedError):
+        async for _ in run_agent_loop_stream(
+            client,
+            [ChatMessage(role="user", content="Hi")],
+            budget=budget,
+        ):
+            pass
+
+    assert budget.state.reserved == 0, (
+        "reservation leaked; the exception path did not call budget.settle"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_closes_llm_span_on_provider_error():
+    """The inner LLM span must be ended (with ERROR status) when
+    chat_stream raises, so observability doesn't see it as still
+    in-flight after the overall run aborts.
+    """
+    client = _RaisingStreamClient(StreamFailedError("upstream rejected", provider="anthropic"))
+    tracker = SpanTracker(trace_id="test-trace")
+
+    with pytest.raises(StreamFailedError):
+        async for _ in run_agent_loop_stream(
+            client,
+            [ChatMessage(role="user", content="Hi")],
+            span_tracker=tracker,
+        ):
+            pass
+
+    spans = tracker.get_spans()
+    # All spans must be closed (ended_at set) so the trace is well-formed.
+    assert spans, "expected at least the root span to be created"
+    for span in spans:
+        assert span.ended_at is not None, f"span {span.executor_type}/{span.span_id} was left open"
+    # The llm_call span specifically should be ERROR, not OK.
+    llm_spans = [s for s in spans if s.executor_type == "llm_call"]
+    assert llm_spans, "llm_call span should have been started"
+    assert llm_spans[0].status == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_stream_releases_reservation_on_cancelled_error():
+    """Task cancellation must also release the budget reservation.
+
+    ``asyncio.CancelledError`` subclasses ``BaseException`` not
+    ``Exception`` since Python 3.8 — a plain ``except Exception`` would
+    skip cleanup and leak the reservation, eventually starving the
+    budget on long-running agents whose tasks get cancelled (graceful
+    shutdown, request abort, timeout).
+    """
+    client = _RaisingStreamClient(asyncio.CancelledError())
+    budget = BudgetEnforcer(total="1.00")
+
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in run_agent_loop_stream(
+            client,
+            [ChatMessage(role="user", content="Hi")],
+            budget=budget,
+        ):
+            pass
+
+    assert budget.state.reserved == Decimal("0"), (
+        "reservation leaked on cancellation; cleanup must also run for "
+        "BaseException subclasses, not just Exception"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_closes_llm_span_on_cancelled_error():
+    """The llm_call span must end with ERROR status on cancellation so
+    the trace doesn't show a span that "never closed" after a cancelled
+    request.
+    """
+    client = _RaisingStreamClient(asyncio.CancelledError())
+    tracker = SpanTracker(trace_id="test-trace")
+
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in run_agent_loop_stream(
+            client,
+            [ChatMessage(role="user", content="Hi")],
+            span_tracker=tracker,
+        ):
+            pass
+
+    llm_spans = [s for s in tracker.get_spans() if s.executor_type == "llm_call"]
+    assert llm_spans, "llm_call span should have been started"
+    assert llm_spans[0].ended_at is not None, "llm_call span left open after cancellation"
+    assert llm_spans[0].status == "ERROR"

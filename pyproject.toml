@@ -1,16 +1,15 @@
 [project]
 name = "aceteam-aep"
-version = "0.9.1"
+version = "0.11.7"
 description = "Agentic Execution Protocol™ (AEP™) - trust & safety infrastructure for AI agents"
 readme = "README.md"
-license = "Apache-2.0"
+license = "LicenseRef-Elastic-2.0"
 requires-python = ">=3.12"
 authors = [{ name = "AceTeam AI", email = "contact@aceteam.ai" }]
 keywords = ["aep", "ai", "agents", "llm", "cost-tracking"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -29,17 +28,29 @@ dependencies = [
 [project.optional-dependencies]
 xai = ["openai>=1.65.0,<2.0.0"]
 ollama = ["ollama>=0.4.0,<1.0.0"]
-safety = ["programasweights>=0.4.2", "transformers>=4.40", "torch>=2.0"]
-safety_lite = ["programasweights>=0.4.2"]
+# Natural-language custom policies (programasweights → llama-cpp-python).
+# Heavyweight: large native build, platform-sensitive. Opt-in only.
+custom-policies = ["programasweights>=0.4.2"]
+# ML-based PII / content-safety detectors (transformers + torch).
+# Includes custom-policies for backward compat — pre-split [safety] users
+# had programasweights bundled in, and we don't want them silently losing
+# custom-policy support after upgrade.
+safety = ["aceteam-aep[custom-policies]", "transformers>=4.40", "torch>=2.0"]
+# Deprecated alias for custom-policies — kept so old installs don't break.
+safety_lite = ["aceteam-aep[custom-policies]"]
 dashboard = ["uvicorn>=0.30", "jinja2>=3.1", "starlette>=0.38"]
-proxy = ["aceteam-aep[dashboard,safety_lite]"]
+observability = ["aiosqlite>=0.20"]
+# Proxy stays lightweight: regex/threshold detectors (secrets, agent_threat,
+# cost_anomaly) work without ML deps. For ML-based detection install [proxy,safety];
+# for natural-language custom policies install [proxy,custom-policies].
+proxy = ["aceteam-aep[dashboard,observability]"]
 events = ["redis[hiredis]>=5.0"]
 mcp = ["fastmcp>=2.0"]
 yaml = ["pyyaml>=6.0"]
 feedback = ["lancedb>=0.30"]
 top = ["rich>=13.0"]
 all = [
-    "aceteam-aep[xai,ollama,safety,dashboard,proxy,yaml,mcp,feedback,top,events]",
+    "aceteam-aep[xai,ollama,custom-policies,safety,dashboard,proxy,yaml,mcp,feedback,top,events,observability]",
 ]
 dev = [
     "aceteam-aep[all]",

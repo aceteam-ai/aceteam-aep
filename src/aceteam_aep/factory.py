@@ -19,6 +19,8 @@ def create_client(
     base_url: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 4096,
+    supports_temperature: bool = True,
+    uses_max_completion_tokens: bool | None = None,
     **kwargs: Any,
 ) -> ChatClient:
     """Create a ChatClient for the given model.
@@ -33,6 +35,26 @@ def create_client(
         base_url: Custom API base URL.
         temperature: Default temperature.
         max_tokens: Default max output tokens.
+        supports_temperature: When False, the ``temperature`` parameter is
+            never sent to the provider. Callers should drive this from their
+            model catalog (e.g. ``model_pricing.no_temperature``) so that new
+            no-temperature models — claude-opus-4-8, claude-sonnet-5 and
+            successors that 400 when ``temperature`` is present — are handled
+            without an aceteam-aep release. Defaults to True (unchanged
+            behavior). Currently honored by the Anthropic and OpenAI-family
+            clients.
+        uses_max_completion_tokens: When not None, overrides the
+            ``max_completion_tokens`` vs. ``max_tokens`` heuristic. Defaults
+            to None, in which case the registry/prefix-driven
+            ``_uses_max_completion_tokens(model)`` check in
+            ``providers/openai.py`` decides (unchanged behavior). Only
+            honored on the direct OpenAI / OpenAI-compatible path below
+            (OpenAI, SambaNova, TheAgentic, DeepSeek, and other
+            OpenAI-compatible ``base_url`` endpoints go through
+            ``OpenAIClient`` directly). NOT currently threaded through to
+            ``XAIClient`` or ``OllamaClient`` — those subclasses'
+            ``__init__`` don't accept it yet, same as ``supports_temperature``
+            above, so setting it has no effect for xai/ollama models.
 
     Returns:
         A ChatClient instance for the detected/specified provider.
@@ -45,6 +67,7 @@ def create_client(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            supports_temperature=supports_temperature,
         )
 
     if detected == "google":
@@ -84,6 +107,8 @@ def create_client(
         base_url=url,
         temperature=temperature,
         max_tokens=max_tokens,
+        supports_temperature=supports_temperature,
+        uses_max_completion_tokens=uses_max_completion_tokens,
     )
 
 

@@ -14,7 +14,9 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import ValidationError
@@ -24,7 +26,15 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
-from ..enforcement import EnforcementDecision, EnforcementPolicy, build_pipeline_from_policy, evaluate, evaluate_pipeline
+from ..enforcement import (
+    EnforcementDecision,
+    EnforcementPolicy,
+    build_pipeline_from_policy,
+    evaluate,
+    evaluate_pipeline,
+)
+from ..observability.events import FlaggedCall, ObservabilityEvent
+from ..observability.store import EventStore
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
 from ..safety.custom import (
     CustomPolicy,
@@ -36,7 +46,22 @@ from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
 from .logutil import configure_proxy_debug_logging
+from .openclaw_sync import get_configured_path as _openclaw_config_path
+from .openclaw_sync import refresh_openclaw_config
 from .redis_publisher import build_event, publish_event
+from .state_manager import (
+    ProxyStateManager,
+    get_max_entities,
+    is_multi_tenant_enabled,
+    per_entity_state_path,
+)
+from .state_persistence import (
+    get_configured_path as _state_persistence_path,
+)
+from .state_persistence import (
+    load_persisted_state,
+    save_persisted_state,
+)
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +147,20 @@ def _extract_usage(data: dict[str, Any]) -> tuple[str, int, int]:
     return model, input_tokens, output_tokens
 
 
+def _detect_provider(target_url: str) -> str:
+    """Extract a short provider name from the target URL."""
+    lower = target_url.lower()
+    if "anthropic" in lower:
+        return "anthropic"
+    if "openai" in lower:
+        return "openai"
+    if "ollama" in lower or "11434" in lower:
+        return "ollama"
+    if "google" in lower or "generativelanguage" in lower:
+        return "google"
+    return urlparse(target_url).hostname or target_url
+
+
 def _ensure_openai_stream_usage(body: dict[str, Any], path: str) -> None:
     """Ask OpenAI-compatible chat completion streams to include token usage in SSE.
 
@@ -146,8 +185,17 @@ class ProxyState:
         policy: EnforcementPolicy | dict[str, Any] | str | None = None,
         budget: float | None = None,
         budget_per_session: float | None = None,
+        event_store: EventStore | None = None,
+        state_path: Path | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
+        self.event_store = event_store
+        # When set, ProxyState mirrors a small slice of itself (api_key,
+        # connected_account, target_base_url, safety_enabled) to this file
+        # so a restart doesn't wipe the dashboard-configured state. None
+        # disables persistence — that's the wrap()/test path.
+        self._state_path = state_path
+        self.session_id = uuid.uuid4().hex
         self.cost_tracker = CostTracker()
         self.span_tracker = SpanTracker()
         self.registry = DetectorRegistry()
@@ -170,6 +218,16 @@ class ProxyState:
         )
         env_key = os.environ.get(env_key_name, "").strip()
         self.api_key: str | None = env_key or None
+        # Identity associated with the active key, populated when the user
+        # comes through the AceTeam connect flow (or, eventually, via a
+        # /api/whoami introspect on existing keys). None for raw BYOK users
+        # since we have no way to look them up.
+        self.connected_account: dict[str, Any] | None = None
+        # Last status from the openclaw.json auto-sync (when AEP_OPENCLAW_CONFIG_PATH
+        # is configured). The dashboard polls this to surface a "catalog
+        # updated — restart gateway to apply" banner. None until the first
+        # sync attempt for this state.
+        self.openclaw_config_status: dict[str, Any] | None = None
         self.budget = Decimal(str(budget)) if budget is not None else None
         self.budget_per_session = (
             Decimal(str(budget_per_session)) if budget_per_session is not None else None
@@ -196,6 +254,44 @@ class ProxyState:
         self._last_pipeline_result: Any = None
         if self.pipeline:
             log.info("Safety pipeline enabled with %d layers", len(self.pipeline._layers))
+
+        # Apply any state from a prior run last, so the persisted api_key
+        # (e.g. an act_* from a dashboard connect) overrides the env-seeded
+        # one above. Persistence is opt-in via state_path; wrap()/tests pass
+        # None and get the original in-memory behavior.
+        if self._state_path is not None:
+            persisted = load_persisted_state(self._state_path)
+            if persisted is not None:
+                self._apply_persisted(persisted)
+
+    def _apply_persisted(self, fields: dict[str, Any]) -> None:
+        """Restore fields from a prior run. Silently skips bad/missing values."""
+        api_key = fields.get("api_key")
+        if isinstance(api_key, str) and api_key:
+            self.api_key = api_key
+        connected = fields.get("connected_account")
+        if isinstance(connected, dict) or connected is None:
+            self.connected_account = connected
+        url = fields.get("target_base_url")
+        if isinstance(url, str) and url:
+            self.target_base_url = url.rstrip("/")
+        enabled = fields.get("safety_enabled")
+        if isinstance(enabled, bool):
+            self.safety_enabled = enabled
+
+    def _persist(self) -> None:
+        """Write the current control-plane slice to disk; no-op if disabled."""
+        if self._state_path is None:
+            return
+        save_persisted_state(
+            self._state_path,
+            {
+                "api_key": self.api_key,
+                "connected_account": self.connected_account,
+                "target_base_url": self.target_base_url,
+                "safety_enabled": self.safety_enabled,
+            },
+        )
 
     @property
     def cost_usd(self) -> Decimal:
@@ -234,13 +330,17 @@ class ProxyState:
         return avg * self.blocked_count
 
     def _cost_by_span_id(self) -> dict[str, float]:
-        """Build a lookup of span_id → cost in USD."""
-        lookup: dict[str, float] = {}
+        """Build a lookup of span_id → cost in USD.
+
+        Accumulate in Decimal and convert once at the end: a span can own several
+        cost nodes, and summing them as floats lets rounding error compound.
+        """
+        totals: dict[str, Decimal] = {}
         for node in self.cost_tracker.get_cost_tree():
             sid = node.metadata.get("span_id")
             if sid:
-                lookup[sid] = lookup.get(sid, 0.0) + float(node.compute_cost)
-        return lookup
+                totals[sid] = totals.get(sid, Decimal("0")) + node.total_cost()
+        return {sid: float(total) for sid, total in totals.items()}
 
     def to_dict(self) -> dict[str, Any]:
         """State as JSON-serializable dict for the dashboard."""
@@ -347,8 +447,11 @@ def create_proxy_app(
     budget: float | None = None,
     budget_per_session: float | None = None,
     debug: bool = False,
+    event_store: EventStore | None = None,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
+
+    base_state_path = _state_persistence_path()
 
     state = ProxyState(
         target_base_url=target_base_url,
@@ -356,6 +459,32 @@ def create_proxy_app(
         policy=policy,
         budget=budget,
         budget_per_session=budget_per_session,
+        event_store=event_store,
+        state_path=base_state_path,
+    )
+
+    # Multi-tenant manager — opt-in via AEP_MULTI_TENANT=1. When the env flag
+    # is unset (the default), the manager always returns the singleton ``state``
+    # so existing single-tenant deployments and tests are unaffected. When
+    # enabled, requests with ``X-AEP-Entity`` (or distinct ``Authorization``
+    # bearer keys) get isolated ``ProxyState`` buckets, capped at
+    # ``AEP_MAX_ENTITIES`` (default 64) with LRU eviction.
+    def _entity_state_factory(entity_id: str) -> ProxyState:
+        return ProxyState(
+            target_base_url=target_base_url,
+            detectors=detectors,
+            policy=policy,
+            budget=budget,
+            budget_per_session=budget_per_session,
+            event_store=event_store,
+            state_path=per_entity_state_path(base_state_path, entity_id),
+        )
+
+    state_manager = ProxyStateManager(
+        multi_tenant=is_multi_tenant_enabled(),
+        max_entities=get_max_entities(),
+        default=state,
+        factory=_entity_state_factory,
     )
 
     # Enable debug logging if requested (see logutil; uvicorn/defaults drop DEBUG)
@@ -390,9 +519,33 @@ def create_proxy_app(
 
     async def proxy_handler(request: Request) -> Response:
         """Forward request to target API with safety interception."""
+        # Resolve per-request state at the very top so any deferred work
+        # (streaming on-complete callbacks, asyncio.ensure_future events)
+        # captures *this* request's state via closure rather than re-resolving
+        # later when the contextual entity may differ.
+        state = state_manager.get_for_request(request)
         call_id = uuid.uuid4().hex[:8]
         path = request.url.path
         body_bytes = await request.body()
+
+        # --- CALL_START EVENT ---
+        # Parse body early to get model for call_start event
+        try:
+            _body_peek = json.loads(body_bytes) if body_bytes else {}
+        except json.JSONDecodeError:
+            _body_peek = {}
+        if state.event_store:
+            asyncio.ensure_future(
+                state.event_store.record(
+                    ObservabilityEvent(
+                        session_id=state.session_id,
+                        type="call_start",
+                        call_id=call_id,
+                        model=_body_peek.get("model") if isinstance(_body_peek, dict) else None,
+                        provider=_detect_provider(state.target_base_url),
+                    )
+                )
+            )
 
         # Debug logging for all requests (both input and output)
         if debug:
@@ -500,6 +653,72 @@ def create_proxy_app(
                             severity=_severity,
                         )
                     )
+                    # --- OBSERVABILITY: input-blocked early return ---
+                    if state.event_store:
+                        for sig in input_signals:
+                            asyncio.ensure_future(
+                                state.event_store.record(
+                                    ObservabilityEvent(
+                                        session_id=state.session_id,
+                                        type="safety_signal",
+                                        call_id=call_id,
+                                        detector=sig.detector,
+                                        severity=sig.severity,
+                                        reason=sig.detail,
+                                    )
+                                )
+                            )
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="enforcement",
+                                    call_id=call_id,
+                                    action="block",
+                                    reason=input_decision.reason,
+                                    metadata={
+                                        "policy": {
+                                            "block_on": sorted(state.policy.block_on),
+                                            "flag_on": sorted(state.policy.flag_on),
+                                        }
+                                    },
+                                )
+                            )
+                        )
+                        _block_detector = input_signals[0].detector if input_signals else None
+                        _block_severity = input_signals[0].severity if input_signals else None
+                        asyncio.ensure_future(
+                            state.event_store.record_flagged_call(
+                                FlaggedCall(
+                                    call_id=call_id,
+                                    session_id=state.session_id,
+                                    action="block",
+                                    detector=_block_detector,
+                                    severity=_block_severity,
+                                    reason=input_decision.reason,
+                                    model=body.get("model") if isinstance(body, dict) else None,
+                                    input_messages=body.get("messages", [])
+                                    if isinstance(body, dict)
+                                    else [],
+                                    output_text=None,
+                                )
+                            )
+                        )
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="call_end",
+                                    call_id=call_id,
+                                    model=body.get("model") if isinstance(body, dict) else None,
+                                    provider=_detect_provider(state.target_base_url),
+                                    tokens_in=0,
+                                    tokens_out=0,
+                                    cost_usd=0.0,
+                                    latency_ms=None,
+                                )
+                            )
+                        )
                 return JSONResponse(
                     status_code=400,
                     content={
@@ -512,6 +731,21 @@ def create_proxy_app(
                         }
                     },
                 )
+            # Emit safety_signal events for non-blocked input signals
+            if state.event_store and len(input_signals) > 0:
+                for sig in input_signals:
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="safety_signal",
+                                call_id=call_id,
+                                detector=sig.detector,
+                                severity=sig.severity,
+                                reason=sig.detail,
+                            )
+                        )
+                    )
         else:
             input_signals = ()
 
@@ -549,6 +783,8 @@ def create_proxy_app(
             _ensure_openai_stream_usage(body, path)
             body_bytes = json.dumps(body).encode()
 
+            from starlette.responses import StreamingResponse
+
             from .streaming import handle_streaming_request
 
             # Start span BEFORE the stream begins to measure actual latency
@@ -577,7 +813,7 @@ def create_proxy_app(
                     model=model,
                     usage=usage,
                 )
-                state._call_costs.append(cost_node.compute_cost)
+                state._call_costs.append(cost_node.total_cost())
                 state.span_tracker.end_span(stream_span.span_id)
                 state.call_count += 1
                 state.signals.extend(signals)
@@ -597,7 +833,7 @@ def create_proxy_app(
                                 action=decision.action,
                                 message=decision.reason
                                 or f"{model} streaming call: {inp} in, {out} out",
-                                cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                                cost_usd=float(cost_node.total_cost()) if cost_node else 0,
                                 model=model,
                                 tokens_in=inp,
                                 tokens_out=out,
@@ -607,7 +843,78 @@ def create_proxy_app(
                         )
                     )
 
-            return await handle_streaming_request(
+                # --- OBSERVABILITY: streaming call_end + enforcement + flagged_call ---
+                if state.event_store:
+                    for sig in signals:
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="safety_signal",
+                                    call_id=call_id,
+                                    detector=sig.detector,
+                                    severity=sig.severity,
+                                    reason=sig.detail,
+                                )
+                            )
+                        )
+                    _stream_action = decision.action if decision else "pass"
+                    _stream_reason = decision.reason if decision else None
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="enforcement",
+                                call_id=call_id,
+                                action=_stream_action,
+                                reason=_stream_reason,
+                                metadata={
+                                    "policy": {
+                                        "block_on": sorted(state.policy.block_on),
+                                        "flag_on": sorted(state.policy.flag_on),
+                                    }
+                                },
+                            )
+                        )
+                    )
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="call_end",
+                                call_id=call_id,
+                                model=model,
+                                provider=_detect_provider(state.target_base_url),
+                                tokens_in=inp,
+                                tokens_out=out,
+                                cost_usd=float(cost_node.total_cost()),
+                                latency_ms=stream_span.duration_ms,
+                            )
+                        )
+                    )
+                    if decision and decision.action in ("flag", "block"):
+                        _s_detector = signals[0].detector if signals else None
+                        _s_severity = signals[0].severity if signals else None
+                        _s_output = kwargs.get("output_text")
+                        asyncio.ensure_future(
+                            state.event_store.record_flagged_call(
+                                FlaggedCall(
+                                    call_id=call_id,
+                                    session_id=state.session_id,
+                                    action=decision.action,
+                                    detector=_s_detector,
+                                    severity=_s_severity,
+                                    reason=decision.reason,
+                                    model=model,
+                                    input_messages=body.get("messages", [])
+                                    if isinstance(body, dict)
+                                    else [],
+                                    output_text=_s_output if decision.action == "flag" else None,
+                                )
+                            )
+                        )
+
+            stream_response = await handle_streaming_request(
                 target_url=target_url,
                 body_bytes=body_bytes,
                 headers=forward_headers,
@@ -619,6 +926,13 @@ def create_proxy_app(
                 on_complete=on_stream_complete,
                 debug=debug,
             )
+            # Upstream rejected the request before any bytes streamed: the
+            # error is passed through as a plain response and on_complete
+            # never fires, so close the span here (mirrors the non-streaming
+            # error branch below).
+            if not isinstance(stream_response, StreamingResponse):
+                state.span_tracker.end_span(stream_span.span_id, status="ERROR")
+            return stream_response
 
         # --- NON-STREAMING BRANCH ---
         # Start span BEFORE the upstream call to measure actual latency
@@ -671,7 +985,7 @@ def create_proxy_app(
             model=model,
             usage=usage,
         )
-        state._call_costs.append(cost_node.compute_cost)
+        state._call_costs.append(cost_node.total_cost())
         state.span_tracker.end_span(span.span_id)
         state.call_count += 1
 
@@ -682,25 +996,98 @@ def create_proxy_app(
                     input_text=input_text,
                     output_text=output_text,
                     call_id=call_id,
-                    call_cost=cost_node.compute_cost,
+                    call_cost=cost_node.total_cost(),
                 )
                 state._last_pipeline_result = pipeline_result
                 output_signals = pipeline_result.signals
-                all_signals = (*input_signals, *output_signals)
-                state.signals.extend(all_signals)
-                decision = evaluate_pipeline(pipeline_result, state.policy)
             else:
                 output_signals = await state.registry.run_all(
                     input_text=input_text,
                     output_text=output_text,
                     call_id=call_id,
-                    call_cost=cost_node.compute_cost,
+                    call_cost=cost_node.total_cost(),
                 )
-                all_signals = (*input_signals, *output_signals)
-                state.signals.extend(all_signals)
-                decision = evaluate(all_signals, state.policy)
 
+            # Emit safety_signal events for output signals
+            if state.event_store:
+                for sig in output_signals:
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="safety_signal",
+                                call_id=call_id,
+                                detector=sig.detector,
+                                severity=sig.severity,
+                                reason=sig.detail,
+                            )
+                        )
+                    )
+
+            all_signals = (*input_signals, *output_signals)
+            state.signals.extend(all_signals)
+
+            decision = (
+                evaluate_pipeline(pipeline_result, state.policy)
+                if state.pipeline
+                else evaluate(all_signals, state.policy)
+            )
             state.decisions.append(decision)
+
+            # --- OBSERVABILITY: enforcement + call_end + flagged_call ---
+            if state.event_store:
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="enforcement",
+                            call_id=call_id,
+                            action=decision.action,
+                            reason=decision.reason,
+                            metadata={
+                                "policy": {
+                                    "block_on": sorted(state.policy.block_on),
+                                    "flag_on": sorted(state.policy.flag_on),
+                                }
+                            },
+                        )
+                    )
+                )
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="call_end",
+                            call_id=call_id,
+                            model=model,
+                            provider=_detect_provider(state.target_base_url),
+                            tokens_in=input_tokens,
+                            tokens_out=output_tokens,
+                            cost_usd=float(cost_node.total_cost()),
+                            latency_ms=span.duration_ms,
+                        )
+                    )
+                )
+                if decision.action in ("flag", "block"):
+                    _obs_detector = all_signals[0].detector if all_signals else None
+                    _obs_severity = all_signals[0].severity if all_signals else None
+                    asyncio.ensure_future(
+                        state.event_store.record_flagged_call(
+                            FlaggedCall(
+                                call_id=call_id,
+                                session_id=state.session_id,
+                                action=decision.action,
+                                detector=_obs_detector,
+                                severity=_obs_severity,
+                                reason=decision.reason,
+                                model=model,
+                                input_messages=body.get("messages", [])
+                                if isinstance(body, dict)
+                                else [],
+                                output_text=output_text if decision.action == "flag" else None,
+                            )
+                        )
+                    )
 
             if decision.action == "block":
                 log.warning("BLOCKED response %s: %s", call_id, decision.reason)
@@ -718,6 +1105,34 @@ def create_proxy_app(
             all_signals = []
             decision = EnforcementDecision(action="pass")
             state.decisions.append(decision)
+            # --- OBSERVABILITY: enforcement + call_end (safety disabled) ---
+            if state.event_store:
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="enforcement",
+                            call_id=call_id,
+                            action="pass",
+                            reason=None,
+                        )
+                    )
+                )
+                asyncio.ensure_future(
+                    state.event_store.record(
+                        ObservabilityEvent(
+                            session_id=state.session_id,
+                            type="call_end",
+                            call_id=call_id,
+                            model=model,
+                            provider=_detect_provider(state.target_base_url),
+                            tokens_in=input_tokens,
+                            tokens_out=output_tokens,
+                            cost_usd=float(cost_node.total_cost()),
+                            latency_ms=span.duration_ms,
+                        )
+                    )
+                )
 
         # --- PUBLISH EVENT TO REDIS ---
         _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
@@ -732,7 +1147,7 @@ def create_proxy_app(
                     action=decision.action,
                     message=decision.reason
                     or f"{model} call: {input_tokens} in, {output_tokens} out",
-                    cost_usd=float(cost_node.compute_cost) if cost_node else 0,
+                    cost_usd=float(cost_node.total_cost()) if cost_node else 0,
                     model=model,
                     tokens_in=input_tokens if usage else None,
                     tokens_out=output_tokens if usage else None,
@@ -743,7 +1158,7 @@ def create_proxy_app(
 
         # --- PASS THROUGH (with AEP metadata header) ---
         resp_headers = build_response_headers(
-            cost=cost_node.compute_cost,
+            cost=cost_node.total_cost(),
             enforcement=decision.action,
             call_id=call_id,
             classification=aep_ctx.classification,
@@ -899,6 +1314,7 @@ def create_proxy_app(
 
         GET returns current state. POST accepts {"enabled": bool} and/or {"policy": dict}.
         """
+        state = state_manager.get_for_request(request)
         if request.method == "GET":
             return Response(
                 json.dumps(
@@ -932,6 +1348,7 @@ def create_proxy_app(
         if "enabled" in body:
             state.safety_enabled = bool(body["enabled"])
             log.info("Safety %s", "enabled" if state.safety_enabled else "disabled")
+            state._persist()
 
         # Hot-swap policy from inline dict (not file paths — prevents path traversal)
         if "policy" in body:
@@ -976,6 +1393,7 @@ def create_proxy_app(
 
     # Custom policies CRUD (collection + item routes below).
     async def custom_policies_collection_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
         if request.method == "GET":
             policies = [p.model_dump() for p in state.custom_policy_store.all()]
             return Response(
@@ -1000,6 +1418,7 @@ def create_proxy_app(
         )
 
     async def custom_policy_item_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
         raw_id = request.path_params["policy_id"]
         policy_id = _normalize_policy_id(raw_id)
         if policy_id is None:
@@ -1040,21 +1459,96 @@ def create_proxy_app(
         state.custom_policy_store.upsert(updated)
         return Response(json.dumps(updated.model_dump()), media_type="application/json")
 
+    # Best-effort upstream identity refresh. For act_* gateway keys we can
+    # ask the upstream `/api/whoami` endpoint who owns the key; the dashboard
+    # then renders "Connected as <email>" instead of the cryptic prefix.
+    # No-op for BYOK keys (sk-/sk-ant-) since OpenAI/Anthropic don't expose
+    # a comparable identity endpoint and we have no way to look up identity.
+    async def _refresh_connected_account(state: ProxyState = state) -> None:
+        key = state.api_key
+        if not key or not key.startswith("act_"):
+            return
+        parsed = urlparse(state.target_base_url)
+        if not parsed.scheme or not parsed.netloc:
+            return
+        whoami_url = f"{parsed.scheme}://{parsed.netloc}/api/whoami"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(whoami_url, headers={"Authorization": f"Bearer {key}"})
+            if resp.status_code != 200:
+                log.warning("whoami refresh: %s returned %d", whoami_url, resp.status_code)
+                return
+            data = resp.json()
+            email = data.get("email")
+            if not isinstance(email, str) or not email.strip():
+                # Without an email there's nothing useful to display, so
+                # don't shadow the friendly-label fallback with a half-empty
+                # account record.
+                return
+            state.connected_account = {
+                "email": email.strip(),
+                "organization_id": data.get("organization_id")
+                if isinstance(data.get("organization_id"), str)
+                else None,
+                "organization_name": data.get("organization_name")
+                if isinstance(data.get("organization_name"), str)
+                else None,
+            }
+        except Exception as err:  # noqa: BLE001 — best-effort fetch
+            log.warning("whoami refresh failed: %s", err)
+
     # BYOK API key management — GET returns a hint, POST sets the key, DELETE clears.
     # The raw key is only held in process memory (never written to disk) and is used
     # as the fallback Authorization header when a /v1/* request arrives without one.
     async def api_key_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
+
+        def _classify(key: str) -> str:
+            # Surface where the key came from so the dashboard can show
+            # "Connected to AceTeam" instead of the cryptic "KEY: act_bb3..."
+            # when the user used the sign-in flow. Prefixes are stable and
+            # vendor-published; matching here avoids round-tripping to the
+            # mint service just to know what to label the chip.
+            if key.startswith("act_"):
+                return "aceteam"
+            if key.startswith("sk-ant-"):
+                return "anthropic"
+            if key.startswith("sk-"):
+                return "openai"
+            return "byok"
+
         def _hint(key: str | None) -> dict[str, Any]:
             if not key:
-                return {"set": False, "hint": None}
-            visible = key[:7] if len(key) > 7 else key[:3]
-            return {"set": True, "hint": f"{visible}..."}
+                return {
+                    "set": False,
+                    "hint": None,
+                    "provider": None,
+                    "connected_account": None,
+                }
+            # prefix + suffix lets users match the hint against entries in
+            # their AceTeam API keys list. 7+4 keeps the surface area visible
+            # but reveals less than half of any reasonable-length key (act_*
+            # is 32 chars, sk-* is 51, sk-ant-* is 100+).
+            if len(key) >= 12:
+                hint = f"{key[:7]}...{key[-4:]}"
+            elif len(key) > 7:
+                hint = f"{key[:7]}..."
+            else:
+                hint = f"{key[:3]}..."
+            return {
+                "set": True,
+                "hint": hint,
+                "provider": _classify(key),
+                "connected_account": state.connected_account,
+            }
 
         if request.method == "GET":
             return JSONResponse(_hint(state.api_key))
 
         if request.method == "DELETE":
             state.api_key = None
+            state.connected_account = None
+            state._persist()
             return JSONResponse(_hint(None))
 
         body, json_err = await _read_json_body(request)
@@ -1064,10 +1558,26 @@ def create_proxy_app(
             return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
         key = body.get("api_key")
         if not isinstance(key, str) or not key.strip():
-            return JSONResponse(
-                {"error": "api_key must be a non-empty string"}, status_code=400
-            )
+            return JSONResponse({"error": "api_key must be a non-empty string"}, status_code=400)
         state.api_key = key.strip()
+        # Reset identity so a stale account doesn't shadow the new key.
+        # The dashboard re-supplies identity for keys minted via the connect
+        # flow; for everything else we'll try the upstream /api/whoami refresh
+        # below if the prefix looks like a gateway key.
+        state.connected_account = None
+        connected = body.get("connected_account")
+        if isinstance(connected, dict):
+            email = connected.get("email")
+            if isinstance(email, str) and email.strip():
+                state.connected_account = {
+                    "email": email.strip(),
+                    "organization_id": connected.get("organization_id")
+                    if isinstance(connected.get("organization_id"), str)
+                    else None,
+                    "organization_name": connected.get("organization_name")
+                    if isinstance(connected.get("organization_name"), str)
+                    else None,
+                }
         base_url = body.get("base_url")
         if isinstance(base_url, str) and base_url.strip():
             candidate = base_url.strip().rstrip("/")
@@ -1076,9 +1586,35 @@ def create_proxy_app(
                     {"error": "base_url must start with http:// or https://"},
                     status_code=400,
                 )
+            # Proxy forwards by concatenating target_base_url with the incoming
+            # request path, which already starts with /v1/... A trailing /v1 on
+            # the target produces /v1/v1/chat/completions and 404s. Strip it so
+            # OpenAI-SDK conventions (base_url ending in /v1) work transparently.
+            if candidate.endswith("/v1"):
+                candidate = candidate[: -len("/v1")]
             state.target_base_url = candidate
             log.info("Upstream base URL updated to %s", candidate)
         log.info("BYOK API key updated (len=%d)", len(state.api_key))
+        # If the caller didn't pre-supply identity, try fetching it from the
+        # upstream gateway. Skip for non-act_* keys inside _refresh_*.
+        if state.connected_account is None:
+            await _refresh_connected_account(state)
+        # Auto-sync the OpenClaw catalog from the AceTeam gateway whenever a
+        # fresh act_* key lands. Opt-in via env: when AEP_OPENCLAW_CONFIG_PATH
+        # is set (i.e., compose mounts the openclaw config dir into the proxy),
+        # we mirror /v1/models into openclaw.json so users don't have to
+        # hand-edit it as new models get seeded into the AceTeam catalog.
+        config_path = _openclaw_config_path()
+        if config_path and state.api_key and state.api_key.startswith("act_"):
+            state.openclaw_config_status = await refresh_openclaw_config(
+                api_key=state.api_key,
+                target_base_url=state.target_base_url,
+                config_path=config_path,
+            )
+        # Persist after _refresh_connected_account / catalog sync so the
+        # written file reflects the post-refresh identity, not just the raw
+        # caller-supplied bits.
+        state._persist()
         return JSONResponse(_hint(state.api_key))
 
     # Policy tester — evaluate a single custom policy against arbitrary text,
@@ -1086,6 +1622,7 @@ def create_proxy_app(
     # agent. Mirrors programasweights.com/browser but against policies that
     # already live in this process.
     async def policy_test_handler(request: Request) -> Response:
+        state = state_manager.get_for_request(request)
         body, json_err = await _read_json_body(request)
         if json_err is not None:
             return json_err
@@ -1121,12 +1658,137 @@ def create_proxy_app(
             }
         )
 
+    # OpenClaw config sync status — drives the dashboard banner that tells
+    # users when openclaw.json was auto-refreshed from the AceTeam catalog
+    # and whether they need to restart the gateway to apply it. Status is
+    # populated by api_key_handler after a successful act_* connect.
+    async def openclaw_config_status_handler(request: Request) -> Response:
+        if request.method != "GET":
+            return JSONResponse({"error": "GET only"}, status_code=405)
+        config_path = _openclaw_config_path()
+        return JSONResponse(
+            {
+                "enabled": config_path is not None,
+                "config_path": config_path,
+                "status": state.openclaw_config_status,
+            }
+        )
+
+    # Routing topology — describes the chain of hops the proxy is configured
+    # to use, and what each hop enforces. Drives the dashboard's topology
+    # panel so the user can see "OpenClaw → aep-proxy → AceTeam Gateway →
+    # OpenAI" and which layer their policies live in.
+    async def routing_handler(request: Request) -> Response:
+        if request.method != "GET":
+            return JSONResponse({"error": "GET only"}, status_code=405)
+        state = state_manager.get_for_request(request)
+
+        # Layer 1: this proxy. Always present. List the active detectors and
+        # the count of enabled custom policies so the user can see what
+        # actually fires before traffic leaves the machine.
+        detector_names = [d.name for d in state.registry._detectors]  # noqa: SLF001
+        enabled_custom = sum(1 for p in state.custom_policy_store.all() if p.enabled)
+        # End-to-end LLM latency (proxy → upstream → response → proxy) — the
+        # only hop pair we can measure from inside the proxy. We surface it
+        # under the local-proxy card since that's where the timer lives, but
+        # it's really the full proxy↔provider round trip.
+        from statistics import stdev  # noqa: PLC0415
+
+        durations = [
+            s.duration_ms
+            for s in state.span_tracker.get_spans()
+            if s.executor_type == "llm" and s.duration_ms is not None
+        ]
+        latency_stats: dict[str, Any] | None
+        if durations:
+            avg = sum(durations) / len(durations)
+            sd = stdev(durations) if len(durations) > 1 else 0.0
+            latency_stats = {
+                "count": len(durations),
+                "avg_ms": round(avg, 1),
+                "stddev_ms": round(sd, 1),
+            }
+        else:
+            latency_stats = None
+        local_hop: dict[str, Any] = {
+            "name": "aep-proxy",
+            "label": "Local proxy",
+            "scope": "local",
+            "url": "http://localhost:8899/v1",
+            "detectors": detector_names,
+            "custom_policies_enabled": enabled_custom,
+            "safety_enabled": state.safety_enabled,
+            "latency": latency_stats,
+        }
+
+        # Layer 2 (optional): the AceTeam gateway, when target_base_url
+        # points at aceteam.ai. Otherwise we go straight to the provider
+        # (OpenAI/Anthropic/etc.) via the proxy's BYOK target.
+        hops: list[dict[str, Any]] = [local_hop]
+        target = state.target_base_url
+        target_label: str | None = None
+        target_provider: str | None = None
+        # When the gateway is the middle hop, the actual upstream LLM URL
+        # depends on which model is requested (gateway routes openai-* to
+        # api.openai.com, claude-* to api.anthropic.com, etc.). Don't echo
+        # the gateway URL on the provider card — that just looks duplicated.
+        provider_url: str | None = target
+        if "aceteam.ai" in target:
+            hops.append(
+                {
+                    "name": "aceteam-gateway",
+                    "label": "AceTeam Gateway",
+                    "scope": "upstream",
+                    "url": target,
+                    "enforces": [
+                        "auth (act_* key)",
+                        "credit accounting",
+                        "AceTeam baseline policies",
+                    ],
+                }
+            )
+            target_label = "OpenAI / Anthropic"
+            target_provider = "via aceteam.ai"
+            provider_url = None
+        elif "anthropic" in target:
+            target_label = "Anthropic"
+            target_provider = "anthropic"
+        elif "openai" in target:
+            target_label = "OpenAI"
+            target_provider = "openai"
+        elif "palebluedot" in target or "tokenrouter" in target:
+            target_label = "TokenRouter (Pale Blue Dot)"
+            target_provider = "tokenrouter"
+        else:
+            # Custom BYOK target — show the host so the user knows where
+            # their traffic is going.
+            from urllib.parse import urlparse  # noqa: PLC0415
+
+            target_label = urlparse(target).netloc or target
+            target_provider = "byok"
+
+        hops.append(
+            {
+                "name": "provider",
+                "label": target_label,
+                "scope": "provider",
+                "url": provider_url,
+                "provider": target_provider,
+            }
+        )
+
+        return JSONResponse(
+            {
+                "client": "OpenClaw",
+                "target_base_url": target,
+                "hops": hops,
+            }
+        )
+
     routes.extend(
         [
             Route("/dashboard/api/feedback", feedback_handler, methods=["POST"]),
-            Route(
-                "/dashboard/api/feedback/summary", feedback_summary_handler, methods=["GET"]
-            ),
+            Route("/dashboard/api/feedback/summary", feedback_summary_handler, methods=["GET"]),
             Route("/dashboard/api/safety", safety_toggle_handler, methods=["POST", "GET"]),
             Route(
                 "/dashboard/api/custom-policies/{policy_id}",
@@ -1148,8 +1810,158 @@ def create_proxy_app(
                 policy_test_handler,
                 methods=["POST"],
             ),
+            Route(
+                "/dashboard/api/routing",
+                routing_handler,
+                methods=["GET"],
+            ),
+            Route(
+                "/dashboard/api/openclaw-config-status",
+                openclaw_config_status_handler,
+                methods=["GET"],
+            ),
         ]
     )
+
+    # --- Observability API routes (require both dashboard and event_store) ---
+    if dashboard and event_store:
+        from ..observability.incidents import build_incident_bundle
+        from ..observability.views.timeline import get_timeline
+        from ..observability.views.topology import get_topology
+        from ..observability.views.traffic import get_traffic_stats
+
+        async def incidents_list_handler(request: Request) -> Response:
+            params = request.query_params
+            incidents = await event_store.query_flagged_calls(
+                session_id=params.get("session_id"),
+                verdict=params.get("verdict"),
+                limit=int(params.get("limit", "50")),
+            )
+            return Response(
+                json.dumps({"incidents": [fc.model_dump() for fc in incidents]}),
+                media_type="application/json",
+            )
+
+        async def incidents_detail_handler(request: Request) -> Response:
+            call_id = request.path_params["call_id"]
+            flagged = await event_store.query_flagged_calls()
+            match = [fc for fc in flagged if fc.call_id == call_id]
+            if not match:
+                return Response(
+                    '{"error": "not found"}',
+                    status_code=404,
+                    media_type="application/json",
+                )
+            fc = match[0]
+            events = await event_store.query_events(session_id=fc.session_id, limit=500)
+            return Response(
+                json.dumps(
+                    {
+                        "flagged_call": fc.model_dump(),
+                        "events": [e.model_dump() for e in events],
+                    }
+                ),
+                media_type="application/json",
+            )
+
+        async def incidents_export_handler(request: Request) -> Response:
+            call_id = request.path_params["call_id"]
+            bundle = await build_incident_bundle(event_store, call_id=call_id)
+            if bundle is None:
+                return Response(
+                    '{"error": "not found"}',
+                    status_code=404,
+                    media_type="application/json",
+                )
+            return Response(
+                content=bundle,
+                media_type="application/zip",
+                headers={"Content-Disposition": f"attachment; filename=incident_{call_id}.zip"},
+            )
+
+        async def incidents_verdict_handler(request: Request) -> Response:
+            call_id = request.path_params["call_id"]
+            try:
+                body = await request.json()
+            except Exception:
+                return Response(
+                    '{"error": "invalid JSON"}',
+                    status_code=400,
+                    media_type="application/json",
+                )
+            verdict = body.get("verdict")
+            if verdict not in ("confirmed", "dismissed"):
+                return Response(
+                    '{"error": "verdict must be confirmed or dismissed"}',
+                    status_code=400,
+                    media_type="application/json",
+                )
+            await event_store.update_verdict(
+                call_id=call_id,
+                verdict=verdict,
+                verdict_by=body.get("verdict_by", "unknown"),
+                verdict_note=body.get("verdict_note"),
+            )
+            return Response(json.dumps({"ok": True}), media_type="application/json")
+
+        async def timeline_handler(request: Request) -> Response:
+            params = request.query_params
+            spans = await get_timeline(
+                event_store,
+                session_id=params.get("session_id"),
+                since=params.get("since"),
+                limit=int(params.get("limit", "200")),
+            )
+            return Response(
+                json.dumps({"spans": spans}),
+                media_type="application/json",
+            )
+
+        async def traffic_handler(request: Request) -> Response:
+            params = request.query_params
+            stats = await get_traffic_stats(
+                event_store,
+                session_id=params.get("session_id"),
+                since=params.get("since"),
+            )
+            return Response(json.dumps(stats), media_type="application/json")
+
+        async def topology_handler(request: Request) -> Response:
+            params = request.query_params
+            topo = await get_topology(
+                event_store,
+                session_id=params.get("session_id"),
+                since=params.get("since"),
+            )
+            return Response(json.dumps(topo), media_type="application/json")
+
+        routes.extend(
+            [
+                Route(
+                    "/dashboard/api/incidents",
+                    incidents_list_handler,
+                    methods=["GET"],
+                ),
+                Route(
+                    "/dashboard/api/incidents/{call_id}/export",
+                    incidents_export_handler,
+                    methods=["GET"],
+                ),
+                Route(
+                    "/dashboard/api/incidents/{call_id}/verdict",
+                    incidents_verdict_handler,
+                    methods=["PATCH"],
+                ),
+                Route(
+                    "/dashboard/api/incidents/{call_id}",
+                    incidents_detail_handler,
+                    methods=["GET"],
+                ),
+                Route("/dashboard/api/timeline", timeline_handler, methods=["GET"]),
+                Route("/dashboard/api/traffic", traffic_handler, methods=["GET"]),
+                Route("/dashboard/api/topology", topology_handler, methods=["GET"]),
+            ]
+        )
 
     # Mount MCP gateway if fastmcp is installed
     mcp_http_app = None
@@ -1165,18 +1977,24 @@ def create_proxy_app(
     except Exception as exc:
         log.debug("MCP gateway not available: %s", exc)
 
-    # Wire MCP lifespan into parent app (required by FastMCP for task group init)
-    if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
-        from contextlib import asynccontextmanager
+    # Always provide a lifespan so we can refresh `connected_account` for
+    # an env-seeded act_* key at startup. If MCP is also mounted, nest its
+    # lifespan inside ours so FastMCP still gets its task group init.
+    from contextlib import asynccontextmanager
 
-        @asynccontextmanager
-        async def lifespan(app):
+    @asynccontextmanager
+    async def lifespan(app):
+        # Best-effort identity refresh for keys that survived a restart
+        # (env-seeded or, eventually, persisted). Runs in the background
+        # so a slow/unreachable upstream doesn't block server startup.
+        asyncio.create_task(_refresh_connected_account())
+        if mcp_http_app is not None and hasattr(mcp_http_app, "lifespan"):
             async with mcp_http_app.lifespan(app):
                 yield
+        else:
+            yield
 
-        return Starlette(routes=routes, lifespan=lifespan)
-
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, lifespan=lifespan)
 
 
 __all__ = ["ProxyState", "create_proxy_app"]

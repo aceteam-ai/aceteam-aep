@@ -27,7 +27,7 @@ class TestCustomPoliciesAPI:
 
         listed = client.get("/dashboard/api/custom-policies").json()
         names = {p["name"] for p in listed["policies"]}
-        assert names == {"English only", "US SSN pattern (input)"}
+        assert names == {"English only", "Social Security Number"}
         assert all(p["enabled"] is False for p in listed["policies"])
 
         create = client.post(
@@ -44,7 +44,7 @@ class TestCustomPoliciesAPI:
         assert body["severity"] == "high"
 
         listed = client.get("/dashboard/api/custom-policies").json()
-        assert len(listed["policies"]) == 4
+        assert len(listed["policies"]) == 3
         assert any(p["id"] == policy_id for p in listed["policies"])
 
         one = client.get(f"/dashboard/api/custom-policies/{policy_id}")
@@ -151,29 +151,255 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
 
-        assert client.get("/dashboard/api/api-key").json() == {"set": False, "hint": None}
+        unset = client.get("/dashboard/api/api-key").json()
+        assert unset == {
+            "set": False,
+            "hint": None,
+            "provider": None,
+            "connected_account": None,
+        }
 
-        saved = client.post(
-            "/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}
-        ).json()
+        saved = client.post("/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}).json()
         assert saved["set"] is True
         assert saved["hint"].startswith("sk-abc1")
+        assert saved["provider"] == "openai"
+        assert saved["connected_account"] is None
 
         hint = client.get("/dashboard/api/api-key").json()
         assert hint["set"] is True
         assert hint["hint"] == saved["hint"]
+        assert hint["provider"] == "openai"
 
         cleared = client.delete("/dashboard/api/api-key").json()
-        assert cleared == {"set": False, "hint": None}
+        assert cleared == {
+            "set": False,
+            "hint": None,
+            "provider": None,
+            "connected_account": None,
+        }
+
+    def test_api_key_classifies_known_prefixes(self) -> None:
+        """The provider tag drives the dashboard's friendly chip label."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        cases = [
+            ("act_aceteam_xxxx", "aceteam"),
+            ("sk-ant-anthropic-yyy", "anthropic"),
+            ("sk-openai-style-zzz", "openai"),
+            ("custom-self-hosted-token", "byok"),
+        ]
+        for key, expected_provider in cases:
+            saved = client.post("/dashboard/api/api-key", json={"api_key": key}).json()
+            assert saved["provider"] == expected_provider, (key, saved)
+            client.delete("/dashboard/api/api-key")
+
+    def test_api_key_stores_connected_account(self) -> None:
+        """Identity supplied by the connect-flow surfaces on subsequent GETs."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        saved = client.post(
+            "/dashboard/api/api-key",
+            json={
+                "api_key": "act_xxxxxxxxxxxxxxxx",
+                "connected_account": {
+                    "email": "jason@example.com",
+                    "organization_id": "org_123",
+                    "organization_name": "Acme Corp",
+                },
+            },
+        ).json()
+        assert saved["connected_account"] == {
+            "email": "jason@example.com",
+            "organization_id": "org_123",
+            "organization_name": "Acme Corp",
+        }
+        assert (
+            client.get("/dashboard/api/api-key").json()["connected_account"]["email"]
+            == "jason@example.com"
+        )
+
+        # Replacing the key without supplying identity clears the stale account.
+        replaced = client.post("/dashboard/api/api-key", json={"api_key": "sk-fresh-byok"}).json()
+        assert replaced["connected_account"] is None
+
+    def test_api_key_act_prefix_introspects_via_whoami(self) -> None:
+        """Pasting an act_* key without identity triggers an upstream /api/whoami refresh."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        whoami_resp = MagicMock()
+        whoami_resp.status_code = 200
+        whoami_resp.json = MagicMock(
+            return_value={
+                "auth_type": "api_key",
+                "user_id": "u_42",
+                "organization_id": "org_42",
+                "organization_name": "Org Forty-Two",
+                "email": "introspected@example.com",
+                "key_id": "key_42",
+                "key_name": "Test key",
+            }
+        )
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=whoami_resp)
+
+        async def _aenter(self):
+            return mock_client
+
+        async def _aexit(self, *_):
+            return None
+
+        with (
+            patch("httpx.AsyncClient.__aenter__", _aenter),
+            patch("httpx.AsyncClient.__aexit__", _aexit),
+        ):
+            saved = client.post(
+                "/dashboard/api/api-key",
+                json={
+                    "api_key": "act_xxxxxxxxxxxxxxxx",
+                    "base_url": "http://aceteam.local/api/gateway/v1",
+                },
+            ).json()
+
+        assert saved["connected_account"] == {
+            "email": "introspected@example.com",
+            "organization_id": "org_42",
+            "organization_name": "Org Forty-Two",
+        }
+        # Confirm the whoami URL was derived from base_url's host, not the
+        # full gateway path.
+        assert mock_client.get.await_args.args[0] == "http://aceteam.local/api/whoami"
+        assert (
+            mock_client.get.await_args.kwargs["headers"]["Authorization"]
+            == "Bearer act_xxxxxxxxxxxxxxxx"
+        )
+
+    def test_api_key_byok_skips_whoami_refresh(self) -> None:
+        """sk-* and self-hosted keys don't have an upstream whoami to call."""
+        from unittest.mock import AsyncMock
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        mock_client = AsyncMock()
+
+        async def _aenter(self):
+            return mock_client
+
+        async def _aexit(self, *_):
+            return None
+
+        with (
+            patch("httpx.AsyncClient.__aenter__", _aenter),
+            patch("httpx.AsyncClient.__aexit__", _aexit),
+        ):
+            saved = client.post(
+                "/dashboard/api/api-key", json={"api_key": "sk-openai-12345"}
+            ).json()
+
+        assert saved["connected_account"] is None
+        mock_client.get.assert_not_called()
+
+    def test_api_key_explicit_identity_skips_whoami(self) -> None:
+        """When the dashboard pre-supplies identity (connect-flow), we trust it."""
+        from unittest.mock import AsyncMock
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        mock_client = AsyncMock()
+
+        async def _aenter(self):
+            return mock_client
+
+        async def _aexit(self, *_):
+            return None
+
+        with (
+            patch("httpx.AsyncClient.__aenter__", _aenter),
+            patch("httpx.AsyncClient.__aexit__", _aexit),
+        ):
+            saved = client.post(
+                "/dashboard/api/api-key",
+                json={
+                    "api_key": "act_xxxxxxxxxxxxxxxx",
+                    "connected_account": {"email": "explicit@example.com"},
+                },
+            ).json()
+
+        assert saved["connected_account"]["email"] == "explicit@example.com"
+        mock_client.get.assert_not_called()
 
     def test_api_key_rejects_empty_and_non_string(self) -> None:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         assert client.post("/dashboard/api/api-key", json={"api_key": ""}).status_code == 400
-        assert (
-            client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
-        )
+        assert client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
         assert client.post("/dashboard/api/api-key", json={}).status_code == 400
+
+    def test_routing_topology_endpoint(self) -> None:
+        """/api/routing reports the proxy hop, the (optional) gateway hop,
+        and the provider hop based on target_base_url."""
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        # Default target is api.openai.com — no AceTeam middle hop.
+        r = client.get("/dashboard/api/routing").json()
+        names = [h["name"] for h in r["hops"]]
+        assert names == ["aep-proxy", "provider"]
+        assert r["hops"][0]["scope"] == "local"
+        assert "noop" in r["hops"][0]["detectors"]
+        assert r["hops"][1]["label"] == "OpenAI"
+
+        # Switch target to aceteam.ai → middle hop appears.
+        client.post(
+            "/dashboard/api/api-key",
+            json={"api_key": "sk-x", "base_url": "https://aceteam.ai/api/gateway"},
+        )
+        r = client.get("/dashboard/api/routing").json()
+        names = [h["name"] for h in r["hops"]]
+        assert names == ["aep-proxy", "aceteam-gateway", "provider"]
+        assert r["hops"][1]["label"] == "AceTeam Gateway"
+        assert any("auth" in s for s in r["hops"][1]["enforces"])
+
+    def test_api_key_strips_trailing_v1_from_base_url(self) -> None:
+        """OpenAI-SDK convention is base_url ending in /v1; the proxy concatenates
+        base_url with the request path (which already includes /v1/), so a
+        trailing /v1 on the target produces /v1/v1/chat/completions and 404s.
+        Strip it transparently so users can paste either form."""
+        import gc
+
+        from aceteam_aep.proxy.app import ProxyState
+
+        app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
+        client = TestClient(app)
+
+        # Find the ProxyState owned by this app instance via the api_key we set.
+        def state_for_key(key: str) -> ProxyState:
+            return next(
+                s for s in gc.get_objects() if isinstance(s, ProxyState) and s.api_key == key
+            )
+
+        # Trailing /v1 — must be stripped.
+        client.post(
+            "/dashboard/api/api-key",
+            json={
+                "api_key": "sk-strip-test-1",
+                "base_url": "https://aceteam.ai/api/gateway/v1",
+            },
+        )
+        assert state_for_key("sk-strip-test-1").target_base_url == "https://aceteam.ai/api/gateway"
+
+        # No /v1 — left alone.
+        client.post(
+            "/dashboard/api/api-key",
+            json={"api_key": "sk-strip-test-2", "base_url": "https://api.openai.com"},
+        )
+        assert state_for_key("sk-strip-test-2").target_base_url == "https://api.openai.com"
 
     def test_policy_test_endpoint_returns_violation(self) -> None:
         """Stub the CustomPolicy's __call__ so we don't need the PAW compiler online."""
@@ -210,9 +436,7 @@ class TestCustomPoliciesAPI:
         # Missing fields
         assert client.post("/dashboard/api/policy-test", json={}).status_code == 400
         # Bogus id
-        bad = client.post(
-            "/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"}
-        )
+        bad = client.post("/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"})
         assert bad.status_code == 400
         # Valid uuid but unknown policy
         from uuid import uuid4

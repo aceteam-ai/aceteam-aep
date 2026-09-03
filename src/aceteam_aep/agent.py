@@ -250,47 +250,57 @@ async def run_agent_loop_stream(
             accumulated_text = ""
             accumulated_tool_calls = []
             call_usage = Usage()
-
-            async for stream_chunk in client.chat_stream(
-                working,
-                tools=tool_schemas,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            ):
-                if stream_chunk.delta_text:
-                    accumulated_text += stream_chunk.delta_text
-                    yield chunk_event(stream_chunk.delta_text)
-
-                if stream_chunk.delta_tool_calls:
-                    accumulated_tool_calls.extend(stream_chunk.delta_tool_calls)
-
-                if stream_chunk.usage:
-                    call_usage = stream_chunk.usage
-
-                if stream_chunk.finish_reason:
-                    last_finish_reason = stream_chunk.finish_reason
-
-            total_usage = total_usage + call_usage
-
-            # Record cost
             cost_node = None
-            if cost_tracker and llm_span:
-                cost_node = cost_tracker.record_llm_cost(
-                    span_id=llm_span.span_id,
-                    model=client.model_name,
-                    usage=call_usage,
-                )
-                yield cost_event(cost_node)
+            ok = False
+
+            # `finally` runs on any exit — exception, cancellation, or
+            # forced close — so the llm_span ends and the reservation
+            # settles even when chat_stream raises (e.g.
+            # StreamFailedError on a silent upstream rejection). On
+            # success we additionally yield the cost + span_end events
+            # below; on failure observers can reconstruct the span
+            # status from the tracker (we can't safely yield during
+            # cancellation or forced close).
+            try:
+                async for stream_chunk in client.chat_stream(
+                    working,
+                    tools=tool_schemas,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    if stream_chunk.delta_text:
+                        accumulated_text += stream_chunk.delta_text
+                        yield chunk_event(stream_chunk.delta_text)
+
+                    if stream_chunk.delta_tool_calls:
+                        accumulated_tool_calls.extend(stream_chunk.delta_tool_calls)
+
+                    if stream_chunk.usage:
+                        call_usage = stream_chunk.usage
+
+                    if stream_chunk.finish_reason:
+                        last_finish_reason = stream_chunk.finish_reason
+
+                total_usage = total_usage + call_usage
+
+                if cost_tracker and llm_span:
+                    cost_node = cost_tracker.record_llm_cost(
+                        span_id=llm_span.span_id,
+                        model=client.model_name,
+                        usage=call_usage,
+                    )
+                    yield cost_event(cost_node)
+
+                ok = True
+            finally:
+                if llm_span and span_tracker:
+                    span_tracker.end_span(llm_span.span_id, status="OK" if ok else "ERROR")
+                if budget and reservation:
+                    actual_cost = cost_node.total_cost() if ok and cost_node else Decimal("0")
+                    budget.settle(reservation, actual_cost)
 
             if llm_span and span_tracker:
-                span_tracker.end_span(llm_span.span_id)
                 yield span_end_event(llm_span.span_id)
-
-            # Settle budget
-            if budget and reservation and cost_node:
-                budget.settle(reservation, cost_node.total_cost())
-            elif budget and reservation:
-                budget.settle(reservation, Decimal("0"))
 
             # Build assistant message
             assistant_msg = ChatMessage(
@@ -300,9 +310,30 @@ async def run_agent_loop_stream(
             )
             working.append(assistant_msg)
 
-            # No tool calls → done
+            # No tool calls -> done
             if not accumulated_tool_calls:
                 break
+
+            # If the response was truncated by max_tokens, tool call arguments
+            # are likely incomplete (truncated JSON).  Rather than executing
+            # broken calls or giving up, remove the partial assistant message
+            # and ask the model to retry with a more concise approach.
+            if last_finish_reason == "max_tokens":
+                working.pop()  # remove partial assistant message
+                working.append(
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "Your previous response was cut off because it exceeded the "
+                            "output token limit. Please try again with a more concise "
+                            "version. If the content is too large for a single tool call, "
+                            "split it into smaller parts across multiple calls."
+                        ),
+                    )
+                )
+                yield chunk_event("[Retrying -- previous response exceeded token limit]\n\n")
+                last_finish_reason = None
+                continue
 
             # Execute tool calls
             for tc in accumulated_tool_calls:

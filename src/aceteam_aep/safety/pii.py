@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from .base import SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
+
+# The transformers pipeline is an immutable, read-only artifact — ``check()`` only
+# runs inference. Cache it at module level, keyed by model name, so per-session
+# detector instances share one in-memory copy instead of each rebuilding the model.
+_PIPELINE_CACHE: dict[str, object] = {}
+_PIPELINE_LOCK = threading.Lock()
 
 _PII_ENTITIES = {
     "SSN",
@@ -20,6 +27,25 @@ _PII_ENTITIES = {
     "PERSON",
     "ID_NUM",
 }
+
+# Per-entity-type severity. Identifiers that enable direct financial/identity
+# fraud are "high"; contact info and names are "low". Unknown entity types
+# default to "medium" via _severity_for().
+_ENTITY_SEVERITY: dict[str, str] = {
+    "SSN": "high",
+    "CREDIT_CARD": "high",
+    "ID_NUM": "medium",
+    "EMAIL": "low",
+    "PHONE": "low",
+    "IP_ADDRESS": "low",
+    "PERSON": "low",
+}
+
+_DEFAULT_SEVERITY = "medium"
+
+
+def _severity_for(entity_type: str) -> str:
+    return _ENTITY_SEVERITY.get(entity_type, _DEFAULT_SEVERITY)
 
 
 def _normalize_entity_label(raw: str) -> str:
@@ -85,25 +111,32 @@ class PiiDetector(SafetyDetector):
 
     def _load(self) -> None:
         self._load_attempted = True
-        try:
-            from transformers import pipeline
+        with _PIPELINE_LOCK:
+            cached = _PIPELINE_CACHE.get(self._model_name)
+            if cached is not None:
+                self._pipeline = cached
+                return
+            try:
+                from transformers import pipeline
 
-            self._pipeline = pipeline(
-                "token-classification",
-                model=self._model_name,
-                aggregation_strategy="simple",
-                device=-1,
-            )
-        except ImportError:
-            log.warning("transformers not installed, PII detector falling back to regex")
-            self._fallback = True
-        except Exception:
-            log.warning(
-                "Failed to load PII model %s, falling back to regex",
-                self._model_name,
-                exc_info=True,
-            )
-            self._fallback = True
+                self._pipeline = pipeline(
+                    "token-classification",
+                    model=self._model_name,
+                    aggregation_strategy="simple",
+                    device=-1,
+                )
+                _PIPELINE_CACHE[self._model_name] = self._pipeline
+                return
+            except ImportError:
+                log.warning("transformers not installed, PII detector falling back to regex")
+                self._fallback = True
+            except Exception:
+                log.warning(
+                    "Failed to load PII model %s, falling back to regex",
+                    self._model_name,
+                    exc_info=True,
+                )
+                self._fallback = True
 
     async def check(
         self,
@@ -168,7 +201,7 @@ class PiiDetector(SafetyDetector):
                 span_start=span_start,
                 span_end=span_end,
                 signal_type="pii",
-                severity="high",
+                severity=_severity_for(ent_type),
                 call_id=call_id,
                 detail=(
                     f"PII detected: {ent_type} "
@@ -194,7 +227,7 @@ class PiiDetector(SafetyDetector):
                     span_start=span_start,
                     span_end=span_end,
                     signal_type="pii",
-                    severity="high",
+                    severity=_severity_for(pii_type),
                     call_id=call_id,
                     detail=(f"PII pattern detected: {pii_type} [{span_start}:{span_end}] ({tag})"),
                     score=1.0,
