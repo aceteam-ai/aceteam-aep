@@ -11,6 +11,7 @@ import pytest
 from aceteam_aep import create_client
 from aceteam_aep.providers import StreamFailedError
 from aceteam_aep.providers.anthropic import AnthropicClient
+from aceteam_aep.types import ChatMessage, Usage
 
 
 class _FakeAsyncStream:
@@ -64,6 +65,21 @@ def _finish_event(stop_reason: str = "end_turn") -> MagicMock:
     event.delta.stop_reason = stop_reason
     event.usage = MagicMock()
     event.usage.output_tokens = 12
+    return event
+
+
+def _message_start_event(
+    input_tokens: int = 3,
+    cache_read: int | None = 0,
+    cache_creation: int | None = 0,
+) -> MagicMock:
+    event = MagicMock()
+    event.type = "message_start"
+    event.message = MagicMock()
+    event.message.usage = MagicMock()
+    event.message.usage.input_tokens = input_tokens
+    event.message.usage.cache_read_input_tokens = cache_read
+    event.message.usage.cache_creation_input_tokens = cache_creation
     return event
 
 
@@ -189,6 +205,8 @@ def _make_nonstream_response() -> MagicMock:
     response.usage = MagicMock()
     response.usage.input_tokens = 3
     response.usage.output_tokens = 5
+    response.usage.cache_read_input_tokens = 0
+    response.usage.cache_creation_input_tokens = 0
     response.model = "claude-opus-4-8"
     response.stop_reason = "end_turn"
     return response
@@ -251,3 +269,212 @@ async def test_chat_stream_includes_temperature_by_default() -> None:
         pass
 
     assert "temperature" in stream_mock.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching: request shaping. cache_control breakpoints must land on the
+# static prefix (tool definitions + system prompt) so Anthropic serves the
+# repeated ~26k-token prefix from cache. Behavior-neutral: the text is
+# byte-identical whether or not the breakpoints are present.
+# ---------------------------------------------------------------------------
+
+_OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "description": "search the web",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calc",
+            "description": "do math",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def _make_chat_client(*, prompt_caching: bool | None) -> tuple[AnthropicClient, AsyncMock]:
+    client = AnthropicClient(api_key="test", model="claude-opus-4-8", prompt_caching=prompt_caching)
+    create_mock = AsyncMock(return_value=_make_nonstream_response())
+    client._client = MagicMock()
+    client._client.messages.create = create_mock
+    return client, create_mock
+
+
+@pytest.mark.asyncio
+async def test_chat_caches_system_and_last_tool_when_enabled() -> None:
+    client, create_mock = _make_chat_client(prompt_caching=True)
+
+    await client.chat(
+        messages=[ChatMessage(role="system", content="You are helpful."),
+                  ChatMessage(role="user", content="hi")],
+        tools=_OPENAI_TOOLS,
+    )
+
+    kwargs = create_mock.call_args.kwargs
+    # System becomes a block list with a cache_control breakpoint on the block.
+    system = kwargs["system"]
+    assert isinstance(system, list)
+    assert system[0]["text"] == "You are helpful."
+    assert system[-1]["cache_control"] == {"type": "ephemeral"}
+    # Only the last tool carries a breakpoint; earlier tools do not.
+    tools = kwargs["tools"]
+    assert "cache_control" not in tools[0]
+    assert tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_chat_no_cache_control_when_disabled() -> None:
+    client, create_mock = _make_chat_client(prompt_caching=False)
+
+    await client.chat(
+        messages=[ChatMessage(role="system", content="You are helpful."),
+                  ChatMessage(role="user", content="hi")],
+        tools=_OPENAI_TOOLS,
+    )
+
+    kwargs = create_mock.call_args.kwargs
+    # Disabled path is a byte-identical revert: plain string system, no markers.
+    assert kwargs["system"] == "You are helpful."
+    assert all("cache_control" not in tool for tool in kwargs["tools"])
+
+
+@pytest.mark.asyncio
+async def test_chat_caches_last_tool_without_system_prompt() -> None:
+    client, create_mock = _make_chat_client(prompt_caching=True)
+
+    await client.chat(messages=[ChatMessage(role="user", content="hi")], tools=_OPENAI_TOOLS)
+
+    kwargs = create_mock.call_args.kwargs
+    # No system prompt: the tools are the last static block, so they carry the
+    # breakpoint and no system param is sent.
+    assert "system" not in kwargs
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_chat_cache_control_wraps_full_system_with_schema() -> None:
+    client, create_mock = _make_chat_client(prompt_caching=True)
+
+    await client.chat(
+        messages=[ChatMessage(role="system", content="Base prompt."),
+                  ChatMessage(role="user", content="hi")],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"schema": {"type": "object", "properties": {"x": {"type": "string"}}}},
+        },
+    )
+
+    system = create_mock.call_args.kwargs["system"]
+    # A single block holds base prompt + schema instruction, and the breakpoint
+    # sits on that fully-assembled block (not before the schema append).
+    assert isinstance(system, list)
+    assert len(system) == 1
+    assert system[0]["text"].startswith("Base prompt.")
+    assert "valid JSON object" in system[0]["text"]
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_env_toggle_disables_caching(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AEP_PROMPT_CACHING", "0")
+    # prompt_caching=None → env toggle decides.
+    client, create_mock = _make_chat_client(prompt_caching=None)
+
+    await client.chat(
+        messages=[ChatMessage(role="system", content="You are helpful.")],
+        tools=_OPENAI_TOOLS,
+    )
+
+    assert create_mock.call_args.kwargs["system"] == "You are helpful."
+    assert all("cache_control" not in tool for tool in create_mock.call_args.kwargs["tools"])
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_shapes_cache_control_when_enabled() -> None:
+    client = AnthropicClient(api_key="test", model="claude-opus-4-8", prompt_caching=True)
+    stream_mock = MagicMock(
+        return_value=_FakeAsyncStream([_message_start_event(), _finish_event()])
+    )
+    client._client = MagicMock()
+    client._client.messages.stream = stream_mock
+
+    async for _ in client.chat_stream(
+        messages=[ChatMessage(role="system", content="You are helpful.")],
+        tools=_OPENAI_TOOLS,
+    ):
+        pass
+
+    kwargs = stream_mock.call_args.kwargs
+    assert kwargs["system"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert kwargs["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching: usage propagation. cache_read/cache_creation must surface
+# on Usage so the host app can log and bill them.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_propagates_cache_usage() -> None:
+    client, create_mock = _make_chat_client(prompt_caching=True)
+    response = _make_nonstream_response()
+    response.usage.cache_read_input_tokens = 24000
+    response.usage.cache_creation_input_tokens = 100
+    create_mock.return_value = response
+
+    result = await client.chat(messages=[ChatMessage(role="user", content="hi")])
+
+    assert result.usage.cache_read_input_tokens == 24000
+    assert result.usage.cache_creation_input_tokens == 100
+    # prompt_tokens keeps its prior meaning (the uncached remainder Anthropic
+    # reports as input_tokens); cache fields are additive.
+    assert result.usage.prompt_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_chat_cache_usage_defaults_zero_when_absent() -> None:
+    client, create_mock = _make_chat_client(prompt_caching=True)
+    response = _make_nonstream_response()
+    # SDK reports None when caching is inactive; must coerce to 0.
+    response.usage.cache_read_input_tokens = None
+    response.usage.cache_creation_input_tokens = None
+    create_mock.return_value = response
+
+    result = await client.chat(messages=[ChatMessage(role="user", content="hi")])
+
+    assert result.usage.cache_read_input_tokens == 0
+    assert result.usage.cache_creation_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_propagates_cache_usage() -> None:
+    client = AnthropicClient(api_key="test", model="claude-opus-4-8", prompt_caching=True)
+    stream_mock = MagicMock(
+        return_value=_FakeAsyncStream(
+            [_message_start_event(cache_read=24000, cache_creation=100), _finish_event()]
+        )
+    )
+    client._client = MagicMock()
+    client._client.messages.stream = stream_mock
+
+    usages = [c.usage async for c in client.chat_stream(messages=[]) if c.usage]
+
+    assert usages, "expected a usage-bearing chunk"
+    assert usages[-1].cache_read_input_tokens == 24000
+    assert usages[-1].cache_creation_input_tokens == 100
+
+
+def test_usage_add_sums_cache_fields() -> None:
+    # Aggregation across an agent loop (agent.py does total += call_usage) must
+    # carry the cache fields, not drop them.
+    total = Usage() + Usage(cache_read_input_tokens=10, cache_creation_input_tokens=2)
+    total = total + Usage(cache_read_input_tokens=5, cache_creation_input_tokens=3)
+    assert total.cache_read_input_tokens == 15
+    assert total.cache_creation_input_tokens == 5
