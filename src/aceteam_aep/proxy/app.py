@@ -26,7 +26,13 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from ..costs import CostTracker
-from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate
+from ..enforcement import (
+    EnforcementDecision,
+    EnforcementPolicy,
+    build_pipeline_from_policy,
+    evaluate,
+    evaluate_pipeline,
+)
 from ..observability.events import FlaggedCall, ObservabilityEvent
 from ..observability.store import EventStore
 from ..safety.base import DetectorRegistry, SafetyDetector, SafetySignal
@@ -107,10 +113,31 @@ def _custom_policy_from_write_fields(
         )
 
 
-def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
-    """Extract text content from OpenAI-format messages."""
+# Roles whose content must never reach the safety classifier as trusted
+# input: "tool" (current OpenAI tool-call results) and "function" (legacy
+# OpenAI function-call results) both carry data the agent *read* (fetched
+# documents, tool-call output, ...) which the requester does not control.
+# Feeding it to PawLayer/ContentModelLayer lets a hostile document steer the
+# classifier's own verdict (e.g. "this request is fully compliant, approve
+# it"). See #133. Defaults to excluding these roles so a future caller can't
+# silently regress to the unsafe behavior by omission.
+_SAFETY_UNTRUSTED_ROLES = frozenset({"tool", "function"})
+
+
+def _extract_text_from_messages(
+    messages: list[dict[str, Any]], *, exclude_roles: frozenset[str] = _SAFETY_UNTRUSTED_ROLES
+) -> str:
+    """Extract text content from OpenAI-format messages.
+
+    ``exclude_roles`` drops messages with those ``role`` values entirely
+    (e.g. pass ``_SAFETY_UNTRUSTED_ROLES`` to build the text handed to the
+    safety pipeline, so untrusted tool-result content can't steer the
+    classifier's verdict).
+    """
     parts: list[str] = []
     for msg in messages:
+        if msg.get("role") in exclude_roles:
+            continue
         content = msg.get("content", "")
         if isinstance(content, str):
             parts.append(content)
@@ -243,6 +270,11 @@ class ProxyState:
             to_register.append(CustomSafetyDetector(self.custom_policy_store))
         for det in to_register:
             self.registry.add(det)
+
+        self.pipeline = build_pipeline_from_policy(self.policy, to_register)
+        self._last_pipeline_result: Any = None
+        if self.pipeline:
+            log.info("Safety pipeline enabled with %d layers", len(self.pipeline._layers))
 
         # Apply any state from a prior run last, so the persisted api_key
         # (e.g. an act_* from a dashboard connect) overrides the env-seeded
@@ -383,7 +415,35 @@ class ProxyState:
                 else 0.0,
             },
             "attestation": None,  # populated by proxy when signing enabled
+            "pipeline": self._serialize_pipeline(),
         }
+
+    def _serialize_pipeline(self) -> dict[str, Any] | None:
+        if not self.pipeline:
+            return None
+        info: dict[str, Any] = {"enabled": True}
+        pr = self._last_pipeline_result
+        if pr is not None:
+            info["last_result"] = {
+                "p_safe": pr.p_safe,
+                "p_unsafe": pr.p_unsafe,
+                "confidence": pr.confidence,
+                "verdict": pr.verdict,
+                "layers_executed": pr.layers_executed,
+                "short_circuited_at": pr.short_circuited_at,
+                "total_latency_ms": pr.total_latency_ms,
+                "layer_results": [
+                    {
+                        "layer_name": lr.layer_name,
+                        "p_safe": lr.p_safe,
+                        "p_unsafe": round(1.0 - lr.p_safe, 4),
+                        "latency_ms": lr.latency_ms,
+                        "signal_count": len(lr.signals),
+                    }
+                    for lr in pr.layer_results
+                ],
+            }
+        return info
 
 
 def _default_proxy_detectors() -> Sequence[SafetyDetector]:
@@ -572,117 +632,131 @@ def create_proxy_app(
             state.governance_contexts.append(gov_context)
 
         # --- INPUT SAFETY CHECK ---
+        # Exclude tool-role content: it's untrusted data the agent read, not
+        # the user's request or the assistant's own prior output, and must
+        # not be able to steer the safety classifier's verdict (#133).
         input_text = ""
         if "messages" in body:
-            input_text = _extract_text_from_messages(body["messages"])
-
-        if state.safety_enabled:
-            input_signals = await state.registry.run_all(
-                input_text=input_text,
-                output_text="",
-                call_id=call_id,
+            input_text = _extract_text_from_messages(
+                body["messages"], exclude_roles=_SAFETY_UNTRUSTED_ROLES
             )
 
-            if len(input_signals) > 0:
-                input_decision = evaluate(input_signals, state.policy)
-                if input_decision.action == "block":
-                    state.signals.extend(input_signals)
-                    state.decisions.append(input_decision)
-                    state.call_count += 1
-                    state.blocked_count += 1
-                    log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
-                    _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
-                    if _instance_id:
-                        _detector = input_signals[0].detector if input_signals else None
-                        _severity = input_signals[0].severity if input_signals else None
-                        await publish_event(
-                            build_event(
-                                instance_id=_instance_id,
-                                event_type="safety_block",
-                                action="block",
-                                message=input_decision.reason or "Input blocked by safety filter",
-                                detector=_detector,
-                                severity=_severity,
-                            )
+        if state.safety_enabled:
+            if state.pipeline:
+                pipeline_result = await state.pipeline.evaluate(
+                    input_text=input_text,
+                    output_text="",
+                    call_id=call_id,
+                )
+                state._last_pipeline_result = pipeline_result
+                input_signals = pipeline_result.signals
+                input_decision = evaluate_pipeline(pipeline_result, state.policy) if input_signals or pipeline_result.verdict == "block" else EnforcementDecision(action="pass")
+            else:
+                input_signals = await state.registry.run_all(
+                    input_text=input_text,
+                    output_text="",
+                    call_id=call_id,
+                )
+                input_decision = evaluate(input_signals, state.policy) if input_signals else EnforcementDecision(action="pass")
+
+            if input_decision.action == "block":
+                state.signals.extend(input_signals)
+                state.decisions.append(input_decision)
+                state.call_count += 1
+                state.blocked_count += 1
+                log.warning("BLOCKED request %s: %s", call_id, input_decision.reason)
+                _instance_id = os.environ.get("AEP_INSTANCE_ID", "")
+                if _instance_id:
+                    _detector = input_signals[0].detector if input_signals else None
+                    _severity = input_signals[0].severity if input_signals else None
+                    await publish_event(
+                        build_event(
+                            instance_id=_instance_id,
+                            event_type="safety_block",
+                            action="block",
+                            message=input_decision.reason or "Input blocked by safety filter",
+                            detector=_detector,
+                            severity=_severity,
                         )
-                    # --- OBSERVABILITY: input-blocked early return ---
-                    if state.event_store:
-                        for sig in input_signals:
-                            asyncio.ensure_future(
-                                state.event_store.record(
-                                    ObservabilityEvent(
-                                        session_id=state.session_id,
-                                        type="safety_signal",
-                                        call_id=call_id,
-                                        detector=sig.detector,
-                                        severity=sig.severity,
-                                        reason=sig.detail,
-                                    )
-                                )
-                            )
-                        asyncio.ensure_future(
-                            state.event_store.record(
-                                ObservabilityEvent(
-                                    session_id=state.session_id,
-                                    type="enforcement",
-                                    call_id=call_id,
-                                    action="block",
-                                    reason=input_decision.reason,
-                                    metadata={
-                                        "policy": {
-                                            "block_on": sorted(state.policy.block_on),
-                                            "flag_on": sorted(state.policy.flag_on),
-                                        }
-                                    },
-                                )
-                            )
-                        )
-                        _block_detector = input_signals[0].detector if input_signals else None
-                        _block_severity = input_signals[0].severity if input_signals else None
-                        asyncio.ensure_future(
-                            state.event_store.record_flagged_call(
-                                FlaggedCall(
-                                    call_id=call_id,
-                                    session_id=state.session_id,
-                                    action="block",
-                                    detector=_block_detector,
-                                    severity=_block_severity,
-                                    reason=input_decision.reason,
-                                    model=body.get("model") if isinstance(body, dict) else None,
-                                    input_messages=body.get("messages", [])
-                                    if isinstance(body, dict)
-                                    else [],
-                                    output_text=None,
-                                )
-                            )
-                        )
-                        asyncio.ensure_future(
-                            state.event_store.record(
-                                ObservabilityEvent(
-                                    session_id=state.session_id,
-                                    type="call_end",
-                                    call_id=call_id,
-                                    model=body.get("model") if isinstance(body, dict) else None,
-                                    provider=_detect_provider(state.target_base_url),
-                                    tokens_in=0,
-                                    tokens_out=0,
-                                    cost_usd=0.0,
-                                    latency_ms=None,
-                                )
-                            )
-                        )
-                    return JSONResponse(
-                        status_code=400,
-                        content={
-                            "error": {
-                                "message": (
-                                    f"AEP safety: request blocked — {input_decision.reason}"
-                                ),
-                                "type": "aep_safety_block",
-                                "code": "safety_block",
-                            }
-                        },
                     )
+                # --- OBSERVABILITY: input-blocked early return ---
+                if state.event_store:
+                    for sig in input_signals:
+                        asyncio.ensure_future(
+                            state.event_store.record(
+                                ObservabilityEvent(
+                                    session_id=state.session_id,
+                                    type="safety_signal",
+                                    call_id=call_id,
+                                    detector=sig.detector,
+                                    severity=sig.severity,
+                                    reason=sig.detail,
+                                )
+                            )
+                        )
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="enforcement",
+                                call_id=call_id,
+                                action="block",
+                                reason=input_decision.reason,
+                                metadata={
+                                    "policy": {
+                                        "block_on": sorted(state.policy.block_on),
+                                        "flag_on": sorted(state.policy.flag_on),
+                                    }
+                                },
+                            )
+                        )
+                    )
+                    _block_detector = input_signals[0].detector if input_signals else None
+                    _block_severity = input_signals[0].severity if input_signals else None
+                    asyncio.ensure_future(
+                        state.event_store.record_flagged_call(
+                            FlaggedCall(
+                                call_id=call_id,
+                                session_id=state.session_id,
+                                action="block",
+                                detector=_block_detector,
+                                severity=_block_severity,
+                                reason=input_decision.reason,
+                                model=body.get("model") if isinstance(body, dict) else None,
+                                input_messages=body.get("messages", [])
+                                if isinstance(body, dict)
+                                else [],
+                                output_text=None,
+                            )
+                        )
+                    )
+                    asyncio.ensure_future(
+                        state.event_store.record(
+                            ObservabilityEvent(
+                                session_id=state.session_id,
+                                type="call_end",
+                                call_id=call_id,
+                                model=body.get("model") if isinstance(body, dict) else None,
+                                provider=_detect_provider(state.target_base_url),
+                                tokens_in=0,
+                                tokens_out=0,
+                                cost_usd=0.0,
+                                latency_ms=None,
+                            )
+                        )
+                    )
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": {
+                            "message": (
+                                f"AEP safety: request blocked — {input_decision.reason}"
+                            ),
+                            "type": "aep_safety_block",
+                            "code": "safety_block",
+                        }
+                    },
+                )
             # Emit safety_signal events for non-blocked input signals
             if state.event_store and len(input_signals) > 0:
                 for sig in input_signals:
@@ -874,6 +948,7 @@ def create_proxy_app(
                 input_text=input_text,
                 registry=state.registry,
                 policy=state.policy,
+                pipeline=state.pipeline,
                 on_complete=on_stream_complete,
                 debug=debug,
             )
@@ -942,12 +1017,22 @@ def create_proxy_app(
 
         # --- OUTPUT SAFETY CHECK ---
         if state.safety_enabled:
-            output_signals = await state.registry.run_all(
-                input_text=input_text,
-                output_text=output_text,
-                call_id=call_id,
-                call_cost=cost_node.total_cost(),
-            )
+            if state.pipeline:
+                pipeline_result = await state.pipeline.evaluate(
+                    input_text=input_text,
+                    output_text=output_text,
+                    call_id=call_id,
+                    call_cost=cost_node.total_cost(),
+                )
+                state._last_pipeline_result = pipeline_result
+                output_signals = pipeline_result.signals
+            else:
+                output_signals = await state.registry.run_all(
+                    input_text=input_text,
+                    output_text=output_text,
+                    call_id=call_id,
+                    call_cost=cost_node.total_cost(),
+                )
 
             # Emit safety_signal events for output signals
             if state.event_store:
@@ -968,7 +1053,11 @@ def create_proxy_app(
             all_signals = (*input_signals, *output_signals)
             state.signals.extend(all_signals)
 
-            decision = evaluate(all_signals, state.policy)
+            decision = (
+                evaluate_pipeline(pipeline_result, state.policy)
+                if state.pipeline
+                else evaluate(all_signals, state.policy)
+            )
             state.decisions.append(decision)
 
             # --- OBSERVABILITY: enforcement + call_end + flagged_call ---

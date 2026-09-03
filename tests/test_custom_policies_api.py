@@ -10,7 +10,7 @@ from starlette.testclient import TestClient
 
 from aceteam_aep.proxy.app import create_proxy_app
 from aceteam_aep.safety.base import SafetyDetector, SafetySignal
-from aceteam_aep.safety.custom import CustomPolicy, CustomPolicyStore, CustomSafetyDetector
+from aceteam_aep.safety.custom import CustomPolicy, CustomPolicyStore, CustomSafetyDetector, PawResult
 
 
 class _NoopDetector(SafetyDetector):
@@ -473,10 +473,10 @@ class TestCustomSafetyDetector:
         )
         det = CustomSafetyDetector(store)
 
-        async def violation(_self: CustomPolicy, text: str) -> bool:
-            return text != "bad"
+        async def violation(_self: CustomPolicy, text: str) -> PawResult:
+            return PawResult(compliant=(text != "bad"), p_compliant=0.1 if text == "bad" else 0.9)
 
-        with patch.object(CustomPolicy, "__call__", violation):
+        with patch.object(CustomPolicy, "check_with_confidence", violation):
             sigs = await det.check(
                 input_text="bad",
                 output_text="ok",
@@ -499,10 +499,10 @@ class TestCustomSafetyDetector:
         )
         det = CustomSafetyDetector(store)
 
-        async def violation(_self: CustomPolicy, text: str) -> bool:
-            return text != "bad"
+        async def violation(_self: CustomPolicy, text: str) -> PawResult:
+            return PawResult(compliant=(text != "bad"), p_compliant=0.1 if text == "bad" else 0.9)
 
-        with patch.object(CustomPolicy, "__call__", violation):
+        with patch.object(CustomPolicy, "check_with_confidence", violation):
             sigs = await det.check(
                 input_text="fine",
                 output_text="bad",
@@ -518,10 +518,10 @@ class TestCustomSafetyDetector:
         det = CustomSafetyDetector(store)
         checked: list[str] = []
 
-        async def track(_self: CustomPolicy, text: str) -> bool:
+        async def track(_self: CustomPolicy, text: str) -> PawResult:
             checked.append(text)
-            return True
+            return PawResult(compliant=True, p_compliant=0.95)
 
-        with patch.object(CustomPolicy, "__call__", track):
+        with patch.object(CustomPolicy, "check_with_confidence", track):
             await det.check(input_text="in", output_text="out", call_id="c3")
         assert checked == ["out", "in"]

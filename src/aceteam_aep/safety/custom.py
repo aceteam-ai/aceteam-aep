@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Literal, Self
 
@@ -16,6 +18,88 @@ if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class PawResult:
+    """Result from a PAW policy check with optional confidence."""
+
+    compliant: bool
+    p_compliant: float | None = None
+    chunk_results: list[tuple[bool, float | None]] | None = None
+
+
+def _extract_yn_probability(fn: PawFunction) -> float | None:
+    """Extract P(Y) vs P(N) from llama.cpp logits after eval.
+
+    Must be called after fn._llm.eval() and before sample().
+    Returns the softmax probability of the Y token, or None on failure.
+    """
+    try:
+        import ctypes
+
+        import llama_cpp as _llama
+
+        ctx = fn._llm.ctx
+        n_vocab = fn._llm.n_vocab()
+
+        logits_ptr = _llama.llama_get_logits_ith(ctx, -1)
+        if not logits_ptr:
+            return None
+
+        y_ids = fn._llm.tokenize(b"Y", add_bos=False, special=False)
+        n_ids = fn._llm.tokenize(b"N", add_bos=False, special=False)
+        if not y_ids or not n_ids:
+            return None
+
+        logit_y = float(logits_ptr[y_ids[0]])
+        logit_n = float(logits_ptr[n_ids[0]])
+
+        max_l = max(logit_y, logit_n)
+        exp_y = math.exp(logit_y - max_l)
+        exp_n = math.exp(logit_n - max_l)
+        return exp_y / (exp_y + exp_n)
+    except Exception:
+        log.debug("Failed to extract Y/N logprobs from PAW", exc_info=True)
+        return None
+
+
+def _paw_call_with_logprobs(
+    fn: PawFunction, text: str
+) -> tuple[str, float | None]:
+    """Replicate PawFunction.__call__ with logit extraction before sampling."""
+    fn._llm.n_tokens = fn._n_prefix
+
+    input_with_suffix = text + fn._suffix_text
+    input_tokens = fn._llm.tokenize(
+        input_with_suffix.encode("utf-8"),
+        add_bos=False,
+        special=True,
+    )
+
+    tokens_used = fn._n_prefix + len(input_tokens)
+    remaining = fn._n_ctx - tokens_used
+    if remaining <= 0:
+        raise ValueError(
+            f"Input too long: {tokens_used} tokens used "
+            f"(prefix={fn._n_prefix}, input={len(input_tokens)}), "
+            f"context window={fn._n_ctx}."
+        )
+
+    fn._llm.eval(input_tokens)
+
+    p_compliant = _extract_yn_probability(fn)
+
+    output_tokens: list[int] = []
+    for _ in range(remaining):
+        token = fn._llm.sample(temp=0)
+        if token == fn._llm.token_eos():
+            break
+        output_tokens.append(token)
+        fn._llm.eval([token])
+
+    output_bytes = fn._llm.detokenize(output_tokens)
+    return output_bytes.decode("utf-8", errors="replace").strip(), p_compliant
 
 CustomPolicyAppliesTo = Literal["input", "output", "both"]
 CustomPolicySeverity = Literal["low", "medium", "high"]
@@ -108,6 +192,21 @@ class AsyncPawFunction:
         fn = await self.prepare()
         return fn(text)
 
+    async def call_with_confidence(self, text: str) -> tuple[str, float | None]:
+        """Run PAW inference and extract Y/N token probability.
+
+        Returns (output_text, p_compliant) where p_compliant is the softmax
+        probability of the Y token, or None if logit extraction failed.
+        Falls back to normal __call__ if logprob extraction is unavailable.
+        """
+        fn = await self.prepare()
+        try:
+            return _paw_call_with_logprobs(fn, text)
+        except Exception:
+            log.debug("Logprob path failed, falling back to standard call", exc_info=True)
+            output = fn(text)
+            return output, None
+
 
 class CustomPolicy(BaseModel):
     """Custom policy for the safety detector that can evaluate arbitrary rules
@@ -196,6 +295,31 @@ class CustomPolicy(BaseModel):
             if not raw.strip().upper().startswith("Y"):
                 return False
         return True
+
+    async def check_with_confidence(self, text: str) -> PawResult:
+        """Evaluate policy with per-chunk confidence scores.
+
+        Returns a PawResult with overall compliance and per-chunk P(compliant).
+        """
+        chunks = _iter_policy_text_chunks(text, _CUSTOM_POLICY_CHUNK_CHARS)
+        chunk_results: list[tuple[bool, float | None]] = []
+        overall_compliant = True
+        min_p: float | None = None
+
+        for piece in chunks:
+            raw, p_compliant = await self._paw.call_with_confidence(piece)
+            is_compliant = raw.strip().upper().startswith("Y")
+            chunk_results.append((is_compliant, p_compliant))
+            if not is_compliant:
+                overall_compliant = False
+            if p_compliant is not None:
+                min_p = p_compliant if min_p is None else min(min_p, p_compliant)
+
+        return PawResult(
+            compliant=overall_compliant,
+            p_compliant=min_p,
+            chunk_results=chunk_results if len(chunks) > 1 else None,
+        )
 
 
 def default_custom_policies() -> tuple[CustomPolicy, ...]:
@@ -303,19 +427,34 @@ class CustomSafetyDetector(SafetyDetector):
             signals: list[SafetySignal] = []
             try:
                 for source, text in _sources_for_policy(policy):
-                    is_safe = await policy(text)
-                    if not is_safe:
+                    result = await policy.check_with_confidence(text)
+                    if not result.compliant:
+                        p_unsafe = (
+                            round(1.0 - result.p_compliant, 4)
+                            if result.p_compliant is not None
+                            else None
+                        )
+                        detail = f"{source} violates {policy.name}"
+                        if result.p_compliant is not None:
+                            detail += f" (p_unsafe={p_unsafe})"
+                        if result.chunk_results and len(result.chunk_results) > 1:
+                            failing = [
+                                i
+                                for i, (ok, _) in enumerate(result.chunk_results)
+                                if not ok
+                            ]
+                            detail += f" [chunks {failing}]"
                         signals.append(
                             SafetySignal(
                                 signal_type="custom_safety",
                                 severity=policy.severity,
                                 call_id=call_id,
-                                detail=f"{source} violates {policy.name}",
+                                detail=detail,
+                                score=p_unsafe,
                             )
                         )
             except Exception:
                 log.warning("Custom safety check failed for %s", policy.name, exc_info=True)
-                pass
             return signals
 
         signals: list[SafetySignal] = []
@@ -334,5 +473,6 @@ __all__ = [
     "CustomPolicySeverity",
     "CustomPolicyStore",
     "CustomSafetyDetector",
+    "PawResult",
     "default_custom_policies",
 ]
