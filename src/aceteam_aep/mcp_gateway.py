@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 log = logging.getLogger(__name__)
@@ -169,21 +170,25 @@ def create_mcp_app(state: ProxyState) -> ASGIApp | None:
         Returns total cost, per-call costs, and cost by model.
         """
         costs = state._call_costs
-        total = float(state.cost_usd)
+        total = state.cost_usd
 
-        # Build per-model breakdown from spans
-        model_costs: dict[str, float] = {}
+        # Build per-model breakdown from spans. span.cost is a CostNode, not a
+        # number — accumulate its Decimal total and convert once at the end.
+        model_totals: dict[str, Decimal] = {}
         for span in state.span_tracker.get_spans():
             model = span.executor_id or "unknown"
-            cost = float(span.cost) if hasattr(span, "cost") and span.cost else 0.0
-            model_costs[model] = model_costs.get(model, 0.0) + cost
+            cost = span.cost.total_cost() if span.cost else Decimal("0")
+            model_totals[model] = model_totals.get(model, Decimal("0")) + cost
+        model_costs = {model: float(subtotal) for model, subtotal in model_totals.items()}
+
+        savings = state.blocked_count * (total / max(state.call_count, 1))
 
         return json.dumps(
             {
-                "total_cost_usd": total,
+                "total_cost_usd": float(total),
                 "total_calls": state.call_count,
                 "blocked_calls": state.blocked_count,
-                "savings_from_blocks": f"${state.blocked_count * (total / max(state.call_count, 1)):.4f}",
+                "savings_from_blocks": f"${savings:.4f}",
                 "cost_per_call": [float(c) for c in costs[-10:]],  # last 10
                 "cost_by_model": model_costs,
             },
