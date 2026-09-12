@@ -10,7 +10,13 @@ import time
 
 import httpx
 
-from aceteam_aep.attestation import AepPublicKey, verify_verdict
+from aceteam_aep.attestation import (
+    STATEMENT_SCHEMA,
+    STATEMENT_VERSION,
+    AepPublicKey,
+    verify_chain,
+    verify_verdict,
+)
 
 pytestmark = __import__("pytest").mark.integration
 
@@ -89,35 +95,70 @@ def test_signed_proxy_end_to_end(tmp_path):
             )
             assert r.status_code == 200
 
-            # Check attestation headers present
+            # Check attestation headers present (legacy, narrow, unchanged)
             assert "x-aep-verdict-hash" in r.headers
             assert "x-aep-signature" in r.headers
             assert r.headers["x-aep-signer-id"] == "proxy:integration-test"
             assert r.headers["x-aep-chain-height"] == str(i)
             assert "x-aep-chain-hash" in r.headers
 
-            # Collect chain entry for verification
+            # Check format_version 2 statement headers present
+            assert r.headers["x-aep-format-version"] == str(STATEMENT_VERSION)
+            assert "x-aep-execution-id" in r.headers
+            assert r.headers["x-aep-sequence"] == str(i)
+            assert "x-aep-timestamp" in r.headers
+            assert "x-aep-signals" in r.headers
+            assert "x-aep-prev-link" in r.headers
+            assert "x-aep-statement-digest" in r.headers
+            assert "x-aep-statement-signature" in r.headers
+
+            # Collect a *complete* chain entry purely from what an HTTP-only
+            # consumer can archive — this is the reproducibility contract:
+            # every field bound into the statement must be reconstructable
+            # from what actually crosses the wire, not only from in-process
+            # AttestationEngine.chain access.
             collected_chain.append(
                 {
+                    # legacy (narrow, unchanged)
                     "call_id": r.headers["x-aep-call-id"],
                     "action": r.headers["x-aep-enforcement"],
                     "verdict_hash": r.headers["x-aep-verdict-hash"],
                     "signature": r.headers["x-aep-signature"],
                     "chain_height": int(r.headers["x-aep-chain-height"]),
                     "chain_hash": r.headers["x-aep-chain-hash"],
+                    # format_version 2 authenticated statement
+                    "schema": STATEMENT_SCHEMA,
+                    "format_version": int(r.headers["x-aep-format-version"]),
+                    "signer_id": r.headers["x-aep-signer-id"],
+                    "execution_id": r.headers["x-aep-execution-id"],
+                    "signals": json.loads(r.headers["x-aep-signals"]),
+                    "confidence": (
+                        json.loads(r.headers["x-aep-confidence"])
+                        if "x-aep-confidence" in r.headers
+                        else None
+                    ),
+                    "timestamp": r.headers["x-aep-timestamp"],
+                    "sequence": int(r.headers["x-aep-sequence"]),
+                    "prev_link": r.headers["x-aep-prev-link"],
+                    "statement_digest": r.headers["x-aep-statement-digest"],
+                    "statement_signature": r.headers["x-aep-statement-signature"],
                 }
             )
 
         # 4. Verify chain
         pub_key = AepPublicKey.load(key_dir / "aep.pub")
 
-        # Verify individual signatures
+        # Verify individual legacy signatures (narrow primitive, unchanged)
         for entry in collected_chain:
             assert verify_verdict(
                 entry["verdict_hash"],
                 entry["signature"],
                 pub_key,
             ), f"Signature invalid at height {entry['chain_height']}"
+
+        # Verify the full authenticated chain reconstructed purely from
+        # response headers — digest, signature, and chain relationship.
+        assert verify_chain(collected_chain, pub_key)
 
         # 5. Write chain to JSONL and verify via CLI
         chain_file = tmp_path / "audit.jsonl"

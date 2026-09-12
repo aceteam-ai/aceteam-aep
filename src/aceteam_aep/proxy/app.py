@@ -528,9 +528,16 @@ def create_proxy_app(
             d["attestation"] = {
                 "enabled": True,
                 "signer_id": attestation_engine.signer_id,
+                "execution_id": attestation_engine.execution_id,
+                "format_version": 2,
                 "chain_height": attestation_engine.chain_height,
                 "latest_hash": (
                     attestation_engine.chain[-1]["chain_hash"] if attestation_engine.chain else None
+                ),
+                "latest_statement_digest": (
+                    attestation_engine.chain[-1]["statement_digest"]
+                    if attestation_engine.chain
+                    else None
                 ),
             }
         return d
