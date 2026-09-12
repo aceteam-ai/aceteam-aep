@@ -455,11 +455,11 @@ def _run_keygen(args: argparse.Namespace) -> None:
 
 
 def _run_verify(args: argparse.Namespace) -> None:
-    """Verify a Merkle audit chain."""
+    """Verify an audit chain (format_version 2 strict guarantee)."""
     import json
     from pathlib import Path
 
-    from ..attestation import AepPublicKey, verify_chain
+    from ..attestation import AepPublicKey, verify_chain_report
 
     pub_key = AepPublicKey.load(args.pub_key)
     chain_path = Path(args.chain)
@@ -477,15 +477,34 @@ def _run_verify(args: argparse.Namespace) -> None:
         print("Empty chain — nothing to verify.")
         sys.exit(0)
 
-    valid = verify_chain(chain, pub_key)
+    expected_execution_id = getattr(args, "execution_id", None)
+    result = verify_chain_report(chain, pub_key, expected_execution_id=expected_execution_id)
 
-    if valid:
+    if result.status == "valid":
         print("  Chain VALID")
         print(f"  Entries: {len(chain)}")
         print(f"  Height:  0 → {len(chain) - 1}")
-        print(f"  Final hash: {chain[-1]['chain_hash']}")
+        print(f"  Execution: {chain[-1].get('execution_id')}")
+        print(f"  Final statement digest: {chain[-1].get('statement_digest')}")
+        print(
+            "  Note: a valid chain proves an unbroken authenticated sequence, "
+            "not that it is the complete history — see docs/protocol/aep-attestation.md §6.5."
+        )
+    elif result.status == "legacy_unsupported":
+        print("  Chain UNSUPPORTED — legacy format_version 1 entries")
+        print(f"    at entry {result.failed_index}: {result.reason}")
+        print(
+            "  These entries may still satisfy the narrow per-verdict signature check, "
+            "but cannot be upgraded to the strict full-chain guarantee. Re-sign with a "
+            "current proxy to get format_version 2 statements."
+        )
+        sys.exit(1)
     else:
         print("  Chain INVALID — tampering detected")
+        if result.failed_index is not None:
+            print(f"    at entry {result.failed_index}: {result.reason}")
+        else:
+            print(f"    {result.reason}")
         sys.exit(1)
 
 
@@ -793,6 +812,13 @@ def main() -> None:
         type=str,
         required=True,
         help="Path to audit chain JSONL file",
+    )
+    verify_parser.add_argument(
+        "--execution-id",
+        type=str,
+        default=None,
+        help="Pin verification to a specific session/execution identity "
+        "(rejects the chain if it belongs to a different session)",
     )
 
     # --- wrap subcommand ---
