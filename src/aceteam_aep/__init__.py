@@ -1,7 +1,13 @@
 """aceteam-aep: AEP-native execution layer for AI agents."""
 
 from .agent import run_agent_loop, run_agent_loop_stream
-from .budget import BudgetEnforcer, BudgetExceededError, BudgetState, ReservationToken
+from .budget import (
+    BudgetEnforcer,
+    BudgetExceededError,
+    BudgetState,
+    BudgetValidationError,
+    ReservationToken,
+)
 from .client import ChatClient
 from .costs import CostNode, CostTracker
 from .embeddings import CohereEmbeddings, EmbeddingClient, OllamaEmbeddings, OpenAIEmbeddings
@@ -52,6 +58,7 @@ __all__ = [
     "BudgetEnforcer",
     "BudgetExceededError",
     "BudgetState",
+    "BudgetValidationError",
     "ReservationToken",
     # Client
     "ChatClient",
