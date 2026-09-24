@@ -1,9 +1,9 @@
-"""Trust Engine — multi-perspective safety evaluation with calibrated confidence.
+"""Trust Engine — multi-perspective safety evaluation with heuristic confidence.
 
 Evaluates agent outputs through multiple reasoning dimensions in a single
 model call. Each dimension is a safety perspective (PII, policy compliance,
 authorization, irreversibility). The model evaluates all dimensions and
-produces per-dimension scores that aggregate into a calibrated P(safe).
+produces per-dimension scores that aggregate into a heuristic safety score.
 
 Implemented as structured prompting for any OpenAI-compatible model.
 The interface supports upgrading to latent-space reasoning engines
@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 from collections.abc import Sequence
@@ -50,7 +51,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
-from .base import SafetyDetector, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -419,7 +420,7 @@ def _call_judge(config: JudgeConfig, input_text: str, output_text: str) -> Judge
 
 
 class TrustEngineDetector(SafetyDetector):
-    """Multi-perspective safety detector with calibrated confidence.
+    """Multi-perspective safety detector with heuristic confidence.
 
     Two modes:
     - ``multi-perspective`` (default): One model call, N dimensions.
@@ -497,22 +498,39 @@ class TrustEngineDetector(SafetyDetector):
     ) -> Sequence[SafetySignal]:
         """Evaluate using configured mode. Returns signals if P(safe) is low."""
 
-        cached = self._cache.get(input_text, output_text)
+        strict = bool(kwargs.get("strict"))
+        cached = None if strict else self._cache.get(input_text, output_text)
         if cached is not None:
             return cached
 
         if self._judge_service_url:
-            p_safe = self._eval_judge_service(input_text, output_text)
+            p_safe = self._eval_judge_service(input_text, output_text, strict=strict)
         elif self._mode == "multi-perspective":
             p_safe = self._eval_multi_perspective(input_text, output_text)
+            if strict and (
+                not self._last_dimension_results
+                or any(r.confidence <= 0 for r in self._last_dimension_results)
+            ):
+                raise EvaluationUnavailableError("trust engine dimension evaluation unavailable")
         else:
             p_safe = self._eval_ensemble(input_text, output_text)
+            if strict and (
+                not self._last_judge_results
+                or any(r.error or r.confidence <= 0 for r in self._last_judge_results)
+            ):
+                raise EvaluationUnavailableError("trust engine judge evaluation unavailable")
+
+        if strict and (not math.isfinite(p_safe) or not 0 <= p_safe <= 1):
+            raise ValueError("trust engine returned an invalid score")
 
         signals = self._produce_signals(p_safe, call_id)
-        self._cache.put(input_text, output_text, signals)
+        if not strict:
+            self._cache.put(input_text, output_text, signals)
         return signals
 
-    def _eval_judge_service(self, input_text: str, output_text: str) -> float:
+    def _eval_judge_service(
+        self, input_text: str, output_text: str, *, strict: bool = False
+    ) -> float:
         """Call external R-Judge Flask service."""
         import httpx
 
@@ -546,6 +564,8 @@ class TrustEngineDetector(SafetyDetector):
             return p_safe
         except Exception as e:
             log.warning("Judge service call failed: %s", e)
+            if strict:
+                raise EvaluationUnavailableError("judge service unavailable") from e
             return 0.5
 
     def _eval_multi_perspective(self, input_text: str, output_text: str) -> float:

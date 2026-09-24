@@ -12,6 +12,10 @@ from typing import Protocol, runtime_checkable
 log = logging.getLogger(__name__)
 
 
+class EvaluationUnavailableError(RuntimeError):
+    """A configured safety evaluator could not provide a measurement."""
+
+
 @dataclass
 class SafetySignal:
     """A single T&S flag raised during a session."""
@@ -87,4 +91,4 @@ class DetectorRegistry:
         return signals
 
 
-__all__ = ["DetectorRegistry", "SafetyDetector", "SafetySignal"]
+__all__ = ["DetectorRegistry", "EvaluationUnavailableError", "SafetyDetector", "SafetySignal"]

@@ -1,13 +1,9 @@
-"""Cascading confidence pipeline — sequential safety evaluation with short-circuit.
+"""Sequential safety evaluation with a completed-score product heuristic.
 
 Each layer evaluates one safety criterion and returns P(safe) for that criterion.
-The overall P(safe) is the product of all per-criterion P(safe_i), under a
-conditional independence assumption (analogous to naive Bayes).
-
-Layers that haven't run yet contribute their prior_p_safe to the product.
-Running a layer replaces its prior with the computed posterior. The cascade
-short-circuits when the product crosses the block or pass threshold — no need
-to run expensive downstream layers.
+The configured thresholds apply to the product of scores from completed layers.
+This is a heuristic, not a calibrated probability. Every configured layer runs
+before a verdict; an incomplete required evaluation blocks without a score.
 
 The independence assumption can distort in both directions:
 - Positively correlated criteria → over-penalizes (conservative, safe default)
@@ -35,12 +31,13 @@ Usage::
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
-from .base import SafetySignal
+from .base import EvaluationUnavailableError, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -50,14 +47,35 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+EvaluationStatus = Literal["evaluated", "skipped", "unavailable", "failed"]
+
+
+def _valid_score(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0.0 <= value <= 1.0
+    )
+
+
+def _signal_score(signal: SafetySignal, default: float) -> float:
+    score = default if signal.score is None else signal.score
+    if not _valid_score(score):
+        raise ValueError("detector returned an invalid score")
+    return float(score)
+
+
 @dataclass
 class LayerResult:
     """Output from a single cascade layer."""
 
     layer_name: str
-    p_safe: float
+    p_safe: float | None
     signals: list[SafetySignal] = field(default_factory=list)
     latency_ms: float = 0.0
+    status: EvaluationStatus = "evaluated"
+    reason: str | None = None
 
 
 @runtime_checkable
@@ -109,23 +127,22 @@ class RegexLayer(CascadeLayer):
         all_signals: list[SafetySignal] = []
 
         for detector in self._detectors:
-            try:
-                signals = await detector.check(
-                    input_text=input_text,
-                    output_text=output_text,
-                    call_id=call_id,
-                    **kwargs,
-                )
-                for s in signals:
-                    s.detector = detector.name
-                all_signals.extend(signals)
-            except Exception:
-                log.warning("Regex layer detector %s failed", detector.name, exc_info=True)
+            signals = await detector.check(
+                input_text=input_text,
+                output_text=output_text,
+                call_id=call_id,
+                strict=True,
+                **kwargs,
+            )
+            for signal in signals:
+                signal.detector = detector.name
+                _signal_score(signal, 1.0)
+            all_signals.extend(signals)
 
         latency = (time.monotonic_ns() - start) / 1_000_000
 
         if all_signals:
-            max_score = max((s.score or 1.0) for s in all_signals)
+            max_score = max(_signal_score(s, 1.0) for s in all_signals)
             return LayerResult(
                 layer_name=self.name,
                 p_safe=1.0 - max_score,
@@ -175,6 +192,7 @@ class PawLayer(CascadeLayer):
                 input_text=input_text,
                 output_text=output_text,
                 call_id=call_id,
+                strict=True,
                 **kwargs,
             )
         )
@@ -182,11 +200,10 @@ class PawLayer(CascadeLayer):
         latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
+            for signal in signals:
+                _signal_score(signal, 0.0)
             scores = [s.score for s in signals if s.score is not None]
-            if scores:
-                p_safe = 1.0 - max(scores)
-            else:
-                p_safe = 0.2
+            p_safe = 1.0 - max(scores) if scores else 0.2
             return LayerResult(
                 layer_name=self.name,
                 p_safe=p_safe,
@@ -232,6 +249,7 @@ class ContentModelLayer(CascadeLayer):
                 input_text=input_text,
                 output_text=output_text,
                 call_id=call_id,
+                strict=True,
                 **kwargs,
             )
         )
@@ -239,7 +257,7 @@ class ContentModelLayer(CascadeLayer):
         latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
-            max_score = max((s.score or 0.8) for s in signals)
+            max_score = max(_signal_score(s, 0.8) for s in signals)
             return LayerResult(
                 layer_name=self.name,
                 p_safe=1.0 - max_score,
@@ -289,6 +307,7 @@ class TrustEngineLayer(CascadeLayer):
                 input_text=input_text,
                 output_text=output_text,
                 call_id=call_id,
+                strict=True,
                 **kwargs,
             )
         )
@@ -296,6 +315,8 @@ class TrustEngineLayer(CascadeLayer):
         latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
+            for signal in signals:
+                _signal_score(signal, 0.0)
             scores = [s.score for s in signals if s.score is not None]
             p_safe = min(scores) if scores else 0.3
             return LayerResult(
@@ -322,30 +343,26 @@ class TrustEngineLayer(CascadeLayer):
 class PipelineResult:
     """Aggregate result from the full cascade."""
 
-    p_safe: float
+    p_safe: float | None
     verdict: str  # "pass", "flag", "block"
     signals: list[SafetySignal] = field(default_factory=list)
     layer_results: list[LayerResult] = field(default_factory=list)
     layers_executed: int = 0
     short_circuited_at: str | None = None
     total_latency_ms: float = 0.0
+    evaluation_unavailable_reason: str | None = None
 
     @property
-    def p_unsafe(self) -> float:
-        return round(1.0 - self.p_safe, 4)
+    def p_unsafe(self) -> float | None:
+        return round(1.0 - self.p_safe, 4) if self.p_safe is not None else None
 
     @property
-    def confidence(self) -> float:
-        return round(abs(self.p_safe - 0.5) * 2, 4)
+    def confidence(self) -> float | None:
+        return round(abs(self.p_safe - 0.5) * 2, 4) if self.p_safe is not None else None
 
 
 class SafetyPipeline:
-    """Sequential cascade with product-based combination.
-
-    P(safe) = product of P(safe_i) across all criteria. Layers that haven't
-    run contribute their prior_p_safe; running a layer replaces its prior
-    with the computed posterior. Short-circuits when P(safe) crosses a threshold.
-    """
+    """Evaluate every configured layer, then combine completed scores."""
 
     def __init__(
         self,
@@ -358,15 +375,13 @@ class SafetyPipeline:
         self._pass_above = pass_above
         self._block_below = block_below
 
-    def _compute_p_safe(
-        self,
-        layer_results: dict[str, LayerResult],
-    ) -> float:
-        """Product of per-layer P(safe). Unrun layers contribute their prior."""
+    def _compute_p_safe(self, layer_results: Sequence[LayerResult]) -> float:
+        """Product of fully evaluated layer scores only."""
         p = 1.0
-        for layer in self._layers:
-            result = layer_results.get(layer.name)
-            p *= result.p_safe if result else layer.prior_p_safe
+        for result in layer_results:
+            if result.status != "evaluated" or result.p_safe is None:
+                raise ValueError("cannot score an incomplete evaluation")
+            p *= result.p_safe
         return p
 
     def _verdict(self, p_safe: float) -> str:
@@ -385,10 +400,8 @@ class SafetyPipeline:
         **kwargs,
     ) -> PipelineResult:
         start = time.monotonic_ns()
-        results_map: dict[str, LayerResult] = {}
         ordered_results: list[LayerResult] = []
         all_signals: list[SafetySignal] = []
-        short_circuited_at: str | None = None
 
         for layer in self._layers:
             try:
@@ -399,36 +412,90 @@ class SafetyPipeline:
                     prior_results=ordered_results,
                     **kwargs,
                 )
+            except EvaluationUnavailableError:
+                log.warning("Pipeline layer %s unavailable", layer.name, exc_info=True)
+                result = LayerResult(
+                    layer_name=layer.name,
+                    p_safe=None,
+                    status="unavailable",
+                    reason="evaluator unavailable",
+                )
             except Exception:
-                log.warning("Pipeline layer %s failed, skipping", layer.name, exc_info=True)
-                continue
+                log.warning("Pipeline layer %s failed", layer.name, exc_info=True)
+                result = LayerResult(
+                    layer_name=layer.name,
+                    p_safe=None,
+                    status="failed",
+                    reason="evaluator raised an exception",
+                )
 
-            results_map[layer.name] = result
+            if not isinstance(result, LayerResult) or result.layer_name != layer.name:
+                result = LayerResult(
+                    layer_name=layer.name,
+                    p_safe=None,
+                    status="failed",
+                    reason="evaluator returned an invalid result",
+                )
+            elif result.status not in ("evaluated", "skipped", "unavailable", "failed"):
+                result = LayerResult(
+                    layer_name=layer.name,
+                    p_safe=None,
+                    status="failed",
+                    reason="evaluator returned an invalid status",
+                )
+            elif not isinstance(result.signals, list) or any(
+                not isinstance(signal, SafetySignal) for signal in result.signals
+            ):
+                result = LayerResult(
+                    layer_name=layer.name,
+                    p_safe=None,
+                    status="failed",
+                    reason="evaluator returned invalid signals",
+                )
+            elif result.status == "evaluated" and (
+                not _valid_score(result.p_safe)
+                or any(s.score is not None and not _valid_score(s.score) for s in result.signals)
+            ):
+                result = LayerResult(
+                    layer_name=layer.name,
+                    p_safe=None,
+                    status="failed",
+                    reason="evaluator returned an invalid score",
+                )
+            elif result.status != "evaluated":
+                result.p_safe = None
+                result.signals = []
+
             ordered_results.append(result)
-            all_signals.extend(result.signals)
+            if result.status == "evaluated":
+                all_signals.extend(result.signals)
 
-            p_safe = self._compute_p_safe(results_map)
-            if p_safe <= self._block_below or p_safe >= self._pass_above:
-                short_circuited_at = layer.name
-                break
-
-        p_safe = self._compute_p_safe(results_map)
+        incomplete = [r for r in ordered_results if r.status != "evaluated"]
+        unavailable_reason = (
+            "required evaluation unavailable: "
+            + ", ".join(f"{r.layer_name} ({r.status})" for r in incomplete)
+            if incomplete
+            else None
+        )
+        p_safe = None if incomplete else self._compute_p_safe(ordered_results)
         total_latency = (time.monotonic_ns() - start) / 1_000_000
 
         return PipelineResult(
-            p_safe=round(p_safe, 6),
-            verdict=self._verdict(p_safe),
+            p_safe=round(p_safe, 6) if p_safe is not None else None,
+            verdict="block" if p_safe is None else self._verdict(p_safe),
             signals=all_signals,
             layer_results=ordered_results,
             layers_executed=len(ordered_results),
-            short_circuited_at=short_circuited_at,
+            short_circuited_at=None,
             total_latency_ms=round(total_latency, 1),
+            evaluation_unavailable_reason=unavailable_reason,
         )
 
 
 __all__ = [
     "CascadeLayer",
     "ContentModelLayer",
+    "EvaluationStatus",
     "LayerResult",
     "PawLayer",
     "PipelineResult",
