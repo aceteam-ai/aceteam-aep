@@ -17,6 +17,7 @@ def create_client(
     *,
     provider: str | None = None,
     base_url: str | None = None,
+    trusted_gateway_url: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 4096,
     supports_temperature: bool = True,
@@ -33,6 +34,8 @@ def create_client(
         api_key: API key for the provider.
         provider: Explicit provider override.
         base_url: Custom API base URL.
+        trusted_gateway_url: Explicit AEP gateway endpoint. Only this transport
+            sends request context and trusts allowlisted AEP response headers.
         temperature: Default temperature.
         max_tokens: Default max output tokens.
         supports_temperature: When False, the ``temperature`` parameter is
@@ -60,6 +63,30 @@ def create_client(
         A ChatClient instance for the detected/specified provider.
     """
     detected = provider or detect_provider(model)
+
+    if trusted_gateway_url is not None:
+        if base_url is not None:
+            raise ValueError("Specify either base_url or trusted_gateway_url")
+        if detected not in ("openai", "anthropic"):
+            raise ValueError("Trusted gateway transport supports openai and anthropic protocols")
+        if detected == "anthropic":
+            return AnthropicClient(
+                api_key=api_key,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                supports_temperature=supports_temperature,
+                trusted_gateway_url=trusted_gateway_url,
+            )
+        return OpenAIClient(
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            supports_temperature=supports_temperature,
+            uses_max_completion_tokens=uses_max_completion_tokens,
+            trusted_gateway_url=trusted_gateway_url,
+        )
 
     if detected == "anthropic":
         return AnthropicClient(
