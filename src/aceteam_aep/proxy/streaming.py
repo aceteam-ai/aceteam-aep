@@ -19,24 +19,47 @@ from typing import Any
 import httpx
 from starlette.responses import Response, StreamingResponse
 
-from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate, evaluate_pipeline
+from ..enforcement import EnforcementPolicy, evaluate, evaluate_pipeline
 from ..safety.base import DetectorRegistry
 
 log = logging.getLogger(__name__)
 
 
+def _sse_field_value(line: str) -> tuple[str, str] | None:
+    """Parse an SSE field, removing the one optional space after its colon."""
+    if not line or line.startswith(":"):
+        return None
+    field, separator, value = line.partition(":")
+    if not separator:
+        return field, ""
+    return field, value[1:] if value.startswith(" ") else value
+
+
 def _parse_sse_line(line: str) -> dict[str, Any] | None:
     """Parse a single SSE data line into a dict."""
-    line = line.strip()
-    if not line.startswith("data: "):
+    field_value = _sse_field_value(line)
+    if field_value is None or field_value[0] != "data":
         return None
-    data = line[6:]
+    data = field_value[1]
     if data == "[DONE]":
         return None
     try:
-        return json.loads(data)
+        parsed = json.loads(data)
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+def _is_terminal_sse_line(line: str) -> bool:
+    field_value = _sse_field_value(line)
+    return (
+        field_value is not None and field_value[0] == "data" and field_value[1].strip() == "[DONE]"
+    )
+
+
+def _is_message_stop_sse_line(line: str) -> bool:
+    field_value = _sse_field_value(line)
+    return field_value is not None and field_value == ("event", "message_stop")
 
 
 def _accumulate_stream_chunks(
@@ -142,21 +165,70 @@ async def handle_streaming_request(
 
     async def stream_generator() -> AsyncGenerator[str, None]:
         accumulated_chunks: list[dict[str, Any]] = []
+        upstream_done = False
+        terminal_event: str | None = None
+        event_lines: list[str] = []
 
         try:
-            # Pass through each line immediately
+            # Forward content promptly, but withhold the terminal marker until
+            # the output safety verdict is available. Clients stop at [DONE].
             async for line in upstream.aiter_lines():
-                # Buffer for post-stream safety
-                parsed = _parse_sse_line(line)
-                if parsed:
-                    accumulated_chunks.append(parsed)
+                if upstream_done:
+                    if line.strip():
+                        log.warning("Ignoring upstream data after [DONE] for %s", call_id)
+                    continue
+                event_lines.append(line)
+                if line:
+                    continue
+
+                # SSE fields form an event only at the blank-line boundary.
+                # Classify the whole frame so terminal fields in either order
+                # are withheld, without swallowing later non-terminal events.
+                frame = "".join(f"{event_line}\n" for event_line in event_lines)
+                if any(_is_terminal_sse_line(event_line) for event_line in event_lines):
+                    upstream_done = True
+                    event_lines.clear()
+                    continue
+                parsed_chunks = [
+                    parsed
+                    for event_line in event_lines
+                    if (parsed := _parse_sse_line(event_line)) is not None
+                ]
+                is_message_stop = any(_is_message_stop_sse_line(item) for item in event_lines)
+                is_message_stop |= any(
+                    parsed.get("type") == "message_stop" for parsed in parsed_chunks
+                )
+                event_lines.clear()
+                if is_message_stop:
+                    if terminal_event is None:
+                        terminal_event = frame
+                    continue
+                accumulated_chunks.extend(parsed_chunks)
 
                 # Debug: log each chunk (truncated)
                 if debug:
-                    log.debug("STREAM CHUNK %s: %s", call_id, line[:200] if line else "<empty>")
+                    log.debug("STREAM CHUNK %s: %s", call_id, frame[:200])
 
-                # Pass through to client immediately
-                yield f"{line}\n"
+                yield frame
+
+            # Preserve a trailing OpenAI [DONE] even without its final blank
+            # line, as the previous line-forwarding path did. Other incomplete
+            # terminal frames are not valid SSE and must not be replayed.
+            if event_lines:
+                if any(_is_terminal_sse_line(item) for item in event_lines):
+                    upstream_done = True
+                else:
+                    partial_chunks = [
+                        parsed
+                        for event_line in event_lines
+                        if (parsed := _parse_sse_line(event_line)) is not None
+                    ]
+                    is_message_stop = any(
+                        _is_message_stop_sse_line(item) for item in event_lines
+                    ) or any(parsed.get("type") == "message_stop" for parsed in partial_chunks)
+                    if not is_message_stop:
+                        accumulated_chunks.extend(partial_chunks)
+                        yield "".join(f"{event_line}\n" for event_line in event_lines)
         except Exception as exc:
             # Bytes were already sent under a 200; the status can't change.
             # Emit a final Anthropic-format SSE error event so clients
@@ -231,6 +303,14 @@ async def handle_streaming_request(
                 signals=signals,
                 decision=decision,
             )
+
+        # Forward exactly one OpenAI terminal marker, after any safety block.
+        # Other SSE protocols (for example Anthropic message_stop) do not use
+        # [DONE], so do not synthesize one for them.
+        if upstream_done:
+            yield "data: [DONE]\n\n"
+        elif terminal_event is not None:
+            yield terminal_event
 
     return StreamingResponse(
         stream_generator(),

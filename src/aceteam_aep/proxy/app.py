@@ -429,14 +429,17 @@ class ProxyState:
                 "p_unsafe": pr.p_unsafe,
                 "confidence": pr.confidence,
                 "verdict": pr.verdict,
+                "evaluation_unavailable_reason": pr.evaluation_unavailable_reason,
                 "layers_executed": pr.layers_executed,
                 "short_circuited_at": pr.short_circuited_at,
                 "total_latency_ms": pr.total_latency_ms,
                 "layer_results": [
                     {
                         "layer_name": lr.layer_name,
+                        "status": lr.status,
+                        "reason": lr.reason,
                         "p_safe": lr.p_safe,
-                        "p_unsafe": round(1.0 - lr.p_safe, 4),
+                        "p_unsafe": round(1.0 - lr.p_safe, 4) if lr.p_safe is not None else None,
                         "latency_ms": lr.latency_ms,
                         "signal_count": len(lr.signals),
                     }
@@ -657,14 +660,18 @@ def create_proxy_app(
                 )
                 state._last_pipeline_result = pipeline_result
                 input_signals = pipeline_result.signals
-                input_decision = evaluate_pipeline(pipeline_result, state.policy) if input_signals or pipeline_result.verdict == "block" else EnforcementDecision(action="pass")
+                input_decision = evaluate_pipeline(pipeline_result, state.policy)
             else:
                 input_signals = await state.registry.run_all(
                     input_text=input_text,
                     output_text="",
                     call_id=call_id,
                 )
-                input_decision = evaluate(input_signals, state.policy) if input_signals else EnforcementDecision(action="pass")
+                input_decision = (
+                    evaluate(input_signals, state.policy)
+                    if input_signals
+                    else EnforcementDecision(action="pass")
+                )
 
             if input_decision.action == "block":
                 state.signals.extend(input_signals)
@@ -756,9 +763,7 @@ def create_proxy_app(
                     status_code=400,
                     content={
                         "error": {
-                            "message": (
-                                f"AEP safety: request blocked — {input_decision.reason}"
-                            ),
+                            "message": (f"AEP safety: request blocked — {input_decision.reason}"),
                             "type": "aep_safety_block",
                             "code": "safety_block",
                         }
