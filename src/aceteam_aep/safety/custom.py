@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import BaseModel, Field
 
-from .base import SafetyDetector, SafetySignal
+from .base import DetectorCheckResult, SafetyDetector, SafetySignal
 
 if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
@@ -36,13 +36,9 @@ def _extract_yn_probability(fn: PawFunction) -> float | None:
     Returns the softmax probability of the Y token, or None on failure.
     """
     try:
-        import ctypes
-
         import llama_cpp as _llama
 
         ctx = fn._llm.ctx
-        n_vocab = fn._llm.n_vocab()
-
         logits_ptr = _llama.llama_get_logits_ith(ctx, -1)
         if not logits_ptr:
             return None
@@ -64,9 +60,7 @@ def _extract_yn_probability(fn: PawFunction) -> float | None:
         return None
 
 
-def _paw_call_with_logprobs(
-    fn: PawFunction, text: str
-) -> tuple[str, float | None]:
+def _paw_call_with_logprobs(fn: PawFunction, text: str) -> tuple[str, float | None]:
     """Replicate PawFunction.__call__ with logit extraction before sampling."""
     fn._llm.n_tokens = fn._n_prefix
 
@@ -100,6 +94,7 @@ def _paw_call_with_logprobs(
 
     output_bytes = fn._llm.detokenize(output_tokens)
     return output_bytes.decode("utf-8", errors="replace").strip(), p_compliant
+
 
 CustomPolicyAppliesTo = Literal["input", "output", "both"]
 CustomPolicySeverity = Literal["low", "medium", "high"]
@@ -416,6 +411,22 @@ class CustomSafetyDetector(SafetyDetector):
         call_id: str,
         **kwargs,
     ) -> Sequence[SafetySignal]:
+        result = await self.check_with_status(
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
+        )
+        return result.signals
+
+    async def check_with_status(
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> DetectorCheckResult:
         def _sources_for_policy(p: CustomPolicy) -> tuple[tuple[str, str], ...]:
             if p.applies_to == "input":
                 return (("input", input_text),)
@@ -423,8 +434,9 @@ class CustomSafetyDetector(SafetyDetector):
                 return (("output", output_text),)
             return (("output", output_text), ("input", input_text))
 
-        async def _check_one(policy: CustomPolicy) -> Sequence[SafetySignal]:
+        async def _check_one(policy: CustomPolicy) -> DetectorCheckResult:
             signals: list[SafetySignal] = []
+            had_failure = False
             try:
                 for source, text in _sources_for_policy(policy):
                     result = await policy.check_with_confidence(text)
@@ -439,9 +451,7 @@ class CustomSafetyDetector(SafetyDetector):
                             detail += f" (p_unsafe={p_unsafe})"
                         if result.chunk_results and len(result.chunk_results) > 1:
                             failing = [
-                                i
-                                for i, (ok, _) in enumerate(result.chunk_results)
-                                if not ok
+                                i for i, (ok, _) in enumerate(result.chunk_results) if not ok
                             ]
                             detail += f" [chunks {failing}]"
                         signals.append(
@@ -454,17 +464,20 @@ class CustomSafetyDetector(SafetyDetector):
                             )
                         )
             except Exception:
+                had_failure = True
                 log.warning("Custom safety check failed for %s", policy.name, exc_info=True)
-            return signals
+            return DetectorCheckResult(signals, had_failure=had_failure)
 
         signals: list[SafetySignal] = []
+        had_failure = False
 
         chunks = await asyncio.gather(
             *(_check_one(policy) for policy in self._store.all() if policy.enabled)
         )
         for chunk in chunks:
-            signals.extend(chunk)
-        return signals
+            signals.extend(chunk.signals)
+            had_failure = had_failure or chunk.had_failure
+        return DetectorCheckResult(signals, had_failure=had_failure)
 
 
 __all__ = [

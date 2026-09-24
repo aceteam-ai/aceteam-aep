@@ -23,7 +23,7 @@ from starlette.responses import Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate, evaluate_pipeline
-from ..safety.base import DetectorRegistry, SafetySignal
+from ..safety.base import DetectorRegistry, SafetySignal, check_detector_with_status
 
 log = logging.getLogger(__name__)
 
@@ -143,14 +143,16 @@ async def _run_registry_with_status(
 
     async def run_one(detector: Any) -> tuple[list[SafetySignal], bool]:
         try:
-            signals = list(
-                await detector.check(
-                    input_text=input_text, output_text=output_text, call_id=call_id
-                )
+            check_result = await check_detector_with_status(
+                detector,
+                input_text=input_text,
+                output_text=output_text,
+                call_id=call_id,
             )
+            signals = list(check_result.signals)
             for signal in signals:
                 signal.detector = detector.name
-            return signals, False
+            return signals, check_result.had_failure
         except Exception:
             log.warning(
                 "Detector %s failed, skipping",

@@ -21,7 +21,15 @@ from aceteam_aep.proxy.streaming import (
     handle_streaming_request,
 )
 from aceteam_aep.safety.base import DetectorRegistry, SafetySignal
-from aceteam_aep.safety.pipeline import LayerResult, RegexLayer, SafetyPipeline
+from aceteam_aep.safety.content import ContentSafetyDetector
+from aceteam_aep.safety.custom import CustomPolicy, CustomPolicyStore, CustomSafetyDetector
+from aceteam_aep.safety.pipeline import (
+    ContentModelLayer,
+    LayerResult,
+    PawLayer,
+    RegexLayer,
+    SafetyPipeline,
+)
 
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
@@ -489,6 +497,96 @@ async def test_terminal_pipeline_nested_detector_failure_is_unavailable(
     assert outcomes[0].evaluation == "unavailable"
     assert outcomes[0].action is None
     assert outcomes[0].signals == ()
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "inference"])
+async def test_terminal_content_detector_failure_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    _patch_transport(monkeypatch, lambda _: httpx.Response(200, content=_COMPLETE_SSE))
+    detector = ContentSafetyDetector()
+    detector._load_attempted = True
+    if failure == "unavailable":
+        detector._available = False
+    else:
+
+        def failing_inference(text: str) -> None:
+            raise RuntimeError("hidden model failure")
+
+        detector._pipeline = failing_inference
+    pipeline = SafetyPipeline([ContentModelLayer(detector)])
+    outcomes: list[TerminalOutcome] = []
+    response = await _call_handler(on_terminal=outcomes.append, pipeline=pipeline)
+    assert await _collect_body(response) == _COMPLETE_SSE.decode()
+    assert len(outcomes) == 1
+    assert outcomes[0].transport == "completed"
+    assert outcomes[0].evaluation == "unavailable"
+    assert outcomes[0].action is None
+    assert outcomes[0].signals == ()
+
+
+async def test_terminal_caught_custom_detector_error_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_transport(monkeypatch, lambda _: httpx.Response(200, content=_COMPLETE_SSE))
+    store = CustomPolicyStore([CustomPolicy(name="Rule", rule="test", enabled=True)])
+    detector = CustomSafetyDetector(store)
+
+    async def failing_policy(self: CustomPolicy, text: str) -> Any:
+        raise RuntimeError("hidden policy failure")
+
+    monkeypatch.setattr(CustomPolicy, "check_with_confidence", failing_policy)
+    pipeline = SafetyPipeline([PawLayer(detector)])
+    outcomes: list[TerminalOutcome] = []
+    response = await _call_handler(on_terminal=outcomes.append, pipeline=pipeline)
+    assert await _collect_body(response) == _COMPLETE_SSE.decode()
+    assert len(outcomes) == 1
+    assert outcomes[0].transport == "completed"
+    assert outcomes[0].evaluation == "unavailable"
+    assert outcomes[0].action is None
+    assert outcomes[0].signals == ()
+
+
+async def test_terminal_direct_registry_preserves_builtin_unavailability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_transport(monkeypatch, lambda _: httpx.Response(200, content=_COMPLETE_SSE))
+    detector = ContentSafetyDetector()
+    detector._load_attempted = True
+    detector._available = False
+    registry = DetectorRegistry()
+    registry.add(detector)
+    outcomes: list[TerminalOutcome] = []
+    response = await _call_handler(on_terminal=outcomes.append, registry=registry)
+    assert await _collect_body(response) == _COMPLETE_SSE.decode()
+    assert len(outcomes) == 1
+    assert outcomes[0].evaluation == "unavailable"
+    assert outcomes[0].action is None
+
+
+async def test_status_dispatch_preserves_detector_check_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_transport(monkeypatch, lambda _: httpx.Response(200, content=_COMPLETE_SSE))
+
+    class OverrideDetector(CustomSafetyDetector):
+        def __init__(self) -> None:
+            super().__init__(CustomPolicyStore())
+            self.calls = 0
+
+        async def check(
+            self, *, input_text: str, output_text: str, call_id: str, **kwargs: Any
+        ) -> list[SafetySignal]:
+            self.calls += 1
+            return []
+
+    detector = OverrideDetector()
+    pipeline = SafetyPipeline([PawLayer(detector)])
+    outcomes: list[TerminalOutcome] = []
+    response = await _call_handler(on_terminal=outcomes.append, pipeline=pipeline)
+    await _collect_body(response)
+    assert detector.calls == 1
+    assert outcomes[0].evaluation == "completed"
 
 
 async def test_terminal_runner_exception_preserves_original_error(

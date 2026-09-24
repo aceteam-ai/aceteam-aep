@@ -7,7 +7,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,50 @@ class SafetyDetector(Protocol):
         call_id: str,
         **kwargs,
     ) -> Sequence[SafetySignal]: ...
+
+
+@dataclass(frozen=True)
+class DetectorCheckResult:
+    """Signals and whether a detector skipped any check after a failure."""
+
+    signals: Sequence[SafetySignal]
+    had_failure: bool = False
+
+
+async def check_detector_with_status(
+    detector: SafetyDetector,
+    *,
+    input_text: str,
+    output_text: str,
+    call_id: str,
+    **kwargs: Any,
+) -> DetectorCheckResult:
+    """Use a built-in status-aware check when available; keep older detectors valid."""
+
+    check_with_status = getattr(detector, "check_with_status", None)
+    classes = type(detector).__mro__
+    check_owner = next(
+        (i for i, cls in enumerate(classes) if "check" in cls.__dict__), len(classes)
+    )
+    status_owner = next(
+        (i for i, cls in enumerate(classes) if "check_with_status" in cls.__dict__),
+        len(classes),
+    )
+    if check_with_status is not None and status_owner <= check_owner:
+        return await check_with_status(
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
+        )
+    return DetectorCheckResult(
+        await detector.check(
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
+        )
+    )
 
 
 class DetectorRegistry:
@@ -87,4 +131,10 @@ class DetectorRegistry:
         return signals
 
 
-__all__ = ["DetectorRegistry", "SafetyDetector", "SafetySignal"]
+__all__ = [
+    "DetectorCheckResult",
+    "DetectorRegistry",
+    "SafetyDetector",
+    "SafetySignal",
+    "check_detector_with_status",
+]
