@@ -598,6 +598,58 @@ async def test_direct_openai_cleanup_only_failure_surfaces() -> None:
         await anext(client.chat_stream([]))
 
 
+@pytest.mark.parametrize("primary", [ValueError("event failed"), asyncio.CancelledError()])
+async def test_direct_anthropic_primary_survives_context_exit_failure(
+    primary: BaseException, caplog: pytest.LogCaptureFixture,
+) -> None:
+    class DirectStream:
+        def __aiter__(self) -> DirectStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise primary
+
+    class StreamContext:
+        async def __aenter__(self) -> DirectStream:
+            return DirectStream()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            raise RuntimeError("context exit failed")
+
+    client = AnthropicClient("key", "claude-test")
+    client._client = SimpleNamespace(
+        messages=SimpleNamespace(stream=lambda **_kwargs: StreamContext())
+    )
+    with pytest.raises(type(primary)) as error:
+        await anext(client.chat_stream([]))
+    assert error.value is primary
+    assert "Stream cleanup also failed" in caplog.text
+    assert "context exit failed" in caplog.text
+
+
+async def test_direct_anthropic_cleanup_only_failure_surfaces() -> None:
+    class DirectStream:
+        def __aiter__(self) -> DirectStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise StopAsyncIteration
+
+    class StreamContext:
+        async def __aenter__(self) -> DirectStream:
+            return DirectStream()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            raise RuntimeError("context exit only failed")
+
+    client = AnthropicClient("key", "claude-test")
+    client._client = SimpleNamespace(
+        messages=SimpleNamespace(stream=lambda **_kwargs: StreamContext())
+    )
+    with pytest.raises(RuntimeError, match="context exit only failed"):
+        await anext(client.chat_stream([]))
+
+
 @pytest.mark.parametrize("protocol", ["openai", "anthropic"])
 async def test_gateway_primary_retains_metadata_when_raw_exit_fails(
     protocol: str,

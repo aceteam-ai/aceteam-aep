@@ -319,7 +319,9 @@ class AnthropicClient:
                     raise GatewayResponseError(exc, metadata) from exc
                 raise
         else:
-            async with self._client.messages.stream(**kwargs) as stream:
+            async with _response_context_preserving_error(
+                self._client.messages.stream(**kwargs)
+            ) as stream:
                 async for event in stream:
                     yield None, event
 
