@@ -14,6 +14,7 @@ from aceteam_aep.enforcement import EnforcementPolicy
 from aceteam_aep.proxy.app import _ensure_openai_stream_usage
 from aceteam_aep.proxy.streaming import (
     _accumulate_stream_chunks,
+    _is_terminal_sse_line,
     _parse_sse_line,
     handle_streaming_request,
 )
@@ -119,6 +120,17 @@ async def _collect_body(resp: StreamingResponse) -> str:
     return "".join(parts)
 
 
+async def _collect_until_done(resp: StreamingResponse) -> str:
+    """Model an SSE client that stops reading at the first terminal marker."""
+    parts: list[str] = []
+    async for chunk in resp.body_iterator:
+        assert isinstance(chunk, str)
+        parts.append(chunk)
+        if any(_is_terminal_sse_line(line) for line in chunk.splitlines()):
+            break
+    return "".join(parts)
+
+
 async def _call_handler(on_complete: Any = None) -> Any:
     return await handle_streaming_request(
         target_url="https://upstream.test/v1/chat/completions",
@@ -132,8 +144,10 @@ async def _call_handler(on_complete: Any = None) -> Any:
     )
 
 
+@pytest.mark.parametrize("done_line", [b"data: [DONE]", b"data:[DONE]"])
 async def test_streaming_required_evaluator_failure_emits_unavailable_block(
     monkeypatch: pytest.MonkeyPatch,
+    done_line: bytes,
 ) -> None:
     class FailingLayer:
         name = "required"
@@ -155,7 +169,8 @@ async def test_streaming_required_evaluator_failure_emits_unavailable_block(
             200,
             content=(
                 b'data: {"model": "gpt-4o", "choices": [{"delta": {"content": "ok"}}]}\n\n'
-                b"data: [DONE]\n\n"
+                + done_line
+                + b"\n\n"
             ),
             headers={"content-type": "text/event-stream"},
         )
@@ -173,11 +188,13 @@ async def test_streaming_required_evaluator_failure_emits_unavailable_block(
     )
 
     assert isinstance(response, StreamingResponse)
-    body = await _collect_body(response)
+    body = await _collect_until_done(response)
     assert '"aep_safety_block": true' in body
     assert "evaluation unavailable" in body
     assert "private inference detail" not in body
     assert "P(safe)" not in body
+    assert body.count("data: [DONE]") == 1
+    assert body.index('"aep_safety_block": true') < body.index("data: [DONE]")
 
 
 async def test_upstream_400_openai_body_passed_through(
@@ -248,6 +265,7 @@ async def test_upstream_200_happy_path_unchanged(
         b'data: {"model": "gpt-4o", "choices": [{"delta": {}}],'
         b' "usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n\n'
         b"data: [DONE]\n\n"
+        b"data: [DONE]\n\n"
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -266,11 +284,80 @@ async def test_upstream_200_happy_path_unchanged(
     out = await _collect_body(resp)
     assert "Hello" in out
     assert "data: [DONE]" in out
+    assert out.count("data: [DONE]") == 1
     assert "event: error" not in out
     assert len(completions) == 1
     assert completions[0]["model"] == "gpt-4o"
     assert completions[0]["input_tokens"] == 3
     assert completions[0]["output_tokens"] == 2
+
+
+async def test_non_openai_terminal_event_does_not_gain_done_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await _call_handler()
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert "event: message_stop" in body
+    assert "data: [DONE]" not in body
+
+
+async def test_anthropic_client_sees_block_before_message_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingLayer:
+        name = "required"
+        prior_p_safe = 0.99
+
+        async def score(
+            self,
+            *,
+            input_text: str,
+            output_text: str,
+            call_id: str,
+            prior_results: Sequence[LayerResult],
+            **kwargs: Any,
+        ) -> LayerResult:
+            raise RuntimeError("private detail")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/messages",
+        body_bytes=b'{"stream": true}',
+        headers={"Content-Type": "application/json"},
+        call_id="anthropic-terminal",
+        input_text="clean",
+        registry=DetectorRegistry(),
+        policy=EnforcementPolicy(),
+        pipeline=SafetyPipeline(layers=[FailingLayer()]),
+    )
+    assert isinstance(response, StreamingResponse)
+
+    parts: list[str] = []
+    async for chunk in response.body_iterator:
+        assert isinstance(chunk, str)
+        parts.append(chunk)
+        if "event: message_stop" in chunk:
+            break
+    body = "".join(parts)
+    assert '"aep_safety_block": true' in body
+    assert body.index('"aep_safety_block": true') < body.index("event: message_stop")
+    assert "data: [DONE]" not in body
 
 
 async def test_mid_stream_failure_emits_error_event(

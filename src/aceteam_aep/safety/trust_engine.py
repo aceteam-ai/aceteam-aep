@@ -280,6 +280,7 @@ def _call_multi_perspective(
     api_key: str | None = None,
     temperature: float = 0.0,
     timeout: float = 30.0,
+    strict: bool = False,
 ) -> tuple[list[DimensionResult], float]:
     """Single model call evaluating multiple dimensions.
 
@@ -322,16 +323,45 @@ def _call_multi_perspective(
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        if strict:
+
+            def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+                result: dict[str, Any] = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("duplicate key in trust evaluation")
+                    result[key] = value
+                return result
+
+            parsed = json.loads(content, object_pairs_hook=unique_object)
+            raw_dimensions = parsed.get("dimensions") if isinstance(parsed, dict) else None
+            if not isinstance(raw_dimensions, dict) or set(raw_dimensions) != set(dimensions):
+                raise ValueError("trust evaluation dimensions are incomplete")
+        else:
+            parsed = json.loads(content)
+            raw_dimensions = parsed.get("dimensions", {})
 
         results = []
         for name in dimensions:
-            dim_data = parsed.get("dimensions", {}).get(name, {})
+            dim_data = raw_dimensions.get(name, {})
+            if strict:
+                if not isinstance(dim_data, dict) or not isinstance(dim_data.get("safe"), bool):
+                    raise ValueError("trust evaluation dimension is malformed")
+                confidence = dim_data.get("confidence")
+                if (
+                    not isinstance(confidence, (int, float))
+                    or isinstance(confidence, bool)
+                    or not math.isfinite(confidence)
+                    or not 0 <= confidence <= 1
+                ):
+                    raise ValueError("trust evaluation confidence is invalid")
+            else:
+                confidence = float(dim_data.get("confidence", 0.5))
             results.append(
                 DimensionResult(
                     name=name,
                     safe=bool(dim_data.get("safe", True)),
-                    confidence=float(dim_data.get("confidence", 0.5)),
+                    confidence=float(confidence),
                     reasoning=str(dim_data.get("reasoning", "")),
                 )
             )
@@ -342,6 +372,8 @@ def _call_multi_perspective(
     except Exception as e:
         latency = int((time.monotonic() - start) * 1000)
         log.warning("Multi-perspective evaluation failed: %s", e)
+        if strict:
+            raise EvaluationUnavailableError("trust engine evaluation unavailable") from e
         # Fail-open: return uncertain results
         return [
             DimensionResult(name=name, safe=True, confidence=0.0) for name in dimensions
@@ -506,12 +538,24 @@ class TrustEngineDetector(SafetyDetector):
         if self._judge_service_url:
             p_safe = self._eval_judge_service(input_text, output_text, strict=strict)
         elif self._mode == "multi-perspective":
-            p_safe = self._eval_multi_perspective(input_text, output_text)
-            if strict and (
-                not self._last_dimension_results
-                or any(r.confidence <= 0 for r in self._last_dimension_results)
-            ):
-                raise EvaluationUnavailableError("trust engine dimension evaluation unavailable")
+            p_safe = self._eval_multi_perspective(input_text, output_text, strict=strict)
+            if strict:
+                results = self._last_dimension_results
+                names = [r.name for r in results if isinstance(r, DimensionResult)]
+                if len(results) != len(self._dimensions) or set(names) != set(self._dimensions):
+                    raise EvaluationUnavailableError("trust engine dimensions incomplete")
+                if any(
+                    not isinstance(r, DimensionResult)
+                    or not isinstance(r.safe, bool)
+                    or not isinstance(r.confidence, (int, float))
+                    or isinstance(r.confidence, bool)
+                    or not math.isfinite(r.confidence)
+                    or not 0 <= r.confidence <= 1
+                    for r in results
+                ) or not any(r.confidence > 0 for r in results):
+                    raise EvaluationUnavailableError(
+                        "trust engine dimension evaluation unavailable"
+                    )
         else:
             p_safe = self._eval_ensemble(input_text, output_text)
             if strict and (
@@ -568,7 +612,9 @@ class TrustEngineDetector(SafetyDetector):
                 raise EvaluationUnavailableError("judge service unavailable") from e
             return 0.5
 
-    def _eval_multi_perspective(self, input_text: str, output_text: str) -> float:
+    def _eval_multi_perspective(
+        self, input_text: str, output_text: str, *, strict: bool = False
+    ) -> float:
         """Single model call with multiple dimensions."""
         results, latency = _call_multi_perspective(
             model=self._model,
@@ -577,6 +623,7 @@ class TrustEngineDetector(SafetyDetector):
             output_text=output_text,
             base_url=self._base_url,
             api_key=self._api_key,
+            strict=strict,
         )
         self._last_dimension_results = results
         self._last_latency_ms = latency

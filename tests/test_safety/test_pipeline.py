@@ -328,6 +328,43 @@ async def test_content_model_inference_exception_fails_closed():
     assert result.p_safe is None
 
 
+@pytest.mark.parametrize(
+    "raw_score",
+    [float("nan"), float("inf"), -0.1, 1.1, "0.9", None, True],
+)
+@pytest.mark.parametrize("label", ["toxic", "safe"])
+async def test_strict_content_validates_raw_score_before_filtering(raw_score, label):
+    from aceteam_aep.safety.base import EvaluationUnavailableError
+    from aceteam_aep.safety.content import ContentSafetyDetector
+    from aceteam_aep.safety.pipeline import ContentModelLayer
+
+    detector = ContentSafetyDetector()
+    detector._load_attempted = True
+    detector._pipeline = lambda _text: [{"label": label, "score": raw_score}]
+
+    with pytest.raises(EvaluationUnavailableError):
+        await detector.check(input_text="clean", output_text="", call_id="raw-score", strict=True)
+
+    result = await SafetyPipeline(layers=[ContentModelLayer(detector)]).evaluate(
+        input_text="clean", output_text="", call_id="raw-score"
+    )
+    assert result.verdict == "block"
+    assert result.p_safe is None
+    assert result.layer_results[0].status == "unavailable"
+    assert result.evaluation_unavailable_reason is not None
+    assert "evaluation unavailable" in result.evaluation_unavailable_reason
+
+
+async def test_non_strict_content_keeps_legacy_filter_behavior():
+    from aceteam_aep.safety.content import ContentSafetyDetector
+
+    detector = ContentSafetyDetector()
+    detector._load_attempted = True
+    detector._pipeline = lambda _text: [{"label": "toxic", "score": float("nan")}]
+
+    assert await detector.check(input_text="clean", output_text="", call_id="legacy") == []
+
+
 @pytest.mark.parametrize("score", [float("nan"), -0.2, 1.2])
 async def test_invalid_detector_signal_score_fails_closed(score: float):
     from aceteam_aep.safety.pipeline import RegexLayer
@@ -393,6 +430,99 @@ async def test_trust_engine_uncertain_fallback_is_not_a_completed_score(monkeypa
     assert result.verdict == "block"
     assert result.layer_results[0].status == "unavailable"
     assert result.p_safe is None
+
+
+@pytest.mark.parametrize(
+    "dimensions_json",
+    [
+        '{"pii":{"safe":true,"confidence":0.9}}',
+        '{"pii":{"safe":true,"confidence":0.9},"toxicity":{"safe":true,"confidence":0.8},"extra":{"safe":true,"confidence":0.8}}',
+        '{"pii":{"safe":"yes","confidence":0.9},"toxicity":{"safe":true,"confidence":0.8}}',
+        '{"pii":{"safe":true,"confidence":"0.9"},"toxicity":{"safe":true,"confidence":0.8}}',
+        '{"pii":{"safe":true,"confidence":NaN},"toxicity":{"safe":true,"confidence":0.8}}',
+        '{"pii":{"safe":true,"confidence":1.1},"toxicity":{"safe":true,"confidence":0.8}}',
+        '{"pii":{"safe":true,"confidence":0.9},"pii":{"safe":true,"confidence":0.9},"toxicity":{"safe":true,"confidence":0.8}}',
+        '{"pii":{"safe":true,"confidence":0.9},"toxicity":{"safe":true}}',
+    ],
+)
+async def test_strict_trust_requires_exact_valid_dimensions(monkeypatch, dimensions_json):
+    import httpx
+
+    from aceteam_aep.safety.pipeline import TrustEngineLayer
+    from aceteam_aep.safety.trust_engine import TrustEngineDetector
+
+    content = '{"dimensions":' + dimensions_json + "}"
+
+    def fake_post(*args, **kwargs):
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    detector = TrustEngineDetector(dimensions=["pii", "toxicity"])
+    result = await SafetyPipeline(layers=[TrustEngineLayer(detector)]).evaluate(
+        input_text="clean", output_text="", call_id="dimensions"
+    )
+
+    assert result.verdict == "block"
+    assert result.p_safe is None
+    assert result.layer_results[0].status == "unavailable"
+    assert result.evaluation_unavailable_reason is not None
+    assert "evaluation unavailable" in result.evaluation_unavailable_reason
+
+
+async def test_strict_trust_rejects_partial_underlying_result(monkeypatch):
+    from aceteam_aep.safety.pipeline import TrustEngineLayer
+    from aceteam_aep.safety.trust_engine import DimensionResult, TrustEngineDetector
+
+    detector = TrustEngineDetector(dimensions=["pii", "toxicity"])
+
+    def partial_result(*args, **kwargs):
+        detector._last_dimension_results = [DimensionResult(name="pii", safe=True, confidence=0.9)]
+        return 0.99
+
+    monkeypatch.setattr(detector, "_eval_multi_perspective", partial_result)
+    result = await SafetyPipeline(layers=[TrustEngineLayer(detector)]).evaluate(
+        input_text="clean", output_text="", call_id="partial"
+    )
+
+    assert result.verdict == "block"
+    assert result.p_safe is None
+    assert result.layer_results[0].status == "unavailable"
+
+
+async def test_trust_complete_dimensions_evaluate_and_legacy_defaults_remain(monkeypatch):
+    import httpx
+
+    from aceteam_aep.safety.pipeline import TrustEngineLayer
+    from aceteam_aep.safety.trust_engine import TrustEngineDetector
+
+    content = (
+        '{"dimensions":{"pii":{"safe":true,"confidence":0.9},'
+        '"toxicity":{"safe":true,"confidence":0.8}}}'
+    )
+
+    def fake_post(*args, **kwargs):
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    detector = TrustEngineDetector(dimensions=["pii", "toxicity"])
+    result = await SafetyPipeline(layers=[TrustEngineLayer(detector)]).evaluate(
+        input_text="clean", output_text="", call_id="complete"
+    )
+    assert result.layer_results[0].status == "evaluated"
+    assert result.verdict == "flag"
+
+    content = '{"dimensions":{"pii":{"safe":true,"confidence":0.9}}}'
+    legacy = TrustEngineDetector(dimensions=["pii", "toxicity"])
+    assert await legacy.check(input_text="clean", output_text="", call_id="legacy") == []
+    assert [dimension.name for dimension in legacy._last_dimension_results] == ["pii", "toxicity"]
 
 
 async def test_empty_layers():

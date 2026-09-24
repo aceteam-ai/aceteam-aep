@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from starlette.responses import Response, StreamingResponse
 
-from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate, evaluate_pipeline
+from ..enforcement import EnforcementPolicy, evaluate, evaluate_pipeline
 from ..safety.base import DetectorRegistry
 
 log = logging.getLogger(__name__)
@@ -37,6 +37,11 @@ def _parse_sse_line(line: str) -> dict[str, Any] | None:
         return json.loads(data)
     except json.JSONDecodeError:
         return None
+
+
+def _is_terminal_sse_line(line: str) -> bool:
+    field, separator, value = line.partition(":")
+    return bool(separator) and field == "data" and value.strip() == "[DONE]"
 
 
 def _accumulate_stream_chunks(
@@ -142,12 +147,34 @@ async def handle_streaming_request(
 
     async def stream_generator() -> AsyncGenerator[str, None]:
         accumulated_chunks: list[dict[str, Any]] = []
+        upstream_done = False
+        terminal_event_lines: list[str] = []
+        terminal_event_started = False
 
         try:
-            # Pass through each line immediately
+            # Forward content promptly, but withhold the terminal marker until
+            # the output safety verdict is available. Clients stop at [DONE].
             async for line in upstream.aiter_lines():
+                if _is_terminal_sse_line(line):
+                    upstream_done = True
+                    continue
+                if upstream_done:
+                    if line.strip():
+                        log.warning("Ignoring upstream data after [DONE] for %s", call_id)
+                    continue
+                if terminal_event_started:
+                    terminal_event_lines.append(f"{line}\n")
+                    continue
+                if line.strip() == "event: message_stop":
+                    terminal_event_started = True
+                    terminal_event_lines.append(f"{line}\n")
+                    continue
                 # Buffer for post-stream safety
                 parsed = _parse_sse_line(line)
+                if parsed and parsed.get("type") == "message_stop":
+                    terminal_event_started = True
+                    terminal_event_lines.append(f"{line}\n")
+                    continue
                 if parsed:
                     accumulated_chunks.append(parsed)
 
@@ -231,6 +258,14 @@ async def handle_streaming_request(
                 signals=signals,
                 decision=decision,
             )
+
+        # Forward exactly one OpenAI terminal marker, after any safety block.
+        # Other SSE protocols (for example Anthropic message_stop) do not use
+        # [DONE], so do not synthesize one for them.
+        if upstream_done:
+            yield "data: [DONE]\n\n"
+        elif terminal_event_lines:
+            yield "".join(terminal_event_lines)
 
     return StreamingResponse(
         stream_generator(),
