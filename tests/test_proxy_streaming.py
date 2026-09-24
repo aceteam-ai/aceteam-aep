@@ -21,7 +21,7 @@ from aceteam_aep.proxy.streaming import (
     handle_streaming_request,
 )
 from aceteam_aep.safety.base import DetectorRegistry, SafetySignal
-from aceteam_aep.safety.pipeline import LayerResult, SafetyPipeline
+from aceteam_aep.safety.pipeline import LayerResult, RegexLayer, SafetyPipeline
 
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
@@ -474,6 +474,23 @@ async def test_terminal_pipeline_swallowed_layer_failure_is_unavailable(
     assert outcomes[0].action is None
 
 
+async def test_terminal_pipeline_nested_detector_failure_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_transport(monkeypatch, lambda _: httpx.Response(200, content=_COMPLETE_SSE))
+    detector = _Detector(fails=True)
+    pipeline = SafetyPipeline([RegexLayer([detector])])
+    outcomes: list[TerminalOutcome] = []
+    response = await _call_handler(on_terminal=outcomes.append, pipeline=pipeline)
+    assert await _collect_body(response) == _COMPLETE_SSE.decode()
+    assert detector.calls == 1
+    assert len(outcomes) == 1
+    assert outcomes[0].transport == "completed"
+    assert outcomes[0].evaluation == "unavailable"
+    assert outcomes[0].action is None
+    assert outcomes[0].signals == ()
+
+
 async def test_terminal_runner_exception_preserves_original_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -604,6 +621,35 @@ async def test_terminal_consumer_close_and_task_cancellation(
         assert outcomes[0].evaluation == "interrupted"
         assert outcomes[0].action is None
         assert all(client.is_closed for client in clients)
+
+
+async def test_terminal_close_before_first_byte_cleans_up_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TrackingStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield _COMPLETE_SSE
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    upstream_stream = TrackingStream()
+    clients = _patch_transport(monkeypatch, lambda _: httpx.Response(200, stream=upstream_stream))
+    outcomes: list[TerminalOutcome] = []
+    response = await _call_handler(on_terminal=outcomes.append, call_id="opaque-before-first-byte")
+    assert response.headers["x-aep-call-id"] == "opaque-before-first-byte"
+    await response.body_iterator.aclose()
+    await response.body_iterator.aclose()
+    assert upstream_stream.closed
+    assert all(client.is_closed for client in clients)
+    assert len(outcomes) == 1
+    assert outcomes[0].call_id == "opaque-before-first-byte"
+    assert outcomes[0].transport == "interrupted"
+    assert outcomes[0].evaluation == "interrupted"
+    assert outcomes[0].action is None
 
 
 async def test_app_streaming_400_passes_through_upstream_error(

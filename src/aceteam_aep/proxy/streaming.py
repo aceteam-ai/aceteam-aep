@@ -20,6 +20,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 from starlette.responses import Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate, evaluate_pipeline
 from ..safety.base import DetectorRegistry, SafetySignal
@@ -78,6 +79,57 @@ class EvaluationRunner(Protocol):
     def __call__(
         self, *, input_text: str, output_text: str, call_id: str
     ) -> Awaitable[EvaluationResult]: ...
+
+
+class _ManagedStreamIterator:
+    """Make an unopened stream closable without entering its generator body."""
+
+    def __init__(
+        self,
+        source: AsyncGenerator[str, None],
+        close_source: Callable[[], Awaitable[None]],
+    ) -> None:
+        self._source = source
+        self._close_source = close_source
+        self._closed = False
+
+    def __aiter__(self) -> _ManagedStreamIterator:
+        return self
+
+    async def __anext__(self) -> str:
+        if self._closed:
+            raise StopAsyncIteration
+        try:
+            return await anext(self._source)
+        except StopAsyncIteration:
+            self._closed = True
+            raise
+        except BaseException:
+            try:
+                await self.aclose()
+            except BaseException:
+                log.warning("Failed to close interrupted relay stream", exc_info=True)
+            raise
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._close_source()
+
+
+class _RelayStreamingResponse(StreamingResponse):
+    """Close the upstream stream when ASGI disconnects before iteration."""
+
+    def __init__(self, body: _ManagedStreamIterator, **kwargs: Any) -> None:
+        self._managed_body = body
+        super().__init__(body, **kwargs)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._managed_body.aclose()
 
 
 def _terminal_signals(signals: Sequence[SafetySignal]) -> tuple[TerminalSignal, ...]:
@@ -395,9 +447,13 @@ async def handle_streaming_request(
                             actual = [result.layer_name for result in pipeline_result.layer_results]
                             if not expected:
                                 evaluation = "not_evaluated"
-                            elif actual != expected[: len(actual)] or (
-                                pipeline_result.short_circuited_at is None
-                                and len(actual) != len(expected)
+                            elif (
+                                getattr(pipeline_result, "had_failure", False)
+                                or actual != expected[: len(actual)]
+                                or (
+                                    pipeline_result.short_circuited_at is None
+                                    and len(actual) != len(expected)
+                                )
                             ):
                                 evaluation = "unavailable"
             else:
@@ -459,8 +515,23 @@ async def handle_streaming_request(
                 http_status=upstream.status_code,
             )
 
-    return StreamingResponse(
-        stream_generator(),
+    source = stream_generator()
+
+    async def close_source() -> None:
+        try:
+            await source.aclose()
+        finally:
+            if not terminal_sent:
+                try:
+                    await upstream.aclose()
+                finally:
+                    try:
+                        await client.aclose()
+                    finally:
+                        notify("interrupted", "interrupted", http_status=upstream.status_code)
+
+    return _RelayStreamingResponse(
+        _ManagedStreamIterator(source, close_source),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
