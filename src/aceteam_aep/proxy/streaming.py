@@ -25,12 +25,22 @@ from ..safety.base import DetectorRegistry
 log = logging.getLogger(__name__)
 
 
+def _sse_field_value(line: str) -> tuple[str, str] | None:
+    """Parse an SSE field, removing the one optional space after its colon."""
+    if not line or line.startswith(":"):
+        return None
+    field, separator, value = line.partition(":")
+    if not separator:
+        return field, ""
+    return field, value[1:] if value.startswith(" ") else value
+
+
 def _parse_sse_line(line: str) -> dict[str, Any] | None:
     """Parse a single SSE data line into a dict."""
-    line = line.strip()
-    if not line.startswith("data: "):
+    field_value = _sse_field_value(line)
+    if field_value is None or field_value[0] != "data":
         return None
-    data = line[6:]
+    data = field_value[1]
     if data == "[DONE]":
         return None
     try:
@@ -40,8 +50,15 @@ def _parse_sse_line(line: str) -> dict[str, Any] | None:
 
 
 def _is_terminal_sse_line(line: str) -> bool:
-    field, separator, value = line.partition(":")
-    return bool(separator) and field == "data" and value.strip() == "[DONE]"
+    field_value = _sse_field_value(line)
+    return (
+        field_value is not None and field_value[0] == "data" and field_value[1].strip() == "[DONE]"
+    )
+
+
+def _is_message_stop_sse_line(line: str) -> bool:
+    field_value = _sse_field_value(line)
+    return field_value is not None and field_value == ("event", "message_stop")
 
 
 def _accumulate_stream_chunks(
@@ -165,7 +182,7 @@ async def handle_streaming_request(
                 if terminal_event_started:
                     terminal_event_lines.append(f"{line}\n")
                     continue
-                if line.strip() == "event: message_stop":
+                if _is_message_stop_sse_line(line):
                     terminal_event_started = True
                     terminal_event_lines.append(f"{line}\n")
                     continue
