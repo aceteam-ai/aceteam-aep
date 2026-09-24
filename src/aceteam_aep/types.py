@@ -23,6 +23,7 @@ class ToolCallRequest:
     id: str
     name: str
     arguments: dict[str, Any]
+    origin: AepResponseMetadata | None = None
 
 
 @dataclass
@@ -59,6 +60,23 @@ class Usage:
         )
 
 
+@dataclass(frozen=True)
+class AepRequestContext:
+    """Caller-supplied context sent only through an explicitly trusted gateway."""
+
+    trace_id: str | None = None
+    entity: str | None = None
+
+
+@dataclass(frozen=True)
+class AepResponseMetadata:
+    """Allowlisted gateway headers for one HTTP response (not a safety verdict)."""
+
+    call_id: str | None = None
+    trace_id: str | None = None
+    entity: str | None = None
+
+
 @dataclass
 class ChatResponse:
     """Response from a non-streaming chat call."""
@@ -67,6 +85,7 @@ class ChatResponse:
     usage: Usage
     model: str
     finish_reason: str | None = None
+    response_metadata: AepResponseMetadata | None = None
 
 
 @dataclass
@@ -78,6 +97,8 @@ class StreamChunk:
     usage: Usage | None = None
     finish_reason: str | None = None
     model: str | None = None
+    response_metadata: AepResponseMetadata | None = None
+    response_complete: bool = False
 
 
 @dataclass
@@ -88,6 +109,7 @@ class AgentResult:
     usage: Usage = field(default_factory=Usage)
     iterations: int = 0
     finish_reason: str | None = None
+    response_metadata: list[AepResponseMetadata] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +121,8 @@ class Document:
 
 
 __all__ = [
+    "AepRequestContext",
+    "AepResponseMetadata",
     "AgentResult",
     "ChatMessage",
     "ChatResponse",

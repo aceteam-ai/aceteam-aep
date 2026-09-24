@@ -8,7 +8,21 @@ from typing import Any
 
 import anthropic
 
-from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
+from ..client import (
+    GatewayResponseError,
+    _context_headers,
+    _gateway_metadata,
+    _validate_gateway_url,
+)
+from ..types import (
+    AepRequestContext,
+    AepResponseMetadata,
+    ChatMessage,
+    ChatResponse,
+    StreamChunk,
+    ToolCallRequest,
+    Usage,
+)
 from .errors import StreamFailedError
 
 
@@ -125,8 +139,14 @@ class AnthropicClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         supports_temperature: bool = True,
+        trusted_gateway_url: str | None = None,
     ) -> None:
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        if trusted_gateway_url is not None:
+            trusted_gateway_url = _validate_gateway_url(trusted_gateway_url)
+        self._client = anthropic.AsyncAnthropic(  # pyright: ignore[reportAttributeAccessIssue]
+            api_key=api_key, base_url=trusted_gateway_url
+        )
+        self._trusted_gateway = trusted_gateway_url is not None
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
@@ -149,6 +169,46 @@ class AnthropicClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        return await self._chat(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            request_context=None,
+        )
+
+    async def chat_with_context(
+        self,
+        messages: list[ChatMessage],
+        *,
+        request_context: AepRequestContext,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        if not self._trusted_gateway:
+            raise ValueError("Request context requires a trusted gateway")
+        return await self._chat(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            request_context=request_context,
+        )
+
+    async def _chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        response_format: dict[str, Any] | None,
+        request_context: AepRequestContext | None,
     ) -> ChatResponse:
         system_prompt, formatted = _format_messages(messages)
 
@@ -180,40 +240,76 @@ class AnthropicClient:
                 else:
                     kwargs["system"] = schema_prompt
 
-        response = await self._client.messages.create(**kwargs)
+        metadata = None
+        if self._trusted_gateway:
+            kwargs["extra_headers"] = _context_headers(request_context)
+            raw = await self._client.messages.with_raw_response.create(**kwargs)
+            metadata = _gateway_metadata(raw.headers)
+            try:
+                response = raw.parse()
+            except Exception as exc:
+                raise GatewayResponseError(exc, metadata) from exc
+        else:
+            response = await self._client.messages.create(**kwargs)
 
-        # Extract text and tool calls
-        text_parts: list[str] = []
-        tool_calls: list[ToolCallRequest] = []
-
-        for block in response.content:
-            if block.type == "text":
-                text_parts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls.append(
-                    ToolCallRequest(
-                        id=block.id,
-                        name=block.name,
-                        arguments=block.input if isinstance(block.input, dict) else {},
+        try:
+            text_parts: list[str] = []
+            tool_calls: list[ToolCallRequest] = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_calls.append(
+                        ToolCallRequest(
+                            id=block.id,
+                            name=block.name,
+                            arguments=block.input if isinstance(block.input, dict) else {},
+                            origin=metadata,
+                        )
                     )
-                )
 
-        usage = Usage(
-            prompt_tokens=response.usage.input_tokens,
-            completion_tokens=response.usage.output_tokens,
-            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
-        )
+            usage = Usage(
+                prompt_tokens=response.usage.input_tokens,
+                completion_tokens=response.usage.output_tokens,
+                total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            )
+            return ChatResponse(
+                message=ChatMessage(
+                    role="assistant",
+                    content="\n".join(text_parts),
+                    tool_calls=tool_calls if tool_calls else None,
+                ),
+                usage=usage,
+                model=response.model,
+                finish_reason=response.stop_reason,
+                response_metadata=metadata,
+            )
+        except Exception as exc:
+            if metadata is not None:
+                raise GatewayResponseError(exc, metadata) from exc
+            raise
 
-        return ChatResponse(
-            message=ChatMessage(
-                role="assistant",
-                content="\n".join(text_parts),
-                tool_calls=tool_calls if tool_calls else None,
-            ),
-            usage=usage,
-            model=response.model,
-            finish_reason=response.stop_reason,
-        )
+    async def _stream_events(
+        self,
+        kwargs: dict[str, Any],
+        request_context: AepRequestContext | None,
+    ) -> AsyncIterator[tuple[AepResponseMetadata | None, Any | None]]:
+        if self._trusted_gateway:
+            kwargs["extra_headers"] = _context_headers(request_context)
+            kwargs["stream"] = True
+            async with self._client.messages.with_streaming_response.create(**kwargs) as raw:
+                metadata = _gateway_metadata(raw.headers)
+                yield metadata, None
+                try:
+                    stream = await raw.parse()
+                    async for event in stream:
+                        yield metadata, event
+                except Exception as exc:
+                    raise GatewayResponseError(exc, metadata) from exc
+        else:
+            async with self._client.messages.stream(**kwargs) as stream:
+                async for event in stream:
+                    yield None, event
 
     async def chat_stream(
         self,
@@ -222,6 +318,44 @@ class AnthropicClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        async for chunk in self._chat_stream(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            request_context=None,
+        ):
+            yield chunk
+
+    async def chat_stream_with_context(
+        self,
+        messages: list[ChatMessage],
+        *,
+        request_context: AepRequestContext,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        if not self._trusted_gateway:
+            raise ValueError("Request context requires a trusted gateway")
+        async for chunk in self._chat_stream(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            request_context=request_context,
+        ):
+            yield chunk
+
+    async def _chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        request_context: AepRequestContext | None,
     ) -> AsyncIterator[StreamChunk]:
         system_prompt, formatted = _format_messages(messages)
 
@@ -240,101 +374,111 @@ class AnthropicClient:
         if tools:
             kwargs["tools"] = _tools_to_anthropic(tools)
 
-        async with self._client.messages.stream(**kwargs) as stream:
-            current_tool: dict[str, Any] | None = None
-            input_tokens = 0
-            output_tokens = 0
-            # If the stream closes with this still false, Anthropic
-            # accepted the request and returned an SSE stream that
-            # closed without emitting a single text, tool-call, or
-            # stop-reason event. Observed in production from revoked
-            # BYOK keys where the upstream rejection arrives as a soft
-            # close. Raise so callers see a real error rather than a
-            # blank assistant reply.
-            produced_anything = False
+        metadata: AepResponseMetadata | None = None
+        current_tool: dict[str, Any] | None = None
+        input_tokens = 0
+        output_tokens = 0
+        # If the stream closes with this still false, Anthropic
+        # accepted the request and returned an SSE stream that
+        # closed without emitting a single text, tool-call, or
+        # stop-reason event. Observed in production from revoked
+        # BYOK keys where the upstream rejection arrives as a soft
+        # close. Raise so callers see a real error rather than a
+        # blank assistant reply.
+        produced_anything = False
 
-            async for event in stream:
-                if event.type == "message_start":
-                    if hasattr(event.message, "usage"):
-                        input_tokens = event.message.usage.input_tokens
+        async for metadata, event in self._stream_events(kwargs, request_context):
+            if event is None:
+                yield StreamChunk(response_metadata=metadata)
+                continue
+            if event.type == "message_start":
+                if hasattr(event.message, "usage"):
+                    input_tokens = event.message.usage.input_tokens
 
-                elif event.type == "content_block_start":
-                    if (
-                        hasattr(event.content_block, "type")
-                        and event.content_block.type == "tool_use"
-                    ):
-                        current_tool = {
-                            "id": event.content_block.id,
-                            "name": event.content_block.name,
-                            "arguments": "",
-                        }
+            elif event.type == "content_block_start":
+                if hasattr(event.content_block, "type") and event.content_block.type == "tool_use":
+                    current_tool = {
+                        "id": event.content_block.id,
+                        "name": event.content_block.name,
+                        "arguments": "",
+                    }
 
-                elif event.type == "content_block_delta":
-                    if hasattr(event.delta, "text"):
-                        produced_anything = True
-                        yield StreamChunk(delta_text=event.delta.text)
-                    elif hasattr(event.delta, "partial_json") and current_tool:
-                        current_tool["arguments"] += event.delta.partial_json
+            elif event.type == "content_block_delta":
+                if hasattr(event.delta, "text"):
+                    produced_anything = True
+                    yield StreamChunk(delta_text=event.delta.text, response_metadata=metadata)
+                elif hasattr(event.delta, "partial_json") and current_tool:
+                    current_tool["arguments"] += event.delta.partial_json
 
-                elif event.type == "content_block_stop":
+            elif event.type == "content_block_stop":
+                if current_tool:
+                    try:
+                        raw_args = current_tool["arguments"]
+                        args = json.loads(raw_args) if raw_args.strip() else {}
+                    except (json.JSONDecodeError, TypeError):
+                        args = {"raw": current_tool["arguments"]}
+                    produced_anything = True
+                    yield StreamChunk(
+                        delta_tool_calls=[
+                            ToolCallRequest(
+                                id=current_tool["id"],
+                                name=current_tool["name"],
+                                arguments=args,
+                                origin=metadata,
+                            )
+                        ],
+                        response_metadata=metadata,
+                    )
+                    current_tool = None
+
+            elif event.type == "message_delta":
+                if hasattr(event, "usage") and event.usage:
+                    output_tokens = event.usage.output_tokens
+                finish = getattr(event.delta, "stop_reason", None)
+                if finish:
+                    produced_anything = True
+                    # Flush any in-progress tool call that was truncated
+                    # (e.g. by max_tokens). Anthropic skips content_block_stop
+                    # when the response is cut short, so the accumulated
+                    # partial JSON would otherwise be silently dropped.
                     if current_tool:
                         try:
                             raw_args = current_tool["arguments"]
                             args = json.loads(raw_args) if raw_args.strip() else {}
                         except (json.JSONDecodeError, TypeError):
                             args = {"raw": current_tool["arguments"]}
-                        produced_anything = True
                         yield StreamChunk(
                             delta_tool_calls=[
                                 ToolCallRequest(
                                     id=current_tool["id"],
                                     name=current_tool["name"],
                                     arguments=args,
+                                    origin=metadata,
                                 )
-                            ]
+                            ],
+                            response_metadata=metadata,
                         )
                         current_tool = None
-
-                elif event.type == "message_delta":
-                    if hasattr(event, "usage") and event.usage:
-                        output_tokens = event.usage.output_tokens
-                    finish = getattr(event.delta, "stop_reason", None)
-                    if finish:
-                        produced_anything = True
-                        # Flush any in-progress tool call that was truncated
-                        # (e.g. by max_tokens). Anthropic skips content_block_stop
-                        # when the response is cut short, so the accumulated
-                        # partial JSON would otherwise be silently dropped.
-                        if current_tool:
-                            try:
-                                raw_args = current_tool["arguments"]
-                                args = json.loads(raw_args) if raw_args.strip() else {}
-                            except (json.JSONDecodeError, TypeError):
-                                args = {"raw": current_tool["arguments"]}
-                            yield StreamChunk(
-                                delta_tool_calls=[
-                                    ToolCallRequest(
-                                        id=current_tool["id"],
-                                        name=current_tool["name"],
-                                        arguments=args,
-                                    )
-                                ]
-                            )
-                            current_tool = None
-                        yield StreamChunk(
-                            finish_reason=finish,
-                            usage=Usage(
-                                prompt_tokens=input_tokens,
-                                completion_tokens=output_tokens,
-                                total_tokens=input_tokens + output_tokens,
-                            ),
-                        )
+                    yield StreamChunk(
+                        finish_reason=finish,
+                        usage=Usage(
+                            prompt_tokens=input_tokens,
+                            completion_tokens=output_tokens,
+                            total_tokens=input_tokens + output_tokens,
+                        ),
+                        response_metadata=metadata,
+                    )
 
         if not produced_anything:
-            raise StreamFailedError(
+            error = StreamFailedError(
                 f"Anthropic stream closed with no content for model {self._model!r}",
                 provider="anthropic",
             )
+            if metadata is not None:
+                raise GatewayResponseError(error, metadata) from error
+            raise error
+        if self._trusted_gateway:
+            yield StreamChunk(response_metadata=metadata, response_complete=True)
 
 
 __all__ = ["AnthropicClient"]

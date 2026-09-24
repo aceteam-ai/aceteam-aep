@@ -7,8 +7,22 @@ from typing import Any
 
 import openai
 
+from ..client import (
+    GatewayResponseError,
+    _context_headers,
+    _gateway_metadata,
+    _validate_gateway_url,
+)
 from ..models import get_model_info
-from ..types import ChatMessage, ChatResponse, StreamChunk, ToolCallRequest, Usage
+from ..types import (
+    AepRequestContext,
+    AepResponseMetadata,
+    ChatMessage,
+    ChatResponse,
+    StreamChunk,
+    ToolCallRequest,
+    Usage,
+)
 from .errors import StreamFailedError
 
 
@@ -65,6 +79,7 @@ def _serialize_args(args: dict[str, Any]) -> str:
 
 def _parse_tool_calls(
     tool_calls: list[Any] | None,
+    metadata: AepResponseMetadata | None = None,
 ) -> list[ToolCallRequest] | None:
     if not tool_calls:
         return None
@@ -80,7 +95,11 @@ def _parse_tool_calls(
                 args = args_str or {}
         except (json.JSONDecodeError, TypeError):
             args = {"raw": args_str}
-        result.append(ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args))
+        if not isinstance(args, dict):
+            args = {"raw": args_str}
+        result.append(
+            ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args, origin=metadata)
+        )
     return result
 
 
@@ -156,8 +175,16 @@ class OpenAIClient:
         max_tokens: int = 4096,
         supports_temperature: bool = True,
         uses_max_completion_tokens: bool | None = None,
+        trusted_gateway_url: str | None = None,
     ) -> None:
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        if trusted_gateway_url is not None and base_url is not None:
+            raise ValueError("Specify either base_url or trusted_gateway_url")
+        if trusted_gateway_url is not None:
+            trusted_gateway_url = _validate_gateway_url(trusted_gateway_url)
+        self._client = openai.AsyncOpenAI(  # pyright: ignore[reportAttributeAccessIssue]
+            api_key=api_key, base_url=trusted_gateway_url or base_url
+        )
+        self._trusted_gateway = trusted_gateway_url is not None
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
@@ -187,6 +214,46 @@ class OpenAIClient:
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
+        return await self._chat(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            request_context=None,
+        )
+
+    async def chat_with_context(
+        self,
+        messages: list[ChatMessage],
+        *,
+        request_context: AepRequestContext,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        if not self._trusted_gateway:
+            raise ValueError("Request context requires a trusted gateway")
+        return await self._chat(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            request_context=request_context,
+        )
+
+    async def _chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        response_format: dict[str, Any] | None,
+        request_context: AepRequestContext | None,
+    ) -> ChatResponse:
         if self._uses_max_completion_tokens is not None:
             uses_mct = self._uses_max_completion_tokens
         else:
@@ -207,22 +274,58 @@ class OpenAIClient:
         if response_format:
             kwargs["response_format"] = response_format
 
-        response = await self._client.chat.completions.create(**kwargs)
-        choice = response.choices[0]
-        msg = choice.message
+        metadata = None
+        if self._trusted_gateway:
+            kwargs["extra_headers"] = _context_headers(request_context)
+            raw = await self._client.chat.completions.with_raw_response.create(**kwargs)
+            metadata = _gateway_metadata(raw.headers)
+            try:
+                response = raw.parse()
+            except Exception as exc:
+                raise GatewayResponseError(exc, metadata) from exc
+        else:
+            response = await self._client.chat.completions.create(**kwargs)
+        try:
+            choice = response.choices[0]
+            msg = choice.message
+            tool_calls = _parse_tool_calls(msg.tool_calls, metadata)
+            return ChatResponse(
+                message=ChatMessage(
+                    role="assistant",
+                    content=msg.content or "",
+                    tool_calls=tool_calls,
+                ),
+                usage=_extract_usage(response.usage),
+                model=response.model,
+                finish_reason=choice.finish_reason,
+                response_metadata=metadata,
+            )
+        except Exception as exc:
+            if metadata is not None:
+                raise GatewayResponseError(exc, metadata) from exc
+            raise
 
-        tool_calls = _parse_tool_calls(msg.tool_calls)
-
-        return ChatResponse(
-            message=ChatMessage(
-                role="assistant",
-                content=msg.content or "",
-                tool_calls=tool_calls,
-            ),
-            usage=_extract_usage(response.usage),
-            model=response.model,
-            finish_reason=choice.finish_reason,
-        )
+    async def _stream_response(
+        self,
+        kwargs: dict[str, Any],
+        request_context: AepRequestContext | None,
+    ) -> AsyncIterator[tuple[AepResponseMetadata | None, Any | None]]:
+        if self._trusted_gateway:
+            kwargs["extra_headers"] = _context_headers(request_context)
+            create = self._client.chat.completions.with_streaming_response.create
+            async with create(**kwargs) as raw:
+                metadata = _gateway_metadata(raw.headers)
+                yield metadata, None  # headers are available before parsing or SSE iteration
+                try:
+                    stream = await raw.parse()
+                    async for chunk in stream:
+                        yield metadata, chunk
+                except Exception as exc:
+                    raise GatewayResponseError(exc, metadata) from exc
+        else:
+            stream = await self._client.chat.completions.create(**kwargs)
+            async for chunk in stream:
+                yield None, chunk
 
     async def chat_stream(
         self,
@@ -231,6 +334,44 @@ class OpenAIClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        async for chunk in self._chat_stream(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            request_context=None,
+        ):
+            yield chunk
+
+    async def chat_stream_with_context(
+        self,
+        messages: list[ChatMessage],
+        *,
+        request_context: AepRequestContext,
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[StreamChunk]:
+        if not self._trusted_gateway:
+            raise ValueError("Request context requires a trusted gateway")
+        async for chunk in self._chat_stream(
+            messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            request_context=request_context,
+        ):
+            yield chunk
+
+    async def _chat_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        request_context: AepRequestContext | None,
     ) -> AsyncIterator[StreamChunk]:
         if self._uses_max_completion_tokens is not None:
             uses_mct = self._uses_max_completion_tokens
@@ -251,8 +392,6 @@ class OpenAIClient:
         if tools:
             kwargs["tools"] = tools
 
-        stream = await self._client.chat.completions.create(**kwargs)
-
         # Accumulate partial tool calls across chunks
         import json
 
@@ -267,11 +406,15 @@ class OpenAIClient:
         # OpenAI-compatible aggregators emit a usage frame even when
         # the underlying choices stream was silently rejected.
         produced_anything = False
+        metadata: AepResponseMetadata | None = None
 
-        async for chunk in stream:
+        async for metadata, chunk in self._stream_response(kwargs, request_context):
+            if chunk is None:
+                yield StreamChunk(response_metadata=metadata)
+                continue
             if not chunk.choices:
                 if chunk.usage:
-                    yield StreamChunk(usage=_extract_usage(chunk.usage))
+                    yield StreamChunk(usage=_extract_usage(chunk.usage), response_metadata=metadata)
                 continue
 
             delta = chunk.choices[0].delta
@@ -318,6 +461,7 @@ class OpenAIClient:
                             id=tc_data["id"],
                             name=tc_data["name"],
                             arguments=args,
+                            origin=metadata,
                         )
                     )
                 partial_tool_calls.clear()
@@ -330,14 +474,20 @@ class OpenAIClient:
                 delta_tool_calls=completed_tool_calls,
                 finish_reason=finish,
                 model=chunk.model,
+                response_metadata=metadata,
             )
 
         if not produced_anything:
-            raise StreamFailedError(
+            error = StreamFailedError(
                 f"{self._provider_slug.capitalize()} stream closed with no "
                 f"content for model {self._model!r}",
                 provider=self._provider_slug,
             )
+            if metadata is not None:
+                raise GatewayResponseError(error, metadata) from error
+            raise error
+        if self._trusted_gateway:
+            yield StreamChunk(response_metadata=metadata, response_complete=True)
 
 
 __all__ = ["OpenAIClient"]
