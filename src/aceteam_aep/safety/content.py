@@ -6,7 +6,7 @@ import logging
 import threading
 from collections.abc import Sequence
 
-from .base import SafetyDetector, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,8 @@ class ContentSafetyDetector(SafetyDetector):
         if not self._load_attempted:
             self._load()
         if not self._available:
+            if kwargs.get("strict"):
+                raise EvaluationUnavailableError("content safety model unavailable")
             return []
 
         signals: list[SafetySignal] = []
@@ -95,6 +97,8 @@ class ContentSafetyDetector(SafetyDetector):
                         )
             except Exception:
                 log.warning("Content safety check failed for %s", source, exc_info=True)
+                if kwargs.get("strict"):
+                    raise
         return signals
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import httpx
@@ -18,6 +18,7 @@ from aceteam_aep.proxy.streaming import (
     handle_streaming_request,
 )
 from aceteam_aep.safety.base import DetectorRegistry
+from aceteam_aep.safety.pipeline import LayerResult, SafetyPipeline
 
 
 def test_parse_sse_data_line() -> None:
@@ -129,6 +130,54 @@ async def _call_handler(on_complete: Any = None) -> Any:
         policy=EnforcementPolicy(),
         on_complete=on_complete,
     )
+
+
+async def test_streaming_required_evaluator_failure_emits_unavailable_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingLayer:
+        name = "required"
+        prior_p_safe = 0.99
+
+        async def score(
+            self,
+            *,
+            input_text: str,
+            output_text: str,
+            call_id: str,
+            prior_results: Sequence[LayerResult],
+            **kwargs: Any,
+        ) -> LayerResult:
+            raise RuntimeError("private inference detail")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"model": "gpt-4o", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={"Content-Type": "application/json"},
+        call_id="stream-failed-evaluator",
+        input_text="clean",
+        registry=DetectorRegistry(),
+        policy=EnforcementPolicy(),
+        pipeline=SafetyPipeline(layers=[FailingLayer()]),
+    )
+
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert '"aep_safety_block": true' in body
+    assert "evaluation unavailable" in body
+    assert "private inference detail" not in body
+    assert "P(safe)" not in body
 
 
 async def test_upstream_400_openai_body_passed_through(

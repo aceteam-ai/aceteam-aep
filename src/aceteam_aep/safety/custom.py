@@ -36,13 +36,9 @@ def _extract_yn_probability(fn: PawFunction) -> float | None:
     Returns the softmax probability of the Y token, or None on failure.
     """
     try:
-        import ctypes
-
         import llama_cpp as _llama
 
         ctx = fn._llm.ctx
-        n_vocab = fn._llm.n_vocab()
-
         logits_ptr = _llama.llama_get_logits_ith(ctx, -1)
         if not logits_ptr:
             return None
@@ -64,9 +60,7 @@ def _extract_yn_probability(fn: PawFunction) -> float | None:
         return None
 
 
-def _paw_call_with_logprobs(
-    fn: PawFunction, text: str
-) -> tuple[str, float | None]:
+def _paw_call_with_logprobs(fn: PawFunction, text: str) -> tuple[str, float | None]:
     """Replicate PawFunction.__call__ with logit extraction before sampling."""
     fn._llm.n_tokens = fn._n_prefix
 
@@ -100,6 +94,7 @@ def _paw_call_with_logprobs(
 
     output_bytes = fn._llm.detokenize(output_tokens)
     return output_bytes.decode("utf-8", errors="replace").strip(), p_compliant
+
 
 CustomPolicyAppliesTo = Literal["input", "output", "both"]
 CustomPolicySeverity = Literal["low", "medium", "high"]
@@ -439,9 +434,7 @@ class CustomSafetyDetector(SafetyDetector):
                             detail += f" (p_unsafe={p_unsafe})"
                         if result.chunk_results and len(result.chunk_results) > 1:
                             failing = [
-                                i
-                                for i, (ok, _) in enumerate(result.chunk_results)
-                                if not ok
+                                i for i, (ok, _) in enumerate(result.chunk_results) if not ok
                             ]
                             detail += f" [chunks {failing}]"
                         signals.append(
@@ -455,6 +448,8 @@ class CustomSafetyDetector(SafetyDetector):
                         )
             except Exception:
                 log.warning("Custom safety check failed for %s", policy.name, exc_info=True)
+                if kwargs.get("strict"):
+                    raise
             return signals
 
         signals: list[SafetySignal] = []
