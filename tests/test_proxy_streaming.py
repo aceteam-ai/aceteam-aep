@@ -131,6 +131,26 @@ async def _collect_until_done(resp: StreamingResponse) -> str:
     return "".join(parts)
 
 
+def _parse_anthropic_events(body: str) -> list[tuple[str, str]]:
+    events: list[tuple[str, str]] = []
+    for frame in body.split("\n\n"):
+        if not frame:
+            continue
+        event = "message"
+        data: list[str] = []
+        for line in frame.splitlines():
+            field, separator, value = line.partition(":")
+            if not separator:
+                continue
+            value = value.removeprefix(" ")
+            if field == "event":
+                event = value
+            elif field == "data":
+                data.append(value)
+        events.append((event, "\n".join(data)))
+    return events
+
+
 async def _anthropic_events_until_stop(resp: StreamingResponse) -> list[tuple[str, str]]:
     """Consume complete SSE frames as a client that closes at message_stop."""
     events: list[tuple[str, str]] = []
@@ -140,21 +160,11 @@ async def _anthropic_events_until_stop(resp: StreamingResponse) -> list[tuple[st
         pending += chunk
         while "\n\n" in pending:
             frame, pending = pending.split("\n\n", 1)
-            event = "message"
-            data: list[str] = []
-            for line in frame.splitlines():
-                field, separator, value = line.partition(":")
-                if not separator:
-                    continue
-                value = value.removeprefix(" ")
-                if field == "event":
-                    event = value
-                elif field == "data":
-                    data.append(value)
             if not frame:
                 continue
-            events.append((event, "\n".join(data)))
-            if event == "message_stop":
+            parsed_event = _parse_anthropic_events(frame + "\n\n")[0]
+            events.append(parsed_event)
+            if parsed_event[0] == "message_stop":
                 return events
     return events
 
@@ -173,9 +183,11 @@ async def _call_handler(on_complete: Any = None) -> Any:
 
 
 @pytest.mark.parametrize("done_line", [b"data: [DONE]", b"data:[DONE]"])
+@pytest.mark.parametrize("ending", [b"\n\n", b"\n"])
 async def test_streaming_required_evaluator_failure_emits_unavailable_block(
     monkeypatch: pytest.MonkeyPatch,
     done_line: bytes,
+    ending: bytes,
 ) -> None:
     class FailingLayer:
         name = "required"
@@ -198,7 +210,7 @@ async def test_streaming_required_evaluator_failure_emits_unavailable_block(
             content=(
                 b'data: {"model": "gpt-4o", "choices": [{"delta": {"content": "ok"}}]}\n\n'
                 + done_line
-                + b"\n\n"
+                + ending
             ),
             headers={"content-type": "text/event-stream"},
         )
@@ -337,6 +349,32 @@ async def test_anthropic_success_emits_one_terminal_and_no_done(
     assert isinstance(response, StreamingResponse)
     events = await _anthropic_events_until_stop(response)
     assert events == [("message_stop", '{"type":"message_stop"}')]
+
+
+async def test_anthropic_duplicate_terminals_keep_one_complete_frame_and_other_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+                b'event: update\ndata: {"type":"update","note":"keep"}\n\n'
+                b'id: duplicate\ndata: {"type":"message_stop"}\nevent:message_stop\n\n'
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await _call_handler()
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert _parse_anthropic_events(body) == [
+        ("update", '{"type":"update","note":"keep"}'),
+        ("message_stop", '{"type":"message_stop"}'),
+    ]
+    assert "data: [DONE]" not in body
 
 
 @pytest.mark.parametrize("event_line", [b"event: message_stop", b"event:message_stop"])
