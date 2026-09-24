@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from typing import Any
 
 import openai
@@ -309,7 +310,7 @@ class OpenAIClient:
         self,
         kwargs: dict[str, Any],
         request_context: AepRequestContext | None,
-    ) -> AsyncIterator[tuple[AepResponseMetadata | None, Any | None]]:
+    ) -> AsyncGenerator[tuple[AepResponseMetadata | None, Any | None], None]:
         if self._trusted_gateway:
             kwargs["extra_headers"] = _context_headers(request_context)
             create = self._client.chat.completions.with_streaming_response.create
@@ -324,10 +325,16 @@ class OpenAIClient:
                     raise GatewayResponseError(exc, metadata) from exc
         else:
             stream = await self._client.chat.completions.create(**kwargs)
-            async for chunk in stream:
-                yield None, chunk
+            try:
+                async for chunk in stream:
+                    yield None, chunk
+            finally:
+                if hasattr(stream, "close"):
+                    await stream.close()
+                elif hasattr(stream, "aclose"):
+                    await stream.aclose()
 
-    async def chat_stream(
+    def chat_stream(
         self,
         messages: list[ChatMessage],
         *,
@@ -335,16 +342,15 @@ class OpenAIClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        async for chunk in self._chat_stream(
+        return self._chat_stream(
             messages,
             tools=tools,
             temperature=temperature,
             max_tokens=max_tokens,
             request_context=None,
-        ):
-            yield chunk
+        )
 
-    async def chat_stream_with_context(
+    def chat_stream_with_context(
         self,
         messages: list[ChatMessage],
         *,
@@ -355,14 +361,13 @@ class OpenAIClient:
     ) -> AsyncIterator[StreamChunk]:
         if not self._trusted_gateway:
             raise ValueError("Request context requires a trusted gateway")
-        async for chunk in self._chat_stream(
+        return self._chat_stream(
             messages,
             tools=tools,
             temperature=temperature,
             max_tokens=max_tokens,
             request_context=request_context,
-        ):
-            yield chunk
+        )
 
     async def _chat_stream(
         self,
@@ -408,74 +413,78 @@ class OpenAIClient:
         produced_anything = False
         metadata: AepResponseMetadata | None = None
 
-        async for metadata, chunk in self._stream_response(kwargs, request_context):
-            if chunk is None:
-                yield StreamChunk(response_metadata=metadata)
-                continue
-            if not chunk.choices:
-                if chunk.usage:
-                    yield StreamChunk(usage=_extract_usage(chunk.usage), response_metadata=metadata)
-                continue
-
-            delta = chunk.choices[0].delta
-
-            # Handle text
-            text = delta.content or ""
-            if text:
-                produced_anything = True
-
-            # Handle tool calls
-            completed_tool_calls: list[ToolCallRequest] | None = None
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in partial_tool_calls:
-                        partial_tool_calls[idx] = {
-                            "id": tc_delta.id or "",
-                            "name": getattr(tc_delta.function, "name", None) or "",
-                            "arguments": "",
-                        }
-                    else:
-                        if tc_delta.id:
-                            partial_tool_calls[idx]["id"] = tc_delta.id
-                        if getattr(tc_delta.function, "name", None):
-                            partial_tool_calls[idx]["name"] = tc_delta.function.name
-
-                    if getattr(tc_delta.function, "arguments", None):
-                        partial_tool_calls[idx]["arguments"] += tc_delta.function.arguments
-
-            # Check for finished tool calls
-            finish = chunk.choices[0].finish_reason
-            if finish:
-                produced_anything = True
-            if finish == "tool_calls" and partial_tool_calls:
-                completed_tool_calls = []
-                for tc_data in partial_tool_calls.values():
-                    try:
-                        raw_args = tc_data["arguments"]
-                        args = json.loads(raw_args) if raw_args.strip() else {}
-                    except (json.JSONDecodeError, TypeError):
-                        args = {"raw": tc_data["arguments"]}
-                    completed_tool_calls.append(
-                        ToolCallRequest(
-                            id=tc_data["id"],
-                            name=tc_data["name"],
-                            arguments=args,
-                            origin=metadata,
+        source = self._stream_response(kwargs, request_context)
+        async with aclosing(source):
+            async for metadata, chunk in source:
+                if chunk is None:
+                    yield StreamChunk(response_metadata=metadata)
+                    continue
+                if not chunk.choices:
+                    if chunk.usage:
+                        yield StreamChunk(
+                            usage=_extract_usage(chunk.usage), response_metadata=metadata
                         )
-                    )
-                partial_tool_calls.clear()
+                    continue
 
-            if completed_tool_calls:
-                produced_anything = True
+                delta = chunk.choices[0].delta
 
-            yield StreamChunk(
-                delta_text=text,
-                delta_tool_calls=completed_tool_calls,
-                finish_reason=finish,
-                model=chunk.model,
-                response_metadata=metadata,
-            )
+                # Handle text
+                text = delta.content or ""
+                if text:
+                    produced_anything = True
+
+                # Handle tool calls
+                completed_tool_calls: list[ToolCallRequest] | None = None
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in partial_tool_calls:
+                            partial_tool_calls[idx] = {
+                                "id": tc_delta.id or "",
+                                "name": getattr(tc_delta.function, "name", None) or "",
+                                "arguments": "",
+                            }
+                        else:
+                            if tc_delta.id:
+                                partial_tool_calls[idx]["id"] = tc_delta.id
+                            if getattr(tc_delta.function, "name", None):
+                                partial_tool_calls[idx]["name"] = tc_delta.function.name
+
+                        if getattr(tc_delta.function, "arguments", None):
+                            partial_tool_calls[idx]["arguments"] += tc_delta.function.arguments
+
+                # Check for finished tool calls
+                finish = chunk.choices[0].finish_reason
+                if finish:
+                    produced_anything = True
+                if finish == "tool_calls" and partial_tool_calls:
+                    completed_tool_calls = []
+                    for tc_data in partial_tool_calls.values():
+                        try:
+                            raw_args = tc_data["arguments"]
+                            args = json.loads(raw_args) if raw_args.strip() else {}
+                        except (json.JSONDecodeError, TypeError):
+                            args = {"raw": tc_data["arguments"]}
+                        completed_tool_calls.append(
+                            ToolCallRequest(
+                                id=tc_data["id"],
+                                name=tc_data["name"],
+                                arguments=args,
+                                origin=metadata,
+                            )
+                        )
+                    partial_tool_calls.clear()
+
+                if completed_tool_calls:
+                    produced_anything = True
+
+                yield StreamChunk(
+                    delta_text=text,
+                    delta_tool_calls=completed_tool_calls,
+                    finish_reason=finish,
+                    model=chunk.model,
+                    response_metadata=metadata,
+                )
 
         if not produced_anything:
             error = StreamFailedError(

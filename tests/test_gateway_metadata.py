@@ -202,7 +202,13 @@ def _tool_sse(protocol: str) -> bytes:
     ).encode()
 
 
-def _client(protocol: str, handler: Any, *, trusted: bool = True) -> OpenAIClient | AnthropicClient:
+def _client(
+    protocol: str,
+    handler: Any,
+    *,
+    trusted: bool = True,
+    closed: list[str] | None = None,
+) -> OpenAIClient | AnthropicClient:
     url = "https://gateway.example/v1" if trusted else None
     if protocol == "openai":
         client = OpenAIClient("key", "gpt-test", trusted_gateway_url=url)
@@ -266,6 +272,8 @@ def _client(protocol: str, handler: Any, *, trusted: bool = True) -> OpenAIClien
             return StreamingRaw(await response_for(self.kwargs), True)
 
         async def __aexit__(self, *_args: Any) -> None:
+            if closed is not None:
+                closed.append("raw response closed")
             return None
 
     async def raw_create(**kwargs: Any) -> Raw:
@@ -425,6 +433,112 @@ async def test_cancelled_stream_keeps_incomplete_header_snapshot(protocol: str) 
     await stream.aclose()
     assert first.response_metadata.call_id == "cancel.opaque"
     assert first.response_complete is False
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+@pytest.mark.parametrize("with_context", [False, True])
+async def test_early_close_releases_raw_response(protocol: str, with_context: bool) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "close.opaque"},
+            content=_openai_sse() if protocol == "openai" else _anthropic_sse(),
+        )
+
+    closed: list[str] = []
+    client = _client(protocol, handler, closed=closed)
+    stream = (
+        client.chat_stream_with_context([], request_context=AepRequestContext(trace_id="trace"))
+        if with_context
+        else client.chat_stream([])
+    )
+    first = await anext(stream)
+    assert first.response_metadata.call_id == "close.opaque"
+    assert first.response_complete is False
+    assert closed == []
+    await stream.aclose()
+    assert closed == ["raw response closed"]
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_early_agent_close_releases_raw_response(protocol: str) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "agent.close"},
+            content=_openai_sse() if protocol == "openai" else _anthropic_sse(),
+        )
+
+    closed: list[str] = []
+    client = _client(protocol, handler, closed=closed)
+    stream = run_agent_loop_stream(client, [ChatMessage(role="user", content="hi")])
+    first = await anext(stream)
+    assert first.type == "response_metadata"
+    assert first.response_metadata.call_id == "agent.close"
+    assert first.data == {"complete": False}
+    assert closed == []
+    await stream.aclose()
+    assert closed == ["raw response closed"]
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_stream_parse_failure_closes_raw_response_once(protocol: str) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "parse.failure"},
+            content=b"data: not-json\n\n",
+        )
+
+    closed: list[str] = []
+    stream = _client(protocol, handler, closed=closed).chat_stream([])
+    first = await anext(stream)
+    assert first.response_metadata.call_id == "parse.failure"
+    with pytest.raises(GatewayResponseError) as error:
+        await anext(stream)
+    assert error.value.response_metadata.call_id == "parse.failure"
+    assert error.value.response_complete is False
+    assert closed == ["raw response closed"]
+
+
+async def test_early_close_releases_direct_openai_sdk_stream() -> None:
+    closed: list[str] = []
+
+    class DirectStream:
+        def __init__(self) -> None:
+            self.sent = False
+
+        def __aiter__(self) -> DirectStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            if self.sent:
+                raise StopAsyncIteration
+            self.sent = True
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="hi", tool_calls=None), finish_reason=None
+                    )
+                ],
+                model="gpt-test",
+            )
+
+        async def close(self) -> None:
+            closed.append("sdk stream closed")
+
+    async def create(**_kwargs: Any) -> DirectStream:
+        return DirectStream()
+
+    client = OpenAIClient("key", "gpt-test")
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    stream = client.chat_stream([])
+    first = await anext(stream)
+    assert first.delta_text == "hi"
+    await stream.aclose()
+    assert closed == ["sdk stream closed"]
 
 
 async def test_two_model_iterations_bind_each_tool_to_own_response() -> None:

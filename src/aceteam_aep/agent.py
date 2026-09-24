@@ -8,9 +8,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+import sys
+from collections.abc import AsyncIterator, Awaitable, Callable
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from .budget import BudgetEnforcer
 from .client import ChatClient, ContextChatClient, _tool_origin
@@ -295,6 +296,7 @@ async def run_agent_loop_stream(
             cost_node = None
             ok = False
             response_metadata = None
+            chunks: AsyncIterator[Any] | None = None
 
             # `finally` runs on any exit — exception, cancellation, or
             # forced close — so the llm_span ends and the reservation
@@ -357,11 +359,23 @@ async def run_agent_loop_stream(
                 if response_metadata is not None:
                     yield response_metadata_event(response_metadata, complete=True)
             finally:
-                if llm_span and span_tracker:
-                    span_tracker.end_span(llm_span.span_id, status="OK" if ok else "ERROR")
-                if budget and reservation:
-                    actual_cost = cost_node.total_cost() if ok and cost_node else Decimal("0")
-                    budget.settle(reservation, actual_cost)
+                try:
+                    if chunks is not None:
+                        close = getattr(chunks, "aclose", None)
+                        if callable(close):
+                            active_error = sys.exc_info()[0]
+                            try:
+                                await cast(Callable[[], Awaitable[None]], close)()
+                            except Exception:
+                                if active_error is None:
+                                    raise
+                                logger.exception("Could not close agent stream after failure")
+                finally:
+                    if llm_span and span_tracker:
+                        span_tracker.end_span(llm_span.span_id, status="OK" if ok else "ERROR")
+                    if budget and reservation:
+                        actual_cost = cost_node.total_cost() if ok and cost_node else Decimal("0")
+                        budget.settle(reservation, actual_cost)
 
             if llm_span and span_tracker:
                 yield span_end_event(llm_span.span_id)

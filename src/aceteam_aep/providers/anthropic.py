@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from typing import Any
 
 import anthropic
@@ -293,7 +294,7 @@ class AnthropicClient:
         self,
         kwargs: dict[str, Any],
         request_context: AepRequestContext | None,
-    ) -> AsyncIterator[tuple[AepResponseMetadata | None, Any | None]]:
+    ) -> AsyncGenerator[tuple[AepResponseMetadata | None, Any | None], None]:
         if self._trusted_gateway:
             kwargs["extra_headers"] = _context_headers(request_context)
             kwargs["stream"] = True
@@ -311,7 +312,7 @@ class AnthropicClient:
                 async for event in stream:
                     yield None, event
 
-    async def chat_stream(
+    def chat_stream(
         self,
         messages: list[ChatMessage],
         *,
@@ -319,16 +320,15 @@ class AnthropicClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        async for chunk in self._chat_stream(
+        return self._chat_stream(
             messages,
             tools=tools,
             temperature=temperature,
             max_tokens=max_tokens,
             request_context=None,
-        ):
-            yield chunk
+        )
 
-    async def chat_stream_with_context(
+    def chat_stream_with_context(
         self,
         messages: list[ChatMessage],
         *,
@@ -339,14 +339,13 @@ class AnthropicClient:
     ) -> AsyncIterator[StreamChunk]:
         if not self._trusted_gateway:
             raise ValueError("Request context requires a trusted gateway")
-        async for chunk in self._chat_stream(
+        return self._chat_stream(
             messages,
             tools=tools,
             temperature=temperature,
             max_tokens=max_tokens,
             request_context=request_context,
-        ):
-            yield chunk
+        )
 
     async def _chat_stream(
         self,
@@ -387,66 +386,42 @@ class AnthropicClient:
         # blank assistant reply.
         produced_anything = False
 
-        async for metadata, event in self._stream_events(kwargs, request_context):
-            if event is None:
-                yield StreamChunk(response_metadata=metadata)
-                continue
-            if event.type == "message_start":
-                if hasattr(event.message, "usage"):
-                    input_tokens = event.message.usage.input_tokens
+        source = self._stream_events(kwargs, request_context)
+        async with aclosing(source):
+            async for metadata, event in source:
+                if event is None:
+                    yield StreamChunk(response_metadata=metadata)
+                    continue
+                if event.type == "message_start":
+                    if hasattr(event.message, "usage"):
+                        input_tokens = event.message.usage.input_tokens
 
-            elif event.type == "content_block_start":
-                if hasattr(event.content_block, "type") and event.content_block.type == "tool_use":
-                    current_tool = {
-                        "id": event.content_block.id,
-                        "name": event.content_block.name,
-                        "arguments": "",
-                    }
+                elif event.type == "content_block_start":
+                    if (
+                        hasattr(event.content_block, "type")
+                        and event.content_block.type == "tool_use"
+                    ):
+                        current_tool = {
+                            "id": event.content_block.id,
+                            "name": event.content_block.name,
+                            "arguments": "",
+                        }
 
-            elif event.type == "content_block_delta":
-                if hasattr(event.delta, "text"):
-                    produced_anything = True
-                    yield StreamChunk(delta_text=event.delta.text, response_metadata=metadata)
-                elif hasattr(event.delta, "partial_json") and current_tool:
-                    current_tool["arguments"] += event.delta.partial_json
+                elif event.type == "content_block_delta":
+                    if hasattr(event.delta, "text"):
+                        produced_anything = True
+                        yield StreamChunk(delta_text=event.delta.text, response_metadata=metadata)
+                    elif hasattr(event.delta, "partial_json") and current_tool:
+                        current_tool["arguments"] += event.delta.partial_json
 
-            elif event.type == "content_block_stop":
-                if current_tool:
-                    try:
-                        raw_args = current_tool["arguments"]
-                        args = json.loads(raw_args) if raw_args.strip() else {}
-                    except (json.JSONDecodeError, TypeError):
-                        args = {"raw": current_tool["arguments"]}
-                    produced_anything = True
-                    yield StreamChunk(
-                        delta_tool_calls=[
-                            ToolCallRequest(
-                                id=current_tool["id"],
-                                name=current_tool["name"],
-                                arguments=args,
-                                origin=metadata,
-                            )
-                        ],
-                        response_metadata=metadata,
-                    )
-                    current_tool = None
-
-            elif event.type == "message_delta":
-                if hasattr(event, "usage") and event.usage:
-                    output_tokens = event.usage.output_tokens
-                finish = getattr(event.delta, "stop_reason", None)
-                if finish:
-                    produced_anything = True
-                    # Flush any in-progress tool call that was truncated
-                    # (e.g. by max_tokens). Anthropic skips content_block_stop
-                    # when the response is cut short, so the accumulated
-                    # partial JSON would otherwise be silently dropped.
+                elif event.type == "content_block_stop":
                     if current_tool:
                         try:
                             raw_args = current_tool["arguments"]
                             args = json.loads(raw_args) if raw_args.strip() else {}
                         except (json.JSONDecodeError, TypeError):
                             args = {"raw": current_tool["arguments"]}
+                        produced_anything = True
                         yield StreamChunk(
                             delta_tool_calls=[
                                 ToolCallRequest(
@@ -459,15 +434,44 @@ class AnthropicClient:
                             response_metadata=metadata,
                         )
                         current_tool = None
-                    yield StreamChunk(
-                        finish_reason=finish,
-                        usage=Usage(
-                            prompt_tokens=input_tokens,
-                            completion_tokens=output_tokens,
-                            total_tokens=input_tokens + output_tokens,
-                        ),
-                        response_metadata=metadata,
-                    )
+
+                elif event.type == "message_delta":
+                    if hasattr(event, "usage") and event.usage:
+                        output_tokens = event.usage.output_tokens
+                    finish = getattr(event.delta, "stop_reason", None)
+                    if finish:
+                        produced_anything = True
+                        # Flush any in-progress tool call that was truncated
+                        # (e.g. by max_tokens). Anthropic skips content_block_stop
+                        # when the response is cut short, so the accumulated
+                        # partial JSON would otherwise be silently dropped.
+                        if current_tool:
+                            try:
+                                raw_args = current_tool["arguments"]
+                                args = json.loads(raw_args) if raw_args.strip() else {}
+                            except (json.JSONDecodeError, TypeError):
+                                args = {"raw": current_tool["arguments"]}
+                            yield StreamChunk(
+                                delta_tool_calls=[
+                                    ToolCallRequest(
+                                        id=current_tool["id"],
+                                        name=current_tool["name"],
+                                        arguments=args,
+                                        origin=metadata,
+                                    )
+                                ],
+                                response_metadata=metadata,
+                            )
+                            current_tool = None
+                        yield StreamChunk(
+                            finish_reason=finish,
+                            usage=Usage(
+                                prompt_tokens=input_tokens,
+                                completion_tokens=output_tokens,
+                                total_tokens=input_tokens + output_tokens,
+                            ),
+                            response_metadata=metadata,
+                        )
 
         if not produced_anything:
             error = StreamFailedError(
