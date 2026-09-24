@@ -131,6 +131,34 @@ async def _collect_until_done(resp: StreamingResponse) -> str:
     return "".join(parts)
 
 
+async def _anthropic_events_until_stop(resp: StreamingResponse) -> list[tuple[str, str]]:
+    """Consume complete SSE frames as a client that closes at message_stop."""
+    events: list[tuple[str, str]] = []
+    pending = ""
+    async for chunk in resp.body_iterator:
+        assert isinstance(chunk, str)
+        pending += chunk
+        while "\n\n" in pending:
+            frame, pending = pending.split("\n\n", 1)
+            event = "message"
+            data: list[str] = []
+            for line in frame.splitlines():
+                field, separator, value = line.partition(":")
+                if not separator:
+                    continue
+                value = value.removeprefix(" ")
+                if field == "event":
+                    event = value
+                elif field == "data":
+                    data.append(value)
+            if not frame:
+                continue
+            events.append((event, "\n".join(data)))
+            if event == "message_stop":
+                return events
+    return events
+
+
 async def _call_handler(on_complete: Any = None) -> Any:
     return await handle_streaming_request(
         target_url="https://upstream.test/v1/chat/completions",
@@ -292,26 +320,29 @@ async def test_upstream_200_happy_path_unchanged(
     assert completions[0]["output_tokens"] == 2
 
 
-async def test_non_openai_terminal_event_does_not_gain_done_marker(
+@pytest.mark.parametrize("event_line", [b"event: message_stop", b"event:message_stop"])
+async def test_anthropic_success_emits_one_terminal_and_no_done(
     monkeypatch: pytest.MonkeyPatch,
+    event_line: bytes,
 ) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            content=b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            content=event_line + b'\ndata: {"type":"message_stop"}\n\n',
             headers={"content-type": "text/event-stream"},
         )
 
     _patch_transport(monkeypatch, handler)
     response = await _call_handler()
     assert isinstance(response, StreamingResponse)
-    body = await _collect_body(response)
-    assert "event: message_stop" in body
-    assert "data: [DONE]" not in body
+    events = await _anthropic_events_until_stop(response)
+    assert events == [("message_stop", '{"type":"message_stop"}')]
 
 
-async def test_anthropic_client_sees_block_before_message_stop(
+@pytest.mark.parametrize("event_line", [b"event: message_stop", b"event:message_stop"])
+async def test_anthropic_client_sees_distinct_block_before_message_stop(
     monkeypatch: pytest.MonkeyPatch,
+    event_line: bytes,
 ) -> None:
     class FailingLayer:
         name = "required"
@@ -331,7 +362,7 @@ async def test_anthropic_client_sees_block_before_message_stop(
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            content=b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            content=event_line + b'\ndata: {"type":"message_stop"}\n\n',
             headers={"content-type": "text/event-stream"},
         )
 
@@ -348,16 +379,11 @@ async def test_anthropic_client_sees_block_before_message_stop(
     )
     assert isinstance(response, StreamingResponse)
 
-    parts: list[str] = []
-    async for chunk in response.body_iterator:
-        assert isinstance(chunk, str)
-        parts.append(chunk)
-        if "event: message_stop" in chunk:
-            break
-    body = "".join(parts)
-    assert '"aep_safety_block": true' in body
-    assert body.index('"aep_safety_block": true') < body.index("event: message_stop")
-    assert "data: [DONE]" not in body
+    events = await _anthropic_events_until_stop(response)
+    assert len(events) == 2
+    assert events[0][0] == "message"
+    assert json.loads(events[0][1])["aep_safety_block"] is True
+    assert events[1] == ("message_stop", '{"type":"message_stop"}')
 
 
 async def test_mid_stream_failure_emits_error_event(
