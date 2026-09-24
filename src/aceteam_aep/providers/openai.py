@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import aclosing
 from typing import Any
 
 import openai
 
 from ..client import (
     GatewayResponseError,
+    _closing_preserving_error,
     _context_headers,
     _gateway_metadata,
+    _response_context_preserving_error,
     _validate_gateway_url,
 )
 from ..models import get_model_info
@@ -314,25 +316,35 @@ class OpenAIClient:
         if self._trusted_gateway:
             kwargs["extra_headers"] = _context_headers(request_context)
             create = self._client.chat.completions.with_streaming_response.create
-            async with create(**kwargs) as raw:
-                metadata = _gateway_metadata(raw.headers)
-                yield metadata, None  # headers are available before parsing or SSE iteration
-                try:
+            metadata = None
+            try:
+                async with _response_context_preserving_error(create(**kwargs)) as raw:
+                    metadata = _gateway_metadata(raw.headers)
+                    yield metadata, None  # headers precede parsing and SSE iteration
                     stream = await raw.parse()
                     async for chunk in stream:
                         yield metadata, chunk
-                except Exception as exc:
+            except asyncio.CancelledError as exc:
+                if metadata is not None:
+                    exc.response_metadata = metadata  # pyright: ignore[reportAttributeAccessIssue]
+                    exc.response_complete = False  # pyright: ignore[reportAttributeAccessIssue]
+                raise
+            except Exception as exc:
+                if metadata is not None and not isinstance(exc, GatewayResponseError):
                     raise GatewayResponseError(exc, metadata) from exc
+                raise
         else:
             stream = await self._client.chat.completions.create(**kwargs)
-            try:
-                async for chunk in stream:
-                    yield None, chunk
-            finally:
+
+            async def close_stream() -> None:
                 if hasattr(stream, "close"):
                     await stream.close()
                 elif hasattr(stream, "aclose"):
                     await stream.aclose()
+
+            async with _closing_preserving_error(close_stream):
+                async for chunk in stream:
+                    yield None, chunk
 
     def chat_stream(
         self,
@@ -414,7 +426,7 @@ class OpenAIClient:
         metadata: AepResponseMetadata | None = None
 
         source = self._stream_response(kwargs, request_context)
-        async with aclosing(source):
+        async with _closing_preserving_error(source.aclose):
             async for metadata, chunk in source:
                 if chunk is None:
                     yield StreamChunk(response_metadata=metadata)

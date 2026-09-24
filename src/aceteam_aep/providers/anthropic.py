@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import aclosing
 from typing import Any
 
 import anthropic
 
 from ..client import (
     GatewayResponseError,
+    _closing_preserving_error,
     _context_headers,
     _gateway_metadata,
+    _response_context_preserving_error,
     _validate_gateway_url,
 )
 from ..types import (
@@ -298,15 +300,24 @@ class AnthropicClient:
         if self._trusted_gateway:
             kwargs["extra_headers"] = _context_headers(request_context)
             kwargs["stream"] = True
-            async with self._client.messages.with_streaming_response.create(**kwargs) as raw:
-                metadata = _gateway_metadata(raw.headers)
-                yield metadata, None
-                try:
+            metadata = None
+            create = self._client.messages.with_streaming_response.create
+            try:
+                async with _response_context_preserving_error(create(**kwargs)) as raw:
+                    metadata = _gateway_metadata(raw.headers)
+                    yield metadata, None
                     stream = await raw.parse()
                     async for event in stream:
                         yield metadata, event
-                except Exception as exc:
+            except asyncio.CancelledError as exc:
+                if metadata is not None:
+                    exc.response_metadata = metadata  # pyright: ignore[reportAttributeAccessIssue]
+                    exc.response_complete = False  # pyright: ignore[reportAttributeAccessIssue]
+                raise
+            except Exception as exc:
+                if metadata is not None and not isinstance(exc, GatewayResponseError):
                     raise GatewayResponseError(exc, metadata) from exc
+                raise
         else:
             async with self._client.messages.stream(**kwargs) as stream:
                 async for event in stream:
@@ -387,7 +398,7 @@ class AnthropicClient:
         produced_anything = False
 
         source = self._stream_events(kwargs, request_context)
-        async with aclosing(source):
+        async with _closing_preserving_error(source.aclose):
             async for metadata, event in source:
                 if event is None:
                     yield StreamChunk(response_metadata=metadata)

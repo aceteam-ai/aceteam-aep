@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import logging
+import sys
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
@@ -10,6 +13,45 @@ from urllib.parse import urlsplit
 from .types import AepRequestContext, AepResponseMetadata, ChatMessage, ChatResponse, StreamChunk
 
 _tool_origin: ContextVar[AepResponseMetadata | None] = ContextVar("aep_tool_origin", default=None)
+_logger = logging.getLogger(__name__)
+
+
+async def _run_cleanup_preserving_error(
+    cleanup: Callable[[], Awaitable[Any]],
+    primary: BaseException | None,
+) -> None:
+    try:
+        await cleanup()
+    except BaseException:
+        if primary is None:
+            raise
+        _logger.warning("Stream cleanup also failed; preserving the primary error", exc_info=True)
+
+
+@asynccontextmanager
+async def _closing_preserving_error(close: Callable[[], Awaitable[Any]]) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        await _run_cleanup_preserving_error(close, sys.exception())
+
+
+@asynccontextmanager
+async def _response_context_preserving_error(context: Any) -> AsyncIterator[Any]:
+    raw = await context.__aenter__()
+    try:
+        yield raw
+    finally:
+        primary = sys.exception()
+
+        async def exit_response() -> None:
+            await context.__aexit__(
+                type(primary) if primary is not None else None,
+                primary,
+                primary.__traceback__ if primary is not None else None,
+            )
+
+        await _run_cleanup_preserving_error(exit_response, primary)
 
 
 def current_tool_origin() -> AepResponseMetadata | None:

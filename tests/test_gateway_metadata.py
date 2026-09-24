@@ -208,6 +208,8 @@ def _client(
     *,
     trusted: bool = True,
     closed: list[str] | None = None,
+    close_error: BaseException | None = None,
+    stream_error: BaseException | None = None,
 ) -> OpenAIClient | AnthropicClient:
     url = "https://gateway.example/v1" if trusted else None
     if protocol == "openai":
@@ -245,6 +247,8 @@ def _client(
                 return anthropic.types.Message.model_validate_json(self._response.content)
 
             async def events() -> Any:
+                if stream_error is not None:
+                    raise stream_error
                 for frame in self._response.text.split("\n\n"):
                     if not frame:
                         continue
@@ -274,6 +278,8 @@ def _client(
         async def __aexit__(self, *_args: Any) -> None:
             if closed is not None:
                 closed.append("raw response closed")
+            if close_error is not None:
+                raise close_error
             return None
 
     async def raw_create(**kwargs: Any) -> Raw:
@@ -539,6 +545,122 @@ async def test_early_close_releases_direct_openai_sdk_stream() -> None:
     assert first.delta_text == "hi"
     await stream.aclose()
     assert closed == ["sdk stream closed"]
+
+
+@pytest.mark.parametrize("primary", [ValueError("iteration failed"), asyncio.CancelledError()])
+async def test_direct_openai_primary_survives_close_failure(
+    primary: BaseException,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class DirectStream:
+        def __aiter__(self) -> DirectStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise primary
+
+        async def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    async def create(**_kwargs: Any) -> DirectStream:
+        return DirectStream()
+
+    client = OpenAIClient("key", "gpt-test")
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    with pytest.raises(type(primary)) as error:
+        await anext(client.chat_stream([]))
+    assert error.value is primary
+    assert "Stream cleanup also failed" in caplog.text
+    assert "close failed" in caplog.text
+
+
+async def test_direct_openai_cleanup_only_failure_surfaces() -> None:
+    class DirectStream:
+        def __aiter__(self) -> DirectStream:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise StopAsyncIteration
+
+        async def close(self) -> None:
+            raise RuntimeError("close only failed")
+
+    async def create(**_kwargs: Any) -> DirectStream:
+        return DirectStream()
+
+    client = OpenAIClient("key", "gpt-test")
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    with pytest.raises(RuntimeError, match="close only failed"):
+        await anext(client.chat_stream([]))
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_gateway_primary_retains_metadata_when_raw_exit_fails(
+    protocol: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"X-AEP-Call-ID": "dual.failure"}, content=b"data: not-json\n\n"
+        )
+
+    closed: list[str] = []
+    stream = _client(
+        protocol, handler, closed=closed, close_error=RuntimeError("raw exit failed")
+    ).chat_stream([])
+    first = await anext(stream)
+    assert first.response_metadata.call_id == "dual.failure"
+    with pytest.raises(GatewayResponseError) as error:
+        await anext(stream)
+    assert error.value.response_metadata.call_id == "dual.failure"
+    assert error.value.response_complete is False
+    assert error.value.__cause__ is not None
+    assert "raw exit failed" not in str(error.value.__cause__)
+    assert closed == ["raw response closed"]
+    assert "Stream cleanup also failed" in caplog.text
+    assert "raw exit failed" in caplog.text
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_gateway_cancellation_retains_metadata_when_raw_exit_fails(
+    protocol: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"X-AEP-Call-ID": "cancel.dual"}, content=b"")
+
+    cancelled = asyncio.CancelledError("iteration cancelled")
+    stream = _client(
+        protocol, handler, close_error=RuntimeError("raw exit failed"), stream_error=cancelled
+    ).chat_stream([])
+    await anext(stream)
+    with pytest.raises(asyncio.CancelledError) as error:
+        await anext(stream)
+    assert error.value is cancelled
+    assert error.value.response_metadata.call_id == "cancel.dual"
+    assert error.value.response_complete is False
+    assert "Stream cleanup also failed" in caplog.text
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_gateway_cleanup_only_failure_retains_metadata(protocol: str) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "cleanup.only"},
+            content=_openai_sse() if protocol == "openai" else _anthropic_sse(),
+        )
+
+    stream = _client(protocol, handler, close_error=RuntimeError("raw exit failed")).chat_stream([])
+    with pytest.raises(GatewayResponseError) as error:
+        async for _ in stream:
+            pass
+    assert error.value.response_metadata.call_id == "cleanup.only"
+    assert isinstance(error.value.__cause__, RuntimeError)
 
 
 async def test_two_model_iterations_bind_each_tool_to_own_response() -> None:
