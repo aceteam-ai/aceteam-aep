@@ -63,6 +63,21 @@ The proxy intercepts **both directions**:
 
 Works with OpenClaw, LangChain, CrewAI, curl, or any tool that calls the OpenAI API.
 
+## Workflow cancellation spans
+
+`EnvelopeBuilder.end_node_cancelled(span_id, cost=...)` closes a node with the
+existing `CANCELLED` span status and an end timestamp. Use it for work aborted
+before completion. It records no execution error and retains already-incurred
+costs. `EnvelopeBuilder.reconstruct` also preserves `CANCELLED` node records.
+
+Span consumers should distinguish cancellation from both `OK` and `ERROR`.
+Cancellation is terminal but belongs in neither successful-work counts nor
+failure alerts. Duration and cost aggregation still include the aborted work.
+The caller continues to select the envelope's `success`, `partial`, or `failure`
+status through `finish()`; a cancelled child alone does not establish that the
+whole execution was cancelled. Whole-execution cancellation policy and run-ledger
+aggregation remain the host application's responsibility.
+
 ## What the Proxy Sees
 
 The proxy is a reverse proxy (man-in-the-middle by design). It reads the full request AND full response. It can block in either direction.

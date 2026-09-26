@@ -1,3 +1,5 @@
+import json
+from dataclasses import asdict, replace
 from decimal import Decimal
 
 import pytest
@@ -89,6 +91,80 @@ def test_node_error():
     # Root span should be ERROR since there are errors
     root_span = [s for s in envelope.spans if s.parent_span_id is None][0]
     assert root_span.status == "ERROR"
+
+
+@pytest.mark.parametrize("envelope_status", ["success", "partial", "failure"])
+def test_cancelled_node_is_terminal_without_changing_run_status(envelope_status):
+    builder = EnvelopeBuilder(execution_id="cancel-run", org_id="org-1")
+    root_id = builder.start()
+    span_id = builder.begin_node("cancelled-node", "LLM")
+    cost = builder.record_llm_cost(
+        span_id, "gpt-4o", Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    )
+    builder.end_node_cancelled(span_id)
+    envelope = builder.finish(status=envelope_status)
+
+    assert envelope.status == envelope_status
+    assert envelope.errors is None
+    assert envelope.citations is None
+    assert sum_cost_tree(envelope.cost_tree) == cost.compute_cost > 0
+    spans = {span.span_id: span for span in envelope.spans}
+    cancelled = spans[span_id]
+    assert cancelled.status == "CANCELLED"
+    assert cancelled.parent_span_id == root_id
+    assert cancelled.ended_at is not None
+    assert cancelled.duration_ms is not None and cancelled.duration_ms >= 0
+    assert spans[root_id].status == "OK"
+    # The terminal value and timestamps survive the public dataclass wire shape.
+    restored = Span(**json.loads(json.dumps(asdict(cancelled))))
+    assert restored == cancelled
+
+
+def test_cancelled_sibling_does_not_replace_or_add_execution_errors():
+    builder = EnvelopeBuilder(execution_id="mixed-run", org_id="org-1")
+    root_id = builder.start()
+    failed_id = builder.begin_node("failed-node", "LLM")
+    error = ExecutionError(code="NODE_FAIL", message="failed", node_id="failed-node")
+    builder.end_node_error(failed_id, error)
+    cancelled_id = builder.begin_node("cancelled-node", "LLM")
+    builder.end_node_cancelled(cancelled_id)
+    envelope = builder.finish(status="partial")
+
+    assert envelope.status == "partial"
+    assert envelope.errors == [error]
+    statuses = {span.span_id: span.status for span in envelope.spans}
+    assert statuses == {root_id: "ERROR", failed_id: "ERROR", cancelled_id: "CANCELLED"}
+
+
+@pytest.mark.parametrize("with_error", [False, True])
+def test_reconstruct_preserves_cancelled_status_and_incurred_cost(with_error):
+    cancelled = NodeRecord(
+        node_id="cancelled-node",
+        node_type="LLM",
+        status="CANCELLED",
+        started_at="2026-03-13T10:00:00Z",
+        finished_at="2026-03-13T10:00:05Z",
+        output=None,
+        error="caller cancelled",
+        model_name="gpt-4o",
+        provider="openai",
+        input_tokens=100,
+        output_tokens=50,
+        cost=Decimal("0.01"),
+    )
+    records = [cancelled]
+    if with_error:
+        records.append(replace(cancelled, node_id="failed-node", status="ERROR", cost=Decimal(0)))
+    envelope = EnvelopeBuilder.reconstruct("restored-run", "org-1", records)
+
+    span = next(span for span in envelope.spans if span.executor_id == "cancelled-node")
+    assert span.status == "CANCELLED"
+    assert span.ended_at is not None
+    assert sum_cost_tree(envelope.cost_tree) == Decimal("0.01")
+    assert envelope.status == ("partial" if with_error else "success")
+    assert [error.node_id for error in envelope.errors or []] == (
+        ["failed-node"] if with_error else []
+    )
 
 
 def test_double_finish_raises():
