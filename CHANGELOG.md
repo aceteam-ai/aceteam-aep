@@ -3,9 +3,13 @@
 ## [Unreleased]
 
 ### Added
-- **`EnvelopeBuilder.end_node_cancelled(span_id, cost=...)`.** Closes a node with the existing `CANCELLED` span status and a terminal timestamp, without appending an execution error. Already-incurred costs (plus an optional final cost) are retained. `EnvelopeBuilder.reconstruct` now preserves `CANCELLED` node records and their costs instead of turning them into `OK` spans. Envelope status remains caller-selected; a cancelled child alone does not establish that the whole execution was cancelled. Fixes #145.
 ### Changed
 ### Fixed
+
+## [0.11.9] - 2026-09-26
+
+### Added
+- **`EnvelopeBuilder.end_node_cancelled(span_id, cost=...)`.** Closes a node with the existing `CANCELLED` span status and a terminal timestamp, without appending an execution error. Already-incurred costs (plus an optional final cost) are retained. `EnvelopeBuilder.reconstruct` now preserves `CANCELLED` node records and their costs instead of turning them into `OK` spans. Envelope status remains caller-selected; a cancelled child alone does not establish that the whole execution was cancelled. Fixes #145.
 
 ## [0.11.6] - 2026-07-22
 
