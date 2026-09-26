@@ -20,7 +20,7 @@ class NodeRecord:
 
     node_id: str
     node_type: str
-    status: str  # "SUCCESS", "ERROR", "YIELDED"
+    status: str  # "SUCCESS", "ERROR", "CANCELLED", "YIELDED"
     started_at: str | None
     finished_at: str | None
     output: dict | None
@@ -94,6 +94,16 @@ class EnvelopeBuilder:
         self._span_tracker.end_span(span_id, status="ERROR")
         self._errors.append(error)
 
+    def end_node_cancelled(self, span_id: str, *, cost: CostNode | None = None) -> None:
+        """Close an aborted node as CANCELLED without recording an execution error.
+
+        Retains costs already recorded for the node, plus any supplied final cost.
+        Cancellation alone does not change the envelope's caller-selected status.
+        """
+        self._span_tracker.end_span(span_id, status="CANCELLED")
+        if cost:
+            self._cost_tracker.add_node(cost)
+
     def record_llm_cost(
         self,
         span_id: str,
@@ -163,7 +173,10 @@ class EnvelopeBuilder:
                         category="llm_tokens",
                         compute_cost=record.cost,
                     )
-                builder.end_node(span_id, cost=cost_node)
+                if record.status == "CANCELLED":
+                    builder.end_node_cancelled(span_id, cost=cost_node)
+                else:
+                    builder.end_node(span_id, cost=cost_node)
         status = "partial" if has_errors else "success"
         return builder.finish(status=status)
 
