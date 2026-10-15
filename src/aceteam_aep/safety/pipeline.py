@@ -40,7 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from .base import SafetySignal
+from .base import SafetySignal, check_detector_with_status
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class LayerResult:
     p_safe: float
     signals: list[SafetySignal] = field(default_factory=list)
     latency_ms: float = 0.0
+    had_failure: bool = False
 
 
 @runtime_checkable
@@ -107,19 +108,23 @@ class RegexLayer(CascadeLayer):
     ) -> LayerResult:
         start = time.monotonic_ns()
         all_signals: list[SafetySignal] = []
+        had_failure = False
 
         for detector in self._detectors:
             try:
-                signals = await detector.check(
+                check_result = await check_detector_with_status(
+                    detector,
                     input_text=input_text,
                     output_text=output_text,
                     call_id=call_id,
                     **kwargs,
                 )
-                for s in signals:
+                had_failure = had_failure or check_result.had_failure
+                for s in check_result.signals:
                     s.detector = detector.name
-                all_signals.extend(signals)
+                all_signals.extend(check_result.signals)
             except Exception:
+                had_failure = True
                 log.warning("Regex layer detector %s failed", detector.name, exc_info=True)
 
         latency = (time.monotonic_ns() - start) / 1_000_000
@@ -131,6 +136,7 @@ class RegexLayer(CascadeLayer):
                 p_safe=1.0 - max_score,
                 signals=all_signals,
                 latency_ms=latency,
+                had_failure=had_failure,
             )
 
         return LayerResult(
@@ -138,6 +144,7 @@ class RegexLayer(CascadeLayer):
             p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
+            had_failure=had_failure,
         )
 
 
@@ -170,28 +177,26 @@ class PawLayer(CascadeLayer):
     ) -> LayerResult:
         start = time.monotonic_ns()
 
-        signals = list(
-            await self._detector.check(
-                input_text=input_text,
-                output_text=output_text,
-                call_id=call_id,
-                **kwargs,
-            )
+        check_result = await check_detector_with_status(
+            self._detector,
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
         )
+        signals = list(check_result.signals)
 
         latency = (time.monotonic_ns() - start) / 1_000_000
 
         if signals:
             scores = [s.score for s in signals if s.score is not None]
-            if scores:
-                p_safe = 1.0 - max(scores)
-            else:
-                p_safe = 0.2
+            p_safe = 1.0 - max(scores) if scores else 0.2
             return LayerResult(
                 layer_name=self.name,
                 p_safe=p_safe,
                 signals=signals,
                 latency_ms=latency,
+                had_failure=check_result.had_failure,
             )
 
         return LayerResult(
@@ -199,6 +204,7 @@ class PawLayer(CascadeLayer):
             p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
+            had_failure=check_result.had_failure,
         )
 
 
@@ -227,14 +233,14 @@ class ContentModelLayer(CascadeLayer):
     ) -> LayerResult:
         start = time.monotonic_ns()
 
-        signals = list(
-            await self._detector.check(
-                input_text=input_text,
-                output_text=output_text,
-                call_id=call_id,
-                **kwargs,
-            )
+        check_result = await check_detector_with_status(
+            self._detector,
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
         )
+        signals = list(check_result.signals)
 
         latency = (time.monotonic_ns() - start) / 1_000_000
 
@@ -245,6 +251,7 @@ class ContentModelLayer(CascadeLayer):
                 p_safe=1.0 - max_score,
                 signals=signals,
                 latency_ms=latency,
+                had_failure=check_result.had_failure,
             )
 
         return LayerResult(
@@ -252,6 +259,7 @@ class ContentModelLayer(CascadeLayer):
             p_safe=self.prior_p_safe,
             signals=[],
             latency_ms=latency,
+            had_failure=check_result.had_failure,
         )
 
 
@@ -329,6 +337,7 @@ class PipelineResult:
     layers_executed: int = 0
     short_circuited_at: str | None = None
     total_latency_ms: float = 0.0
+    had_failure: bool = False
 
     @property
     def p_unsafe(self) -> float:
@@ -389,6 +398,7 @@ class SafetyPipeline:
         ordered_results: list[LayerResult] = []
         all_signals: list[SafetySignal] = []
         short_circuited_at: str | None = None
+        had_failure = False
 
         for layer in self._layers:
             try:
@@ -400,12 +410,14 @@ class SafetyPipeline:
                     **kwargs,
                 )
             except Exception:
+                had_failure = True
                 log.warning("Pipeline layer %s failed, skipping", layer.name, exc_info=True)
                 continue
 
             results_map[layer.name] = result
             ordered_results.append(result)
             all_signals.extend(result.signals)
+            had_failure = had_failure or result.had_failure
 
             p_safe = self._compute_p_safe(results_map)
             if p_safe <= self._block_below or p_safe >= self._pass_above:
@@ -423,6 +435,7 @@ class SafetyPipeline:
             layers_executed=len(ordered_results),
             short_circuited_at=short_circuited_at,
             total_latency_ms=round(total_latency, 1),
+            had_failure=had_failure,
         )
 
 

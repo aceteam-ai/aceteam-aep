@@ -23,6 +23,31 @@ All three surfaces share one `ProxyState` — cost tracking, safety signals, dec
 - Optionally signs verdicts (Ed25519 + Merkle chain via `attestation.py`)
 - Serves the dashboard at `/dashboard/` and state API at `/dashboard/api/*`
 
+The streaming relay in `proxy/streaming.py` accepts an optional
+`on_terminal: Callable[[TerminalOutcome], None]` alongside the existing
+`on_complete` cost callback. `on_terminal` receives one text-free record for
+each admitted response, including pre-stream HTTP/network errors and streams
+that end early. Its `call_id` is the opaque ID supplied to the relay and is
+also returned in `X-AEP-Call-ID` when a response is available.
+
+| Field | Meaning |
+|-------|---------|
+| `transport` | `completed`, `http_error`, `network_error`, `stream_error`, or `interrupted` |
+| `evaluation` | `completed`, `not_evaluated`, `unavailable`, or `interrupted` |
+| `action` | Actual `pass`, `flag`, or `block` decision only for completed evaluation; otherwise `None` |
+| `signals` | Signal type, severity, and detector identifiers; no signal details or output text |
+| `scope` | `observed_output` for the post-stream check (output was already sent), or `not_applicable` before a stream exists |
+
+An explicit upstream completion marker (`data: [DONE]` or
+`event: message_stop`) is required for a terminal `pass`. Empty signals, a
+200 response, or an unmarked EOF do not imply that evaluation passed. Disabled
+evaluation and no configured detectors are `not_evaluated`; detector failures
+are `unavailable`. Consumers with a policy-aware runner can supply
+`evaluation_runner` returning `EvaluationResult(signals, decision, state)`;
+that runner must report `unavailable` if it swallowed a detector failure. The
+optional `evaluation_enabled=False` flag records a skipped evaluation while
+the existing `on_complete` callback can still meter the completed stream.
+
 ### Dashboard (`dashboard/templates/index.html`)
 
 A dark-themed local web UI that auto-refreshes every 2 seconds.

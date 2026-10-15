@@ -6,7 +6,7 @@ import logging
 import threading
 from collections.abc import Sequence
 
-from .base import SafetyDetector, SafetySignal
+from .base import DetectorCheckResult, SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -68,12 +68,29 @@ class ContentSafetyDetector(SafetyDetector):
         call_id: str,
         **kwargs,
     ) -> Sequence[SafetySignal]:
+        result = await self.check_with_status(
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
+        )
+        return result.signals
+
+    async def check_with_status(
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> DetectorCheckResult:
         if not self._load_attempted:
             self._load()
         if not self._available:
-            return []
+            return DetectorCheckResult([], had_failure=True)
 
         signals: list[SafetySignal] = []
+        had_failure = False
         for text, source in [(output_text, "output"), (input_text, "input")]:
             if not text:
                 continue
@@ -94,8 +111,9 @@ class ContentSafetyDetector(SafetyDetector):
                             )
                         )
             except Exception:
+                had_failure = True
                 log.warning("Content safety check failed for %s", source, exc_info=True)
-        return signals
+        return DetectorCheckResult(signals, had_failure=had_failure)
 
 
 __all__ = ["ContentSafetyDetector"]
