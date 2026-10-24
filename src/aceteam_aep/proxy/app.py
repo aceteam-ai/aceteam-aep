@@ -62,6 +62,7 @@ from .state_persistence import (
     load_persisted_state,
     save_persisted_state,
 )
+from .upstreams import UpstreamTargets, request_provider
 
 log = logging.getLogger(__name__)
 
@@ -208,8 +209,14 @@ class ProxyState:
         budget_per_session: float | None = None,
         event_store: EventStore | None = None,
         state_path: Path | None = None,
+        provider_targets: UpstreamTargets | None = None,
     ) -> None:
         self.target_base_url = target_base_url.rstrip("/")
+        self.provider_targets = provider_targets or UpstreamTargets()
+        self.provider_api_keys = {
+            "openai": os.environ.get("OPENAI_API_KEY", "").strip() or None,
+            "anthropic": os.environ.get("ANTHROPIC_API_KEY", "").strip() or None,
+        }
         self.event_store = event_store
         # When set, ProxyState mirrors a small slice of itself (api_key,
         # connected_account, target_base_url, safety_enabled) to this file
@@ -469,6 +476,7 @@ def create_proxy_app(
     budget_per_session: float | None = None,
     debug: bool = False,
     event_store: EventStore | None = None,
+    provider_targets: UpstreamTargets | None = None,
 ) -> Starlette:
     """Create the AEP proxy ASGI app."""
 
@@ -482,6 +490,7 @@ def create_proxy_app(
         budget_per_session=budget_per_session,
         event_store=event_store,
         state_path=base_state_path,
+        provider_targets=provider_targets,
     )
 
     # Multi-tenant manager — opt-in via AEP_MULTI_TENANT=1. When the env flag
@@ -499,6 +508,7 @@ def create_proxy_app(
             budget_per_session=budget_per_session,
             event_store=event_store,
             state_path=per_entity_state_path(base_state_path, entity_id),
+            provider_targets=provider_targets,
         )
 
     state_manager = ProxyStateManager(
@@ -554,6 +564,18 @@ def create_proxy_app(
         state = state_manager.get_for_request(request)
         call_id = uuid.uuid4().hex[:8]
         path = request.url.path
+        protocol_provider = request_provider(path, request.headers)
+        provider_target = state.provider_targets.for_provider(protocol_provider)
+        target_base_url = provider_target or state.target_base_url
+        # A compatible API does not establish who served the model. Record the
+        # configured host for custom upstreams rather than naming the vendor.
+        if provider_target:
+            provider_name = urlparse(provider_target).hostname or protocol_provider
+        else:
+            provider_name = _detect_provider(target_base_url)
+        managed_key = (
+            state.provider_api_keys[protocol_provider] if provider_target else state.api_key
+        )
         body_bytes = await request.body()
 
         # --- CALL_START EVENT ---
@@ -570,7 +592,7 @@ def create_proxy_app(
                         type="call_start",
                         call_id=call_id,
                         model=_body_peek.get("model") if isinstance(_body_peek, dict) else None,
-                        provider=_detect_provider(state.target_base_url),
+                        provider=provider_name,
                     )
                 )
             )
@@ -657,14 +679,22 @@ def create_proxy_app(
                 )
                 state._last_pipeline_result = pipeline_result
                 input_signals = pipeline_result.signals
-                input_decision = evaluate_pipeline(pipeline_result, state.policy) if input_signals or pipeline_result.verdict == "block" else EnforcementDecision(action="pass")
+                input_decision = (
+                    evaluate_pipeline(pipeline_result, state.policy)
+                    if input_signals or pipeline_result.verdict == "block"
+                    else EnforcementDecision(action="pass")
+                )
             else:
                 input_signals = await state.registry.run_all(
                     input_text=input_text,
                     output_text="",
                     call_id=call_id,
                 )
-                input_decision = evaluate(input_signals, state.policy) if input_signals else EnforcementDecision(action="pass")
+                input_decision = (
+                    evaluate(input_signals, state.policy)
+                    if input_signals
+                    else EnforcementDecision(action="pass")
+                )
 
             if input_decision.action == "block":
                 state.signals.extend(input_signals)
@@ -744,7 +774,7 @@ def create_proxy_app(
                                 type="call_end",
                                 call_id=call_id,
                                 model=body.get("model") if isinstance(body, dict) else None,
-                                provider=_detect_provider(state.target_base_url),
+                                provider=provider_name,
                                 tokens_in=0,
                                 tokens_out=0,
                                 cost_usd=0.0,
@@ -756,9 +786,7 @@ def create_proxy_app(
                     status_code=400,
                     content={
                         "error": {
-                            "message": (
-                                f"AEP safety: request blocked — {input_decision.reason}"
-                            ),
+                            "message": (f"AEP safety: request blocked — {input_decision.reason}"),
                             "type": "aep_safety_block",
                             "code": "safety_block",
                         }
@@ -783,7 +811,7 @@ def create_proxy_app(
             input_signals = ()
 
         # --- FORWARD TO TARGET API ---
-        target_url = f"{state.target_base_url}{path}"
+        target_url = f"{target_base_url}{path}"
 
         # Forward headers (especially Authorization), stripping AEP governance headers
         forward_headers: dict[str, str] = {}
@@ -800,13 +828,13 @@ def create_proxy_app(
         # (OpenClaw, the in-dashboard playground, etc.) send any placeholder
         # key — e.g. the "aep-proxy-managed" sentinel — and have the proxy
         # substitute the real credential before forwarding.
-        if state.api_key:
-            if "anthropic" in state.target_base_url or path == "/v1/messages":
-                forward_headers["x-api-key"] = state.api_key
+        if managed_key:
+            if protocol_provider == "anthropic" or "anthropic" in target_base_url:
+                forward_headers["x-api-key"] = managed_key
                 forward_headers.setdefault("anthropic-version", "2023-06-01")
                 forward_headers.pop("Authorization", None)
             else:
-                forward_headers["Authorization"] = f"Bearer {state.api_key}"
+                forward_headers["Authorization"] = f"Bearer {managed_key}"
                 forward_headers.pop("x-api-key", None)
         # Strip X-AEP-* headers so they don't leak to the LLM provider
         forward_headers = strip_aep_headers(forward_headers)
@@ -917,7 +945,7 @@ def create_proxy_app(
                                 type="call_end",
                                 call_id=call_id,
                                 model=model,
-                                provider=_detect_provider(state.target_base_url),
+                                provider=provider_name,
                                 tokens_in=inp,
                                 tokens_out=out,
                                 cost_usd=float(cost_node.total_cost()),
@@ -1093,7 +1121,7 @@ def create_proxy_app(
                             type="call_end",
                             call_id=call_id,
                             model=model,
-                            provider=_detect_provider(state.target_base_url),
+                            provider=provider_name,
                             tokens_in=input_tokens,
                             tokens_out=output_tokens,
                             cost_usd=float(cost_node.total_cost()),
@@ -1158,7 +1186,7 @@ def create_proxy_app(
                             type="call_end",
                             call_id=call_id,
                             model=model,
-                            provider=_detect_provider(state.target_base_url),
+                            provider=provider_name,
                             tokens_in=input_tokens,
                             tokens_out=output_tokens,
                             cost_usd=float(cost_node.total_cost()),
@@ -1264,12 +1292,26 @@ def create_proxy_app(
             # `api/state` to /api/state.
             return RedirectResponse(url="/dashboard/", status_code=307)
 
+        async def _redirect_aep_alias(request: Request) -> RedirectResponse:
+            suffix = request.path_params.get("path", "")
+            destination = f"/dashboard/{suffix}"
+            if request.url.query:
+                destination += f"?{request.url.query}"
+            return RedirectResponse(url=destination, status_code=307)
+
         routes.extend(
             [
                 Route("/dashboard", _redirect_dashboard_trailing_slash, methods=["GET"]),
                 Route("/dashboard/", dash_endpoints["/"]),
                 Route("/dashboard/ciso", dash_endpoints["/ciso"]),
                 Route("/dashboard/api/state", dash_endpoints["/api/state"]),
+                Route("/aep", _redirect_aep_alias, methods=["GET"]),
+                Route("/aep/", _redirect_aep_alias, methods=["GET"]),
+                Route(
+                    "/aep/{path:path}",
+                    _redirect_aep_alias,
+                    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+                ),
             ]
         )
 

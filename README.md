@@ -287,6 +287,46 @@ services:
 
 One env var. Zero code changes. The agent doesn't know AEP exists.
 
+### Custom proxy upstreams
+
+Set the upstream URLs **in the proxy container** when your models are served by
+an OpenAI-compatible or Anthropic-compatible endpoint. Use
+`UPSTREAM_OPENAI_BASE_URL` and `UPSTREAM_ANTHROPIC_BASE_URL` to distinguish
+them from the client variables that point *at* AEP. The proxy also accepts
+`OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` as upstream aliases when the
+corresponding `UPSTREAM_*` variable is absent.
+
+```yaml
+services:
+  aep-proxy:
+    image: ghcr.io/aceteam-ai/aep-proxy:latest
+    environment:
+      UPSTREAM_OPENAI_BASE_URL: https://openai.internal.example/v1
+      UPSTREAM_ANTHROPIC_BASE_URL: https://anthropic.internal.example
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  agent:
+    image: your-agent:latest
+    environment:
+      OPENAI_BASE_URL: http://aep-proxy:8899/v1
+      ANTHROPIC_BASE_URL: http://aep-proxy:8899
+```
+
+OpenAI-compatible requests use the OpenAI upstream; Anthropic messages use the
+Anthropic upstream. A terminal `/v1` in an upstream base URL is stripped before
+the request path is added, and any earlier path prefix is retained. If one
+provider URL is absent, that provider's requests use the existing `--target` /
+`AEP_TARGET` fallback. The proxy refuses common self-referencing URLs on its
+listening port to prevent routing loops. Each provider's configured API key is
+used only with its matching upstream; otherwise the caller's credential is
+forwarded.
+
+The dashboard is available at `/dashboard/`; `/aep/` redirects there. Cost
+shown for model calls is an estimate based on reported token usage and the model
+rate table, including a fallback rate for unknown models. A custom upstream URL
+does not establish that inference was local or free, and the proxy does not
+label it that way without upstream evidence.
+
 **Tested with NVIDIA NemoClaw/OpenShell:** Agent threats (port scanning, subprocess execution) blocked at the proxy before reaching the LLM. Normal calls pass through with receipts. See [aep-quickstart](https://github.com/aceteam-ai/aep-quickstart) for the full NemoClaw demo.
 
 ## Claude Code Integration
