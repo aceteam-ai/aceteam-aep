@@ -183,6 +183,20 @@ def _detect_provider(target_url: str) -> str:
     return urlparse(target_url).hostname or target_url
 
 
+def _env_api_key_for_target(target_url: str) -> str | None:
+    """Seed a managed key only for an explicit target key or a vendor API host."""
+    explicit_key = os.environ.get("AEP_TARGET_API_KEY", "").strip()
+    if explicit_key:
+        return explicit_key
+    vendor_key_name = {
+        "api.openai.com": "OPENAI_API_KEY",
+        "api.anthropic.com": "ANTHROPIC_API_KEY",
+    }.get(urlparse(target_url).hostname)
+    if vendor_key_name:
+        return os.environ.get(vendor_key_name, "").strip() or None
+    return None
+
+
 def _ensure_openai_stream_usage(body: dict[str, Any], path: str) -> None:
     """Ask OpenAI-compatible chat completion streams to include token usage in SSE.
 
@@ -214,8 +228,8 @@ class ProxyState:
         self.target_base_url = target_base_url.rstrip("/")
         self.provider_targets = provider_targets or UpstreamTargets()
         self.provider_api_keys = {
-            "openai": os.environ.get("OPENAI_API_KEY", "").strip() or None,
-            "anthropic": os.environ.get("ANTHROPIC_API_KEY", "").strip() or None,
+            "openai": os.environ.get("UPSTREAM_OPENAI_API_KEY", "").strip() or None,
+            "anthropic": os.environ.get("UPSTREAM_ANTHROPIC_API_KEY", "").strip() or None,
         }
         self.event_store = event_store
         # When set, ProxyState mirrors a small slice of itself (api_key,
@@ -238,14 +252,10 @@ class ProxyState:
         self.safety_enabled = True
         # Runtime BYOK API key — when set, the proxy owns auth and substitutes
         # this key for whatever Authorization the caller sent. Set via
-        # POST /dashboard/api/api-key, or seeded from the matching env var at
-        # startup so users who supply OPENAI_API_KEY / ANTHROPIC_API_KEY via
-        # .env don't need to re-enter it in the dashboard.
-        env_key_name = (
-            "ANTHROPIC_API_KEY" if "anthropic" in self.target_base_url else "OPENAI_API_KEY"
-        )
-        env_key = os.environ.get(env_key_name, "").strip()
-        self.api_key: str | None = env_key or None
+        # POST /dashboard/api/api-key, or seeded from the vendor env var only
+        # for the vendor's exact API host. A custom target must opt in through
+        # AEP_TARGET_API_KEY; a vendor key must not leak to a custom endpoint.
+        self.api_key: str | None = _env_api_key_for_target(self.target_base_url)
         # Identity associated with the active key, populated when the user
         # comes through the AceTeam connect flow (or, eventually, via a
         # /api/whoami introspect on existing keys). None for raw BYOK users
@@ -303,6 +313,8 @@ class ProxyState:
         url = fields.get("target_base_url")
         if isinstance(url, str) and url:
             self.target_base_url = url.rstrip("/")
+            if not (isinstance(api_key, str) and api_key):
+                self.api_key = _env_api_key_for_target(self.target_base_url)
         enabled = fields.get("safety_enabled")
         if isinstance(enabled, bool):
             self.safety_enabled = enabled
@@ -829,7 +841,10 @@ def create_proxy_app(
         # key — e.g. the "aep-proxy-managed" sentinel — and have the proxy
         # substitute the real credential before forwarding.
         if managed_key:
-            if protocol_provider == "anthropic" or "anthropic" in target_base_url:
+            if (
+                protocol_provider == "anthropic"
+                or urlparse(target_base_url).hostname == "api.anthropic.com"
+            ):
                 forward_headers["x-api-key"] = managed_key
                 forward_headers.setdefault("anthropic-version", "2023-06-01")
                 forward_headers.pop("Authorization", None)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,6 +11,11 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 Provider = Literal["openai", "anthropic"]
+log = logging.getLogger(__name__)
+
+
+class ProxyLoopError(ValueError):
+    """A configured upstream resolves to the proxy itself."""
 
 
 @dataclass(frozen=True)
@@ -61,11 +67,13 @@ def normalize_upstream_url(value: str, *, listen_port: int) -> str:
         local_address = address.is_loopback or address.is_unspecified
     except ValueError:
         local_address = False
-    if (parsed.hostname.lower() in local_hosts or local_address) and port == listen_port:
-        raise ValueError("Upstream points back to the local proxy")
+    local_proxy = parsed.hostname.lower() in local_hosts or local_address
+    host_bridge = parsed.hostname.lower() in {"host.docker.internal", "host.containers.internal"}
+    if local_proxy and (not host_bridge or port == listen_port):
+        raise ProxyLoopError("Upstream points back to the local proxy")
 
     path = parsed.path.rstrip("/")
-    if path.endswith("/v1"):
+    if path.lower().endswith("/v1"):
         path = path[:-3]
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
@@ -82,8 +90,21 @@ def load_provider_targets(
     source = os.environ if env is None else env
 
     def get_url(explicit: str, client: str) -> str | None:
-        raw = source.get(explicit, "").strip() or source.get(client, "").strip()
-        return normalize_upstream_url(raw, listen_port=listen_port) if raw else None
+        upstream = source.get(explicit, "").strip()
+        if upstream:
+            return normalize_upstream_url(upstream, listen_port=listen_port)
+        client_url = source.get(client, "").strip()
+        if not client_url:
+            return None
+        try:
+            return normalize_upstream_url(client_url, listen_port=listen_port)
+        except ProxyLoopError:
+            log.warning(
+                "Ignoring %s because it points back to the proxy; set %s for an upstream",
+                client,
+                explicit,
+            )
+            return None
 
     return UpstreamTargets(
         openai=get_url("UPSTREAM_OPENAI_BASE_URL", "OPENAI_BASE_URL"),

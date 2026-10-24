@@ -303,23 +303,33 @@ services:
     environment:
       UPSTREAM_OPENAI_BASE_URL: https://openai.internal.example/v1
       UPSTREAM_ANTHROPIC_BASE_URL: https://anthropic.internal.example
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      UPSTREAM_OPENAI_API_KEY: ${OPENAI_UPSTREAM_KEY}
+      UPSTREAM_ANTHROPIC_API_KEY: ${ANTHROPIC_UPSTREAM_KEY}
   agent:
     image: your-agent:latest
     environment:
       OPENAI_BASE_URL: http://aep-proxy:8899/v1
       ANTHROPIC_BASE_URL: http://aep-proxy:8899
+      OPENAI_API_KEY: aep-proxy-managed
+      ANTHROPIC_API_KEY: aep-proxy-managed
 ```
 
 OpenAI-compatible requests use the OpenAI upstream; Anthropic messages use the
 Anthropic upstream. A terminal `/v1` in an upstream base URL is stripped before
 the request path is added, and any earlier path prefix is retained. If one
 provider URL is absent, that provider's requests use the existing `--target` /
-`AEP_TARGET` fallback. The proxy refuses common self-referencing URLs on its
-listening port to prevent routing loops. Each provider's configured API key is
-used only with its matching upstream; otherwise the caller's credential is
-forwarded.
+`AEP_TARGET` fallback. Explicit `UPSTREAM_*_BASE_URL` values that point back
+to the proxy fail at startup; a self-referencing client alias is ignored with a
+warning. Loopback addresses are rejected, and host bridge aliases are rejected
+when they use the proxy's listening port.
+
+For provider-specific upstreams, only the matching `UPSTREAM_*_API_KEY` is
+injected; if it is absent, the caller's credential is forwarded. A custom
+single `--target` can opt in to a managed key with `AEP_TARGET_API_KEY`.
+For the default or single target, standard `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` in the proxy environment are injected only for the exact
+official provider API hosts. A vendor key is not sent to an arbitrary
+compatible endpoint by default.
 
 The dashboard is available at `/dashboard/`; `/aep/` redirects there. Cost
 shown for model calls is an estimate based on reported token usage and the model

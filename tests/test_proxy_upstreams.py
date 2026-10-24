@@ -9,7 +9,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from aceteam_aep.proxy.app import create_proxy_app
+from aceteam_aep.proxy.app import ProxyState, create_proxy_app
 from aceteam_aep.proxy.cli import _run_proxy
 from aceteam_aep.proxy.upstreams import (
     UpstreamTargets,
@@ -53,6 +53,28 @@ def test_upstream_env_contract_and_path_prefixes() -> None:
         },
     )
     assert explicit.openai == "https://upstream.example.test"
+    assert normalize_upstream_url("https://node.example.test/api/V1", listen_port=8899) == (
+        "https://node.example.test/api"
+    )
+    assert normalize_upstream_url("http://host.docker.internal:9000/v1", listen_port=8899) == (
+        "http://host.docker.internal:9000"
+    )
+
+
+def test_client_alias_pointing_to_proxy_is_ignored_but_explicit_upstream_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    targets = load_provider_targets(
+        listen_port=8899,
+        env={"OPENAI_BASE_URL": "http://aep-proxy:8899/v1"},
+    )
+    assert targets.openai is None
+    assert "Ignoring OPENAI_BASE_URL" in caplog.text
+    with pytest.raises(ValueError, match="points back"):
+        load_provider_targets(
+            listen_port=8899,
+            env={"UPSTREAM_OPENAI_BASE_URL": "http://aep-proxy:8899/v1"},
+        )
 
 
 def test_proxy_cli_loads_env_targets_without_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,6 +113,7 @@ def test_proxy_cli_loads_env_targets_without_config(monkeypatch: pytest.MonkeyPa
     "value",
     [
         "http://localhost:8899/v1",
+        "http://localhost:9000/v1",
         "http://127.0.0.1:8899/v1",
         "http://127.7.8.9:8899/v1",
         "http://[::1]:8899/v1",
@@ -112,11 +135,70 @@ def test_anthropic_count_tokens_uses_anthropic_upstream() -> None:
     assert request_provider("/v1/messages/count_tokens", {}) == "anthropic"
 
 
+def test_custom_fallback_does_not_inject_vendor_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "vendor-secret")
+    monkeypatch.delenv("AEP_TARGET_API_KEY", raising=False)
+    assert ProxyState(target_base_url="https://sovereign.example.test").api_key is None
+    app = create_proxy_app(
+        target_base_url="https://sovereign.example.test",
+        detectors=[CostAnomalyDetector()],
+        dashboard=False,
+    )
+
+    with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as client_cls:
+        upstream = AsyncMock()
+        upstream.__aenter__ = AsyncMock(return_value=upstream)
+        upstream.__aexit__ = AsyncMock(return_value=False)
+        upstream.request = AsyncMock(return_value=_response("custom-model"))
+        client_cls.return_value = upstream
+        response = TestClient(app).post(
+            "/v1/chat/completions",
+            json={"model": "custom-model", "messages": []},
+            headers={"Authorization": "Bearer caller-key"},
+        )
+
+    assert response.status_code == 200
+    assert upstream.request.call_args.kwargs["headers"]["Authorization"] == "Bearer caller-key"
+
+    monkeypatch.setenv("AEP_TARGET_API_KEY", "custom-key")
+    assert ProxyState(target_base_url="https://sovereign.example.test").api_key == "custom-key"
+
+
+def test_custom_single_target_uses_explicit_key_for_anthropic_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AEP_TARGET_API_KEY", "custom-key")
+    app = create_proxy_app(
+        target_base_url="https://node.example.test",
+        detectors=[CostAnomalyDetector()],
+        dashboard=False,
+    )
+
+    with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as client_cls:
+        upstream = AsyncMock()
+        upstream.__aenter__ = AsyncMock(return_value=upstream)
+        upstream.__aexit__ = AsyncMock(return_value=False)
+        upstream.request = AsyncMock(return_value=_response("custom-model"))
+        client_cls.return_value = upstream
+        response = TestClient(app).post(
+            "/v1/messages",
+            json={"model": "custom-model", "messages": []},
+            headers={"x-api-key": "placeholder"},
+        )
+
+    assert response.status_code == 200
+    headers = upstream.request.call_args.kwargs["headers"]
+    assert headers["x-api-key"] == "custom-key"
+    assert "Authorization" not in headers
+
+
 def test_routes_each_provider_with_its_own_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-managed")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-managed")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-vendor-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-vendor-secret")
+    monkeypatch.setenv("UPSTREAM_OPENAI_API_KEY", "openai-managed")
+    monkeypatch.setenv("UPSTREAM_ANTHROPIC_API_KEY", "anthropic-managed")
     targets = UpstreamTargets(
         openai="https://sovereign.example.test/openai",
         anthropic="https://onprem.example.test/anthropic",
@@ -176,7 +258,8 @@ def test_custom_provider_without_managed_key_keeps_caller_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "default-key")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-vendor-secret")
+    monkeypatch.delenv("UPSTREAM_ANTHROPIC_API_KEY", raising=False)
     app = create_proxy_app(
         detectors=[CostAnomalyDetector()],
         dashboard=False,
@@ -197,6 +280,33 @@ def test_custom_provider_without_managed_key_keeps_caller_credential(
 
     assert response.status_code == 200
     assert upstream.request.call_args.kwargs["headers"]["x-api-key"] == "caller-key"
+
+
+def test_custom_openai_upstream_does_not_inject_vendor_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "vendor-secret")
+    monkeypatch.delenv("UPSTREAM_OPENAI_API_KEY", raising=False)
+    app = create_proxy_app(
+        detectors=[CostAnomalyDetector()],
+        dashboard=False,
+        provider_targets=UpstreamTargets(openai="https://sovereign.example.test"),
+    )
+
+    with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as client_cls:
+        upstream = AsyncMock()
+        upstream.__aenter__ = AsyncMock(return_value=upstream)
+        upstream.__aexit__ = AsyncMock(return_value=False)
+        upstream.request = AsyncMock(return_value=_response("custom-model"))
+        client_cls.return_value = upstream
+        response = TestClient(app).post(
+            "/v1/chat/completions",
+            json={"model": "custom-model", "messages": []},
+            headers={"Authorization": "Bearer caller-key"},
+        )
+
+    assert response.status_code == 200
+    assert upstream.request.call_args.kwargs["headers"]["Authorization"] == "Bearer caller-key"
 
 
 @pytest.mark.parametrize(
