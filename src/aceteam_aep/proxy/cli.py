@@ -114,29 +114,38 @@ def _run_proxy(args: argparse.Namespace) -> None:
     import uvicorn
 
     from .app import create_proxy_app
+    from .upstreams import load_provider_targets, normalize_upstream_url
 
     # Use unified config if --config provided, otherwise legacy args
     config_path = getattr(args, "config", None) or os.environ.get("AEP_CONFIG")
     debug = getattr(args, "debug", False)
     if config_path:
         cfg = _resolve_config(args)
+        port = cfg.port  # type: ignore[attr-defined]
+        target = normalize_upstream_url(cfg.target, listen_port=port)  # type: ignore[attr-defined]
+        provider_targets = load_provider_targets(listen_port=port)
         debug = debug or getattr(cfg, "debug", False)
         detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
         app = create_proxy_app(
-            target_base_url=cfg.target,  # type: ignore[attr-defined]
+            target_base_url=target,
             detectors=detectors,
             policy=cfg.policy,  # type: ignore[attr-defined]
             dashboard=cfg.dashboard,  # type: ignore[attr-defined]
             debug=debug,
+            provider_targets=provider_targets,
         )
-        port = cfg.port  # type: ignore[attr-defined]
         host = cfg.host  # type: ignore[attr-defined]
         dashboard = cfg.dashboard  # type: ignore[attr-defined]
-        target = cfg.target  # type: ignore[attr-defined]
     else:
         policy = _resolve_policy(args)
         detectors = _build_detectors(args, policy)
-        target = args.target or "https://api.openai.com"
+        port = args.port or 8899
+        host = args.host or "127.0.0.1"
+        target = normalize_upstream_url(
+            args.target or os.environ.get("AEP_TARGET") or "https://api.openai.com",
+            listen_port=port,
+        )
+        provider_targets = load_provider_targets(listen_port=port)
         sign_key, signer_id = _load_sign_key(args)
         app = create_proxy_app(
             target_base_url=target,
@@ -148,14 +157,19 @@ def _run_proxy(args: argparse.Namespace) -> None:
             budget=getattr(args, "budget", None),
             budget_per_session=getattr(args, "budget_per_session", None),
             debug=debug,
+            provider_targets=provider_targets,
         )
-        port = args.port or 8899
-        host = args.host or "127.0.0.1"
         dashboard = not args.no_dashboard
 
     dashboard_msg = ""
     if dashboard:
-        dashboard_msg = f"  Dashboard:  http://localhost:{port}/dashboard/\n"
+        dashboard_msg = f"  Dashboard:  http://localhost:{port}/dashboard/ (also /aep/)\n"
+
+    upstream_msg = ""
+    if provider_targets.openai:
+        upstream_msg += f"  OpenAI:     {provider_targets.openai}\n"
+    if provider_targets.anthropic:
+        upstream_msg += f"  Anthropic:  {provider_targets.anthropic}\n"
 
     mcp_msg = ""
     try:
@@ -175,6 +189,7 @@ def _run_proxy(args: argparse.Namespace) -> None:
         f"  {'─' * 35}\n"
         f"  LLM Proxy:  http://localhost:{port}/v1\n"
         f"  Target:     {target}\n"
+        f"{upstream_msg}"
         f"{debug_msg}"
         f"{dashboard_msg}"
         f"{mcp_msg}"
@@ -219,6 +234,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
     import uvicorn
 
     from .app import create_proxy_app
+    from .upstreams import load_provider_targets, normalize_upstream_url
 
     if not args.cmd:
         print("Error: no command specified. Usage: aceteam-aep wrap -- python my_agent.py")
@@ -231,6 +247,8 @@ def _run_wrap(args: argparse.Namespace) -> None:
         port = args.port or cfg.port or _find_free_port()  # type: ignore[attr-defined]
         host = args.host or cfg.host or "127.0.0.1"  # type: ignore[attr-defined]
         target = args.target or cfg.target or "https://api.openai.com"  # type: ignore[attr-defined]
+        target = normalize_upstream_url(target, listen_port=port)
+        provider_targets = load_provider_targets(listen_port=port)
         detectors = _build_detectors(args, cfg.policy)  # type: ignore[attr-defined]
         dashboard = cfg.dashboard  # type: ignore[attr-defined]
         if args.no_dashboard:
@@ -241,11 +259,16 @@ def _run_wrap(args: argparse.Namespace) -> None:
             policy=cfg.policy,  # type: ignore[attr-defined]
             dashboard=dashboard,
             debug=False,  # debug mode not supported for wrap
+            provider_targets=provider_targets,
         )
     else:
         port = args.port or _find_free_port()
         host = args.host or "127.0.0.1"
-        target = args.target or "https://api.openai.com"
+        target = normalize_upstream_url(
+            args.target or os.environ.get("AEP_TARGET") or "https://api.openai.com",
+            listen_port=port,
+        )
+        provider_targets = load_provider_targets(listen_port=port)
         policy = _resolve_policy(args)
         detectors = _build_detectors(args, policy)
         dashboard = not args.no_dashboard
@@ -255,6 +278,7 @@ def _run_wrap(args: argparse.Namespace) -> None:
             policy=policy,
             dashboard=dashboard,
             debug=False,  # debug mode not supported for wrap
+            provider_targets=provider_targets,
         )
 
     # Start proxy in a background thread
@@ -739,7 +763,7 @@ def main() -> None:
         "--target",
         type=str,
         default=None,
-        help="Target API base URL (default: https://api.openai.com)",
+        help="Fallback API base URL (or AEP_TARGET; default: https://api.openai.com)",
     )
     proxy_parser.add_argument(
         "--dashboard", action="store_true", default=True, help="Enable dashboard (default: on)"

@@ -287,6 +287,56 @@ services:
 
 One env var. Zero code changes. The agent doesn't know AEP exists.
 
+### Custom proxy upstreams
+
+Set the upstream URLs **in the proxy container** when your models are served by
+an OpenAI-compatible or Anthropic-compatible endpoint. Use
+`UPSTREAM_OPENAI_BASE_URL` and `UPSTREAM_ANTHROPIC_BASE_URL` to distinguish
+them from the client variables that point *at* AEP. The proxy also accepts
+`OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` as upstream aliases when the
+corresponding `UPSTREAM_*` variable is absent.
+
+```yaml
+services:
+  aep-proxy:
+    image: ghcr.io/aceteam-ai/aep-proxy:latest
+    environment:
+      UPSTREAM_OPENAI_BASE_URL: https://openai.internal.example/v1
+      UPSTREAM_ANTHROPIC_BASE_URL: https://anthropic.internal.example
+      UPSTREAM_OPENAI_API_KEY: ${OPENAI_UPSTREAM_KEY}
+      UPSTREAM_ANTHROPIC_API_KEY: ${ANTHROPIC_UPSTREAM_KEY}
+  agent:
+    image: your-agent:latest
+    environment:
+      OPENAI_BASE_URL: http://aep-proxy:8899/v1
+      ANTHROPIC_BASE_URL: http://aep-proxy:8899
+      OPENAI_API_KEY: aep-proxy-managed
+      ANTHROPIC_API_KEY: aep-proxy-managed
+```
+
+OpenAI-compatible requests use the OpenAI upstream; Anthropic messages use the
+Anthropic upstream. A terminal `/v1` in an upstream base URL is stripped before
+the request path is added, and any earlier path prefix is retained. If one
+provider URL is absent, that provider's requests use the existing `--target` /
+`AEP_TARGET` fallback. Explicit `UPSTREAM_*_BASE_URL` values that point back
+to the proxy fail at startup; a self-referencing client alias is ignored with a
+warning. Loopback addresses are rejected, and host bridge aliases are rejected
+when they use the proxy's listening port.
+
+For provider-specific upstreams, only the matching `UPSTREAM_*_API_KEY` is
+injected; if it is absent, the caller's credential is forwarded. A custom
+single `--target` can opt in to a managed key with `AEP_TARGET_API_KEY`.
+For the default or single target, standard `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` in the proxy environment are injected only for the exact
+official provider API hosts. A vendor key is not sent to an arbitrary
+compatible endpoint by default.
+
+The dashboard is available at `/dashboard/`; `/aep/` redirects there. Cost
+shown for model calls is an estimate based on reported token usage and the model
+rate table, including a fallback rate for unknown models. A custom upstream URL
+does not establish that inference was local or free, and the proxy does not
+label it that way without upstream evidence.
+
 **Tested with NVIDIA NemoClaw/OpenShell:** Agent threats (port scanning, subprocess execution) blocked at the proxy before reaching the LLM. Normal calls pass through with receipts. See [aep-quickstart](https://github.com/aceteam-ai/aep-quickstart) for the full NemoClaw demo.
 
 ## Claude Code Integration
