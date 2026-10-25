@@ -164,7 +164,7 @@ def policy_commitment(
         "overrides": {
             name: {
                 "action": override.action,
-                "threshold": override.threshold,
+                "threshold": float(override.threshold) if override.threshold is not None else None,
                 "enabled": override.enabled,
                 "extra": override.extra,
             }
@@ -172,8 +172,8 @@ def policy_commitment(
         },
         "pipeline": {
             "enabled": policy.pipeline.enabled,
-            "pass_below": policy.pipeline.pass_below,
-            "block_above": policy.pipeline.block_above,
+            "pass_below": float(policy.pipeline.pass_below),
+            "block_above": float(policy.pipeline.block_above),
             "layers": policy.pipeline.layers,
         },
         "custom_policies": enabled_rules,

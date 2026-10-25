@@ -25,7 +25,7 @@ L1 has three statement formats:
 
 - **format_version 1** (original, 2026-03-29): signs a narrow 5-field verdict (`call_id`, `action`, `signals`, `timestamp`, `confidence`). Chain position (`chain_height`/`chain_hash`/`prev_chain_hash`) and the signer's session identity live **outside** the signed bytes.
 - **format_version 2** (default, 2026-09-12): signs a complete statement that additionally binds schema/domain, signer identity, session/execution identity, sequence position, and the previous *authenticated* link. This remains the output of `AttestationEngine.sign_verdict` when no evaluation is supplied.
-- **format_version 3**: adds one signed `evaluation` object to the version 2 statement. The signer emits it only when a caller supplies `evaluation`; calls without it continue to emit version 2.
+- **format_version 3**: adds one signed `evaluation` object to the version 2 statement. The signer emits it when a caller supplies `evaluation`; a fresh signer called without it emits version 2. A signer keeps that first format version for its lifetime and rejects a call that would switch versions.
 
 format_version 1 is documented in §3–§4 and §6.1–§6.3 below for reference and because every format_version 2 or 3 entry still carries the equivalent format_version 1 fields (`verdict_hash`/`signature`/`chain_hash`) for callers that only need the narrow single-verdict guarantee. **A format_version 1 chain does not satisfy the strict full-chain guarantee in §8.2** — see §10 for why, and §5 / §6.5–§6.9 for the authenticated statements that replace it.
 
@@ -151,7 +151,7 @@ X-AEP-Statement-Signature: ed25519:...
 
 `X-AEP-Confidence` is present only when the verdict has a confidence score (its absence, like a `null` field in the canonical JSON, means no confidence was supplied — not zero confidence). When signing is not enabled, all attestation headers are omitted.
 
-When supplied, commitments travel as `X-AEP-Input-Commitment`, `X-AEP-Output-Commitment`, and `X-AEP-Policy-Commitment`. A version 3 response also carries `X-AEP-Evaluation`, the canonical JSON of the signed evaluation. `entry_from_headers()` reconstructs the statement from these headers plus the proxy's `X-AEP-Call-Id` and `X-AEP-Enforcement` headers. It restores required `null` members omitted by canonical JSON before verification.
+When supplied, commitments travel as `X-AEP-Input-Commitment`, `X-AEP-Output-Commitment`, and `X-AEP-Policy-Commitment`. A version 3 response also carries `X-AEP-Evaluation`, the canonical JSON of the signed evaluation. `entry_from_headers()` reconstructs the statement from these headers plus the proxy's `X-AEP-Call-Id` and `X-AEP-Enforcement` headers. It rejects case-colliding header names, duplicate JSON object keys, and noncanonical evaluation header bytes, then restores required `null` members omitted by canonical JSON before verification.
 
 ## 6. Audit Chain
 
@@ -272,7 +272,7 @@ Version 3 adds one required `evaluation` object to the version 2 statement. It i
 
 `decided_by` is `pipeline:aggregate`, `pipeline:unavailable`, `residual:<detector>`, `legacy:<detector>`, or `none`. Detector and layer names are identifiers, never free text. The evaluation schema rejects extra fields and non-finite or out-of-range scores before signing. Version 2 statements remain byte-for-byte compatible when no evaluation is supplied. A strict verifier accepts a chain of one version only: all version 2 or all version 3. A mixed chain is invalid; a version 1 or incomplete chain is `legacy_unsupported`. Older SDK verifiers cannot verify version 3 and must report it as unsupported.
 
-`policy_commitment(policy, custom_policies)` hashes canonical JSON of the effective enforcement policy, including its thresholds, detector overrides, and ordered pipeline layers. Each enabled custom policy contributes its ID, action-relevant settings, and a SHA-256 digest of its rule. The rule text never enters the receipt or the commitment input. Disabled custom policies do not affect the digest. The caller must pass the current policy and custom policy store at decision time.
+`policy_commitment(policy, custom_policies)` hashes canonical JSON of the effective enforcement policy, including its thresholds, detector overrides, and ordered pipeline layers. Numeric thresholds are serialized as floats, so `0` and `0.0` commit identically. Each enabled custom policy contributes its ID, action-relevant settings, and a SHA-256 digest of its rule. The rule text never enters the receipt or the commitment input. Disabled custom policies do not affect the digest. The caller must pass the current policy and custom policy store at decision time.
 
 ## 7. Key Management
 

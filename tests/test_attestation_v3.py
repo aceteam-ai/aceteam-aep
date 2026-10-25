@@ -15,6 +15,7 @@ from aceteam_aep.attestation import (
     STATEMENT_VERSION_V3,
     AttestationEngine,
     build_statement,
+    canonical_json,
     entry_from_headers,
     generate_keypair,
     verify_chain_report,
@@ -130,8 +131,34 @@ def test_v2_chain_still_verifies_with_unchanged_default_headers():
 def test_mixed_version_chain_invalid():
     engine, public = signer()
     engine.sign_verdict(call_id="call-1", action="pass", signals=[])
-    engine.sign_verdict(call_id="call-2", action="block", signals=[], evaluation=evaluation())
-    assert verify_chain_report(engine.chain, public).status == "invalid"
+    # A signer keeps one format version for its lifetime, without advancing
+    # either chain after a rejected call.
+    with pytest.raises(ValueError, match="cannot mix"):
+        engine.sign_verdict(call_id="call-2", action="block", signals=[], evaluation=evaluation())
+    assert engine.chain_height == 1
+    assert verify_chain_report(engine.chain, public).status == "valid"
+
+    # A verifier must still reject a mixed chain assembled from two signers
+    # sharing a key and execution identity, even with otherwise valid links.
+    second = AttestationEngine(
+        _private_key=engine._private_key,
+        signer_id=engine.signer_id,
+        execution_id=engine.execution_id,
+    )
+    second._chain_height = engine.chain_height
+    second._prev_chain_hash = engine.chain[-1]["chain_hash"]
+    second._prev_statement_digest = engine.chain[-1]["statement_digest"]
+    second.sign_verdict(call_id="call-2", action="block", signals=[], evaluation=evaluation())
+    assert verify_chain_report(engine.chain + second.chain, public).status == "invalid"
+
+
+def test_v3_engine_rejects_v2_after_first_statement():
+    engine, public = signer()
+    engine.sign_verdict(call_id="call-1", action="block", signals=[], evaluation=evaluation())
+    with pytest.raises(ValueError, match="cannot mix"):
+        engine.sign_verdict(call_id="call-2", action="pass", signals=[])
+    assert engine.chain_height == 1
+    assert verify_chain_report(engine.chain, public).status == "valid"
 
 
 def test_entry_from_headers_roundtrip_v3():
@@ -152,6 +179,80 @@ def test_entry_from_headers_roundtrip_v3():
     assert entry["evaluation"] == evaluation()
     assert entry["policy_commitment"] == "sha256:" + "3" * 64
     assert verify_chain_report([entry], public).status == "valid"
+
+
+def test_entry_from_headers_rejects_case_collisions():
+    engine, _ = signer()
+    headers = engine.sign_verdict(
+        call_id="call-1", action="block", signals=[], evaluation=evaluation()
+    )
+    headers.update({"X-AEP-Call-Id": "call-1", "X-AEP-Enforcement": "block"})
+    headers["x-aep-evaluation"] = headers["X-AEP-Evaluation"]
+    with pytest.raises(ValueError, match="duplicate attestation header"):
+        entry_from_headers(headers)
+
+
+@pytest.mark.parametrize("header", ["X-AEP-Evaluation", "X-AEP-Signals"])
+def test_entry_from_headers_rejects_duplicate_json_keys(header):
+    engine, _ = signer()
+    headers = engine.sign_verdict(
+        call_id="call-1", action="block", signals=[], evaluation=evaluation()
+    )
+    headers.update({"X-AEP-Call-Id": "call-1", "X-AEP-Enforcement": "block"})
+    if header == "X-AEP-Evaluation":
+        headers[header] = headers[header].replace(
+            '"mode":"pipeline"', '"mode":"pipeline","mode":"pipeline"'
+        )
+    else:
+        headers[header] = '[{"detector":"rules","detector":"rules"}]'
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        entry_from_headers(headers)
+
+
+def test_entry_from_headers_requires_canonical_evaluation_bytes():
+    engine, public = signer()
+    headers = engine.sign_verdict(
+        call_id="call-1", action="block", signals=[], evaluation=evaluation()
+    )
+    headers.update({"X-AEP-Call-Id": "call-1", "X-AEP-Enforcement": "block"})
+    headers["X-AEP-Evaluation"] = json.dumps(json.loads(headers["X-AEP-Evaluation"]))
+    with pytest.raises(ValueError, match="canonical JSON"):
+        entry_from_headers(headers)
+
+    altered = evaluation()
+    altered["decided_by"] = "pipeline:aggregate"
+    headers["X-AEP-Evaluation"] = canonical_json(altered).decode("utf-8")
+    assert verify_chain_report([entry_from_headers(headers)], public).status == "invalid"
+
+
+@pytest.mark.parametrize("mutation", ["missing", "number", "json", "shape"])
+def test_entry_from_headers_uses_value_error_for_malformed_headers(mutation):
+    engine, _ = signer()
+    headers = engine.sign_verdict(
+        call_id="call-1", action="block", signals=[], evaluation=evaluation()
+    )
+    headers.update({"X-AEP-Call-Id": "call-1", "X-AEP-Enforcement": "block"})
+    if mutation == "missing":
+        del headers["X-AEP-Statement-Digest"]
+    elif mutation == "number":
+        headers["X-AEP-Chain-Height"] = "not an integer"
+    elif mutation == "json":
+        headers["X-AEP-Evaluation"] = "{"
+    else:
+        headers["X-AEP-Evaluation"] = '{"phases":null}'
+    with pytest.raises(ValueError):
+        entry_from_headers(headers)
+
+
+def test_v2_rejects_unsigned_evaluation_in_entry_and_headers():
+    engine, public = signer()
+    headers = engine.sign_verdict(call_id="call-1", action="pass", signals=[])
+    headers.update({"X-AEP-Call-Id": "call-1", "X-AEP-Enforcement": "pass"})
+    with pytest.raises(ValueError, match="unsigned evaluation"):
+        entry_from_headers({**headers, "X-AEP-Evaluation": "{}"})
+    tampered = copy.deepcopy(engine.chain)
+    tampered[0]["evaluation"] = evaluation()
+    assert verify_chain_report(tampered, public).status == "invalid"
 
 
 def test_v2_commitment_headers_roundtrip_when_supplied():
@@ -225,6 +326,23 @@ def test_evaluation_rejects_unknown_nonfinite_and_free_text():
             )
 
 
+def test_evaluation_rejects_unavailable_list_mismatch():
+    record = evaluation()
+    record["phases"][0]["pipeline"]["unavailable"] = []
+    with pytest.raises(ValueError, match="unavailable must list"):
+        build_statement(
+            signer_id="proxy:test",
+            execution_id="run",
+            call_id="call",
+            action="block",
+            signals=[],
+            timestamp="2026-01-01T00:00:00Z",
+            sequence=0,
+            prev_link="sha256:" + "0" * 64,
+            evaluation=record,
+        )
+
+
 def test_policy_commitment_stable_and_tracks_effective_changes():
     base = EnforcementPolicy()
     ordered = EnforcementPolicy(
@@ -245,6 +363,18 @@ def test_policy_commitment_stable_and_tracks_effective_changes():
     assert policy_commitment(ordered, []) != policy_commitment(
         replace(ordered, overrides={**ordered.overrides, "a": DetectorPolicy(action="flag")}), []
     )
+
+
+def test_policy_commitment_normalizes_numeric_thresholds():
+    integers = EnforcementPolicy(
+        overrides={"rules": DetectorPolicy(action="block", threshold=0)},
+        pipeline=PipelinePolicy(pass_below=0, block_above=1),
+    )
+    floats = EnforcementPolicy(
+        overrides={"rules": DetectorPolicy(action="block", threshold=0.0)},
+        pipeline=PipelinePolicy(pass_below=0.0, block_above=1.0),
+    )
+    assert policy_commitment(integers) == policy_commitment(floats)
 
 
 def test_policy_commitment_excludes_rule_text_and_disabled_rules(monkeypatch):

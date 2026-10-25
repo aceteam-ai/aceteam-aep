@@ -604,6 +604,7 @@ class AttestationEngine:
     # session's chain (see #9657).
     execution_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     _prev_statement_digest: str | None = field(default=None, init=False, repr=False)
+    _format_version: int | None = field(default=None, init=False, repr=False)
 
     def sign_verdict(
         self,
@@ -634,6 +635,9 @@ class AttestationEngine:
 
         Returns a dict of HTTP header name → value pairs.
         """
+        version = STATEMENT_VERSION_V3 if evaluation is not None else STATEMENT_VERSION
+        if self._format_version is not None and version != self._format_version:
+            raise ValueError("an attestation engine cannot mix statement format versions")
         if evaluation is not None:
             if not isinstance(signals, list) or not all(isinstance(s, dict) for s in signals):
                 raise ValueError("signals must be a list of dicts")
@@ -707,6 +711,7 @@ class AttestationEngine:
         self._chain.append(entry)
         self._prev_chain_hash = chain_hash
         self._prev_statement_digest = digest
+        self._format_version = version
         self._chain_height += 1
 
         # --- headers ---
@@ -760,12 +765,44 @@ def entry_from_headers(headers: Mapping[str, str]) -> dict[str, Any]:
     The proxy supplies ``X-AEP-Call-Id`` and ``X-AEP-Enforcement`` alongside
     the headers returned by :meth:`AttestationEngine.sign_verdict`.
     """
-    values = {key.lower(): value for key, value in headers.items()}
+    values: dict[str, str] = {}
+    for key, value in headers.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("attestation header names and values must be strings")
+        normalized = key.lower()
+        if normalized in values:
+            raise ValueError(f"duplicate attestation header: {normalized}")
+        values[normalized] = value
 
     def required(name: str) -> str:
-        return values[f"x-aep-{name}"]
+        try:
+            return values[f"x-aep-{name}"]
+        except KeyError as exc:
+            raise ValueError(f"missing attestation header: X-AEP-{name}") from exc
 
-    version = int(required("format-version"))
+    def unique_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key in attestation header: {key}")
+            result[key] = value
+        return result
+
+    def parse_json(raw: str) -> Any:
+        try:
+            return json.loads(raw, object_pairs_hook=unique_object_pairs)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid JSON in attestation header") from exc
+
+    raw_version = required("format-version")
+    raw_sequence = required("sequence")
+    raw_chain_height = required("chain-height")
+    try:
+        version = int(raw_version)
+        sequence = int(raw_sequence)
+        chain_height = int(raw_chain_height)
+    except ValueError as exc:
+        raise ValueError("invalid numeric attestation header") from exc
     if version not in (STATEMENT_VERSION, STATEMENT_VERSION_V3):
         raise ValueError("unsupported statement format_version")
     entry: dict[str, Any] = {
@@ -775,12 +812,12 @@ def entry_from_headers(headers: Mapping[str, str]) -> dict[str, Any]:
         "execution_id": required("execution-id"),
         "call_id": required("call-id"),
         "action": required("enforcement"),
-        "signals": json.loads(required("signals")),
-        "confidence": json.loads(values["x-aep-confidence"])
+        "signals": parse_json(required("signals")),
+        "confidence": parse_json(values["x-aep-confidence"])
         if "x-aep-confidence" in values
         else None,
         "timestamp": required("timestamp"),
-        "sequence": int(required("sequence")),
+        "sequence": sequence,
         "prev_link": required("prev-link"),
         "input_commitment": values.get("x-aep-input-commitment"),
         "output_commitment": values.get("x-aep-output-commitment"),
@@ -789,7 +826,7 @@ def entry_from_headers(headers: Mapping[str, str]) -> dict[str, Any]:
         "statement_signature": required("statement-signature"),
         "verdict_hash": required("verdict-hash"),
         "signature": required("signature"),
-        "chain_height": int(required("chain-height")),
+        "chain_height": chain_height,
         "chain_hash": required("chain-hash"),
     }
     if version == STATEMENT_VERSION_V3:
@@ -800,7 +837,16 @@ def entry_from_headers(headers: Mapping[str, str]) -> dict[str, Any]:
                 {**signal, "score": signal.get("score")} if isinstance(signal, dict) else signal
                 for signal in entry["signals"]
             ]
-        entry["evaluation"] = _evaluation_from_canonical_json(json.loads(required("evaluation")))
+        raw_evaluation = required("evaluation")
+        parsed_evaluation = parse_json(raw_evaluation)
+        if not isinstance(parsed_evaluation, dict) or raw_evaluation.encode(
+            "utf-8"
+        ) != canonical_json(parsed_evaluation):
+            raise ValueError("X-AEP-Evaluation must use canonical JSON")
+        try:
+            entry["evaluation"] = _evaluation_from_canonical_json(parsed_evaluation)
+        except TypeError as exc:
+            raise ValueError("invalid X-AEP-Evaluation") from exc
     elif "x-aep-evaluation" in values:
         raise ValueError("format_version 2 cannot present an unsigned evaluation")
     return entry
