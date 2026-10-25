@@ -184,8 +184,8 @@ async def test_redacts_in_detail(detector: SecretDetector) -> None:
         call_id="c14",
     )
     assert len(signals) >= 1
-    assert "AKIAIOSF..." in signals[0].detail
-    assert "AKIAIOSFODNN7EXAMPLE" not in signals[0].detail
+    assert signals[0].detail == "AWS access key detected in input [0:20]"
+    assert "AKIA" not in signals[0].detail
 
 
 async def test_multiple_secrets_in_one_text(detector: SecretDetector) -> None:

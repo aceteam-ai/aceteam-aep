@@ -2,11 +2,10 @@
 
 When a request has `"stream": true`, the proxy:
 1. Forwards to the target API with streaming
-2. Passes each SSE chunk through to the client immediately (low latency)
-3. Buffers chunks in parallel to accumulate the full response
-4. After stream completes, runs safety checks on the accumulated output
-5. If safety BLOCK: appends a final SSE event with the block signal
-6. Records cost from the accumulated usage data
+2. Buffers chunks to accumulate the full response before releasing output
+3. Runs safety checks on the accumulated output
+4. Suppresses provider chunks containing a detected secret, then emits a block event
+5. Records cost from the accumulated usage data
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from starlette.responses import Response, StreamingResponse
 
 from ..enforcement import EnforcementDecision, EnforcementPolicy, evaluate, evaluate_pipeline
 from ..safety.base import DetectorRegistry
+from ..safety.secrets import SecretDetector
 
 log = logging.getLogger(__name__)
 
@@ -128,11 +128,28 @@ async def handle_streaming_request(
             await upstream.aclose()
             await client.aclose()
         log.warning(
-            "STREAM UPSTREAM ERROR %s: status=%d body=%s",
+            "STREAM UPSTREAM ERROR %s: status=%d",
             call_id,
             upstream.status_code,
-            error_body[:500].decode("utf-8", errors="replace"),
         )
+        leaked = await SecretDetector().check(
+            input_text="", output_text=error_body.decode("utf-8", errors="replace"), call_id=call_id
+        )
+        if leaked:
+            return Response(
+                content=json.dumps(
+                    {
+                        "error": {
+                            "message": "AEP safety: secret blocked",
+                            "type": "aep_safety_block",
+                            "code": "safety_block",
+                        }
+                    }
+                ),
+                status_code=400,
+                media_type="application/json",
+                headers={"X-AEP-Call-ID": call_id},
+            )
         return Response(
             content=error_body,
             status_code=upstream.status_code,
@@ -142,31 +159,34 @@ async def handle_streaming_request(
 
     async def stream_generator() -> AsyncGenerator[str, None]:
         accumulated_chunks: list[dict[str, Any]] = []
+        buffered_lines: list[str] = []
 
         try:
-            # Pass through each line immediately
+            # Hold provider bytes until secret detection completes. A leaked
+            # credential may span several deltas, so checking per line is unsafe.
             async for line in upstream.aiter_lines():
                 # Buffer for post-stream safety
                 parsed = _parse_sse_line(line)
                 if parsed:
                     accumulated_chunks.append(parsed)
 
-                # Debug: log each chunk (truncated)
-                if debug:
-                    log.debug("STREAM CHUNK %s: %s", call_id, line[:200] if line else "<empty>")
-
-                # Pass through to client immediately
-                yield f"{line}\n"
+                buffered_lines.append(line)
         except Exception as exc:
-            # Bytes were already sent under a 200; the status can't change.
-            # Emit a final Anthropic-format SSE error event so clients
-            # terminate instead of waiting forever, then close the stream.
-            log.warning("STREAM INTERRUPTED %s: %s: %s", call_id, type(exc).__name__, exc)
+            # Check buffered content before releasing anything from an
+            # interrupted stream. A complete key may precede the failure.
+            _, partial_output, _, _ = _accumulate_stream_chunks(accumulated_chunks)
+            partial_secrets = await SecretDetector().check(
+                input_text="", output_text=partial_output, call_id=call_id
+            )
+            if not partial_secrets:
+                for line in buffered_lines:
+                    yield f"{line}\n"
+            log.warning("STREAM INTERRUPTED %s: %s", call_id, type(exc).__name__)
             error_event = {
                 "type": "error",
                 "error": {
                     "type": "api_error",
-                    "message": f"AEP proxy: upstream stream interrupted: {exc}",
+                    "message": "AEP proxy: upstream stream interrupted",
                 },
             }
             yield "event: error\n"
@@ -183,12 +203,11 @@ async def handle_streaming_request(
 
         if debug:
             log.debug(
-                "STREAM COMPLETE %s: model=%s, input_tokens=%d, output_tokens=%d, output_text=%s",
+                "STREAM COMPLETE %s: model=%s, input_tokens=%d, output_tokens=%d",
                 call_id,
                 model,
                 input_tokens,
                 output_tokens,
-                output_text[:500] if output_text else "",
             )
 
         # Run safety detectors
@@ -208,16 +227,25 @@ async def handle_streaming_request(
             )
             decision = evaluate(signals, policy)
 
+        secret_signals = await SecretDetector().check(
+            input_text="", output_text=output_text, call_id=call_id
+        )
+        if secret_signals:
+            signals = list(signals) + list(secret_signals)
+            decision = EnforcementDecision(
+                action="block", signals=list(signals), reason="secret_leak: secret_leak"
+            )
+        else:
+            for line in buffered_lines:
+                yield f"{line}\n"
+
         # If blocked, append a safety event to the stream
         if decision.action == "block":
             safety_event = {
                 "aep_safety_block": True,
                 "action": decision.action,
                 "reason": decision.reason,
-                "signals": [
-                    {"type": s.signal_type, "severity": s.severity, "detail": s.detail}
-                    for s in signals
-                ],
+                "signals": [{"type": s.signal_type, "severity": s.severity} for s in signals],
             }
             yield f"data: {json.dumps(safety_event)}\n\n"
 

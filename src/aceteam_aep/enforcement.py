@@ -186,7 +186,7 @@ def evaluate(
         if _ACTION_PRIORITY.get(action, 0) > _ACTION_PRIORITY.get(max_action, 0):
             max_action = action
         if action in ("block", "flag"):
-            reasons.append(f"{s.signal_type}: {s.detail}")
+            reasons.append(f"{s.detector or s.signal_type}: {s.signal_type}")
 
     return EnforcementDecision(
         action=max_action,
@@ -300,7 +300,11 @@ def evaluate_pipeline(
         reasons.append(
             f"pipeline: P(safe)={pipeline_result.p_safe:.4f} "
             f"({pipeline_result.layers_executed} layers"
-            + (f", short-circuited at {pipeline_result.short_circuited_at})" if pipeline_result.short_circuited_at else ")")
+            + (
+                f", short-circuited at {pipeline_result.short_circuited_at})"
+                if pipeline_result.short_circuited_at
+                else ")"
+            )
         )
 
     return EnforcementDecision(
@@ -335,14 +339,15 @@ def build_pipeline_from_policy(
     from .safety.trust_engine import TrustEngineDetector
 
     detector_map: dict[str, SafetyDetector] = {d.name: d for d in detectors}
-    configured_layers = {l["name"] for l in policy.pipeline.layers if isinstance(l, dict)}
+    configured_layers = {
+        layer["name"] for layer in policy.pipeline.layers if isinstance(layer, dict)
+    }
 
     layers = []
 
     if "regex" in configured_layers or not configured_layers:
         regex_detectors = [
-            d for d in detectors
-            if isinstance(d, (PiiDetector, AgentThreatDetector))
+            d for d in detectors if isinstance(d, (PiiDetector, AgentThreatDetector))
         ]
         if regex_detectors:
             layers.append(RegexLayer(regex_detectors))
