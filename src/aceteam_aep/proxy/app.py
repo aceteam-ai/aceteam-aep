@@ -167,13 +167,26 @@ def _extract_text_from_messages(
 
 
 def _extract_output_text(data: dict[str, Any]) -> str:
-    """Extract assistant text from an OpenAI-format response."""
+    """Extract all client-facing assistant text, including tool arguments."""
     parts: list[str] = []
     for choice in data.get("choices", []):
         msg = choice.get("message", {})
         content = msg.get("content")
-        if content:
+        if isinstance(content, str):
             parts.append(content)
+        elif isinstance(content, list):
+            parts.extend(block.get("text", "") for block in content if isinstance(block, dict))
+        function_call = msg.get("function_call") or {}
+        if isinstance(function_call, dict) and isinstance(function_call.get("arguments"), str):
+            parts.append(function_call["arguments"])
+        for tool in msg.get("tool_calls") or []:
+            if isinstance(tool, dict):
+                function = tool.get("function") or {}
+                if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+                    parts.append(function["arguments"])
+    for block in data.get("content") or []:
+        if isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
     return " ".join(parts)
 
 
@@ -614,14 +627,7 @@ def create_proxy_app(
                 body = json.loads(body_bytes) if body_bytes else {}
             except json.JSONDecodeError:
                 body = {}
-            log.debug(
-                "REQUEST %s %s %s: headers=%s, body=%s",
-                call_id,
-                request.method,
-                path,
-                dict(request.headers),
-                body,
-            )
+            log.debug("REQUEST %s %s %s", call_id, request.method, path)
 
         # Parse request body
         try:
@@ -1001,6 +1007,7 @@ def create_proxy_app(
                 residual_registry=state.residual_registry,
                 policy=state.policy,
                 pipeline=state.pipeline,
+                safety_enabled=state.safety_enabled,
                 on_complete=on_stream_complete,
                 debug=debug,
             )
@@ -1031,6 +1038,15 @@ def create_proxy_app(
         # If upstream errored, pass through
         if upstream_resp.status_code >= 400:
             state.span_tracker.end_span(span.span_id, status="ERROR")
+            from .streaming import contains_blocked_secret
+
+            if state.safety_enabled and await contains_blocked_secret(
+                upstream_resp.text, state.registry, state.policy, call_id
+            ):
+                return JSONResponse(
+                    {"error": {"message": "AEP safety: upstream response blocked", "code": "safety_block"}},
+                    status_code=upstream_resp.status_code,
+                )
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -1042,6 +1058,15 @@ def create_proxy_app(
             resp_data = upstream_resp.json()
         except json.JSONDecodeError:
             state.span_tracker.end_span(span.span_id, status="ERROR")
+            from .streaming import contains_blocked_secret
+
+            if state.safety_enabled and await contains_blocked_secret(
+                upstream_resp.text, state.registry, state.policy, call_id
+            ):
+                return JSONResponse(
+                    {"error": {"message": "AEP safety: upstream response blocked", "code": "safety_block"}},
+                    status_code=upstream_resp.status_code,
+                )
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -1260,7 +1285,7 @@ def create_proxy_app(
         # Sign verdict and add attestation headers (if signing enabled)
         if attestation_engine is not None:
             signal_dicts = [
-                {"signal_type": s.signal_type, "severity": s.severity, "detail": s.detail}
+                {"signal_type": s.signal_type, "severity": s.severity}
                 for s in all_signals
             ]
             attest_headers = attestation_engine.sign_verdict(
@@ -1283,7 +1308,7 @@ def create_proxy_app(
             log.debug(
                 (
                     "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, "
-                    "status=%d, body=%s"
+                    "status=%d"
                 ),
                 call_id,
                 request.method,
@@ -1292,7 +1317,6 @@ def create_proxy_app(
                 input_tokens,
                 output_tokens,
                 upstream_resp.status_code,
-                resp_data,
             )
 
         return Response(

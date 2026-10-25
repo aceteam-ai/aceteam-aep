@@ -11,8 +11,11 @@ When a request has `"stream": true`, the proxy:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -21,8 +24,77 @@ from starlette.responses import Response, StreamingResponse
 
 from ..enforcement import EnforcementPolicy, evaluate, evaluate_pipeline_with_residual
 from ..safety.base import DetectorRegistry
+from ..safety.secrets import SecretDetector
 
 log = logging.getLogger(__name__)
+
+_MAX_FRAME_CHARS = 64 * 1024
+_MAX_STREAM_CHARS = 1024 * 1024
+_STREAM_SECONDS = 120
+_TOKEN_END = re.compile(r"[A-Za-z0-9_+=/.-]$")
+_LABEL_TAIL = re.compile(
+    r"(?i)(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|"
+    r"aws_secret_access_key|aws_secret)\s*(?:[:=]\s*['\"]?)?$"
+)
+
+
+def _stream_fields(chunk: dict[str, Any]) -> dict[str, str]:
+    """Return client-facing text by stable stream channel, without protocol metadata."""
+    fields: dict[str, str] = {}
+    for position, choice in enumerate(chunk.get("choices") or []):
+        if not isinstance(choice, dict):
+            continue
+        choice_id = choice.get("index", position)
+        delta = choice.get("delta") or {}
+        if not isinstance(delta, dict):
+            continue
+        for key in ("content", "refusal"):
+            if isinstance(delta.get(key), str):
+                fields[f"choice/{choice_id}/{key}"] = delta[key]
+        function = delta.get("function_call") or {}
+        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+            fields[f"choice/{choice_id}/function"] = function["arguments"]
+        for tool_position, tool in enumerate(delta.get("tool_calls") or []):
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function") or {}
+            if isinstance(function, dict) and isinstance(function.get("arguments"), str):
+                tool_id = tool.get("index", tool_position)
+                fields[f"choice/{choice_id}/tool/{tool_id}"] = function["arguments"]
+    delta = chunk.get("delta") or {}
+    if isinstance(delta, dict):
+        for key in ("text", "partial_json"):
+            if isinstance(delta.get(key), str):
+                fields[f"anthropic/{chunk.get('index', 0)}/{key}"] = delta[key]
+    error = chunk.get("error")
+    if error is not None:
+        fields["error"] = json.dumps(error, ensure_ascii=False)
+    return fields
+
+
+async def contains_blocked_secret(
+    text: str, registry: DetectorRegistry, policy: EnforcementPolicy, call_id: str
+) -> bool:
+    """Use the configured detector and policy, including disable and allow rules."""
+    if "secret_leak" in policy.allow_types:
+        return False
+    for detector in registry._detectors:
+        if not isinstance(detector, SecretDetector):
+            continue
+        signals = await detector.check(input_text="", output_text=text, call_id=call_id)
+        for signal in signals:
+            signal.detector = detector.name
+        return evaluate(signals, policy).action == "block"
+    return False
+
+
+def _needs_holdback(text: str) -> bool:
+    """Keep an unfinished credential token or label until its boundary is known."""
+    return bool(
+        _TOKEN_END.search(text)
+        or _LABEL_TAIL.search(text)
+        or "-----BEGIN" in text
+    )
 
 
 def _sse_field_value(line: str) -> tuple[str, str] | None:
@@ -75,12 +147,7 @@ def _accumulate_stream_chunks(
         if "model" in chunk:
             model = chunk["model"]
 
-        # Accumulate text from delta
-        for choice in chunk.get("choices", []):
-            delta = choice.get("delta", {})
-            content = delta.get("content")
-            if content:
-                text_parts.append(content)
+        text_parts.extend(_stream_fields(chunk).values())
 
         # Usage is typically in the final chunk
         usage = chunk.get("usage")
@@ -104,6 +171,7 @@ async def handle_streaming_request(
     residual_registry: DetectorRegistry | None = None,
     on_complete: Any = None,
     debug: bool = False,
+    safety_enabled: bool = True,
 ) -> Response:
     """Handle a streaming request through the proxy.
 
@@ -143,6 +211,10 @@ async def handle_streaming_request(
         await client.aclose()
         raise
 
+    secret_guard = safety_enabled and await contains_blocked_secret(
+        "AKIA" + "A" * 16, registry, policy, call_id
+    )
+
     # Upstream rejected the request before any bytes were streamed: pass the
     # provider's status + error body through verbatim (Anthropic/OpenAI error
     # shape preserved) instead of returning an empty 200 SSE stream.
@@ -152,12 +224,11 @@ async def handle_streaming_request(
         finally:
             await upstream.aclose()
             await client.aclose()
-        log.warning(
-            "STREAM UPSTREAM ERROR %s: status=%d body=%s",
-            call_id,
-            upstream.status_code,
-            error_body[:500].decode("utf-8", errors="replace"),
-        )
+        log.warning("STREAM UPSTREAM ERROR %s: status=%d", call_id, upstream.status_code)
+        if secret_guard and await contains_blocked_secret(
+            error_body.decode("utf-8", errors="replace"), registry, policy, call_id
+        ):
+            error_body = b'{"error":{"message":"AEP safety: upstream response blocked","code":"safety_block"}}'
         return Response(
             content=error_body,
             status_code=upstream.status_code,
@@ -170,11 +241,43 @@ async def handle_streaming_request(
         upstream_done = False
         terminal_event: str | None = None
         event_lines: list[str] = []
+        pending_frames: list[str] = []
+        pending_fields: dict[str, str] = {}
+        pending_size = 0
+        stream_size = 0
+        blocked_early = False
+        deadline = time.monotonic() + _STREAM_SECONDS
+
+        async def inspect_frame(frame: str, chunks: list[dict[str, Any]]) -> tuple[bool, bool]:
+            """Return (blocked, safe to flush) for a complete pending frame."""
+            nonlocal pending_size
+            pending_frames.append(frame)
+            pending_size += len(frame)
+            if pending_size > _MAX_FRAME_CHARS:
+                raise ValueError("stream holdback limit exceeded")
+            for chunk in chunks:
+                for channel, fragment in _stream_fields(chunk).items():
+                    pending_fields[channel] = pending_fields.get(channel, "") + fragment
+                    if await contains_blocked_secret(
+                        pending_fields[channel], registry, policy, call_id
+                    ):
+                        return True, False
+            return False, not any(_needs_holdback(value) for value in pending_fields.values())
 
         try:
             # Forward content promptly, but withhold the terminal marker until
             # the output safety verdict is available. Clients stop at [DONE].
-            async for line in upstream.aiter_lines():
+            line_iterator = upstream.aiter_lines().__aiter__()
+            while True:
+                try:
+                    line = await asyncio.wait_for(
+                        line_iterator.__anext__(), timeout=max(0, deadline - time.monotonic())
+                    )
+                except StopAsyncIteration:
+                    break
+                stream_size += len(line) + 1
+                if stream_size > _MAX_STREAM_CHARS or sum(map(len, event_lines)) + len(line) > _MAX_FRAME_CHARS:
+                    raise ValueError("stream size limit exceeded")
                 if upstream_done:
                     if line.strip():
                         log.warning("Ignoring upstream data after [DONE] for %s", call_id)
@@ -209,9 +312,19 @@ async def handle_streaming_request(
 
                 # Debug: log each chunk (truncated)
                 if debug:
-                    log.debug("STREAM CHUNK %s: %s", call_id, frame[:200])
+                    log.debug("STREAM CHUNK %s: %d chars", call_id, len(frame))
 
-                yield frame
+                if secret_guard:
+                    blocked_early, safe = await inspect_frame(frame, parsed_chunks)
+                    if blocked_early:
+                        break
+                    if safe:
+                        yield "".join(pending_frames)
+                        pending_frames.clear()
+                        pending_fields.clear()
+                        pending_size = 0
+                else:
+                    yield frame
 
             # Preserve a trailing OpenAI [DONE] even without its final blank
             # line, as the previous line-forwarding path did. Other incomplete
@@ -230,17 +343,32 @@ async def handle_streaming_request(
                     ) or any(parsed.get("type") == "message_stop" for parsed in partial_chunks)
                     if not is_message_stop:
                         accumulated_chunks.extend(partial_chunks)
-                        yield "".join(f"{event_line}\n" for event_line in event_lines)
+                        frame = "".join(f"{event_line}\n" for event_line in event_lines)
+                        if secret_guard:
+                            blocked_early, safe = await inspect_frame(frame, partial_chunks)
+                            if safe:
+                                yield "".join(pending_frames)
+                                pending_frames.clear()
+                                pending_fields.clear()
+                        else:
+                            yield frame
+            if secret_guard and pending_frames and not blocked_early:
+                for channel_text in pending_fields.values():
+                    if await contains_blocked_secret(channel_text, registry, policy, call_id):
+                        blocked_early = True
+                        break
+                if not blocked_early:
+                    yield "".join(pending_frames)
         except Exception as exc:
             # Bytes were already sent under a 200; the status can't change.
             # Emit a final Anthropic-format SSE error event so clients
             # terminate instead of waiting forever, then close the stream.
-            log.warning("STREAM INTERRUPTED %s: %s: %s", call_id, type(exc).__name__, exc)
+            log.warning("STREAM INTERRUPTED %s: %s", call_id, type(exc).__name__)
             error_event = {
                 "type": "error",
                 "error": {
                     "type": "api_error",
-                    "message": f"AEP proxy: upstream stream interrupted: {exc}",
+                    "message": "AEP proxy: upstream stream interrupted",
                 },
             }
             yield "event: error\n"
@@ -257,12 +385,11 @@ async def handle_streaming_request(
 
         if debug:
             log.debug(
-                "STREAM COMPLETE %s: model=%s, input_tokens=%d, output_tokens=%d, output_text=%s",
+                "STREAM COMPLETE %s: model=%s, input_tokens=%d, output_tokens=%d",
                 call_id,
                 model,
                 input_tokens,
                 output_tokens,
-                output_text[:500] if output_text else "",
             )
 
         # Run safety detectors
@@ -298,7 +425,7 @@ async def handle_streaming_request(
                 "action": decision.action,
                 "reason": decision.reason,
                 "signals": [
-                    {"type": s.signal_type, "severity": s.severity, "detail": s.detail}
+                    {"type": s.signal_type, "severity": s.severity}
                     for s in signals
                 ],
             }
