@@ -18,6 +18,7 @@ from aceteam_aep.proxy.streaming import (
     handle_streaming_request,
 )
 from aceteam_aep.safety.base import DetectorRegistry
+from aceteam_aep.safety.secrets import SecretDetector
 
 
 def test_parse_sse_data_line() -> None:
@@ -163,6 +164,21 @@ async def test_upstream_400_openai_body_passed_through(
     assert completions == []
 
 
+async def test_upstream_error_echoing_secret_is_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": f"invalid {secret}"}})
+
+    _patch_transport(monkeypatch, handler)
+    resp = await _call_handler()
+    assert resp.status_code == 400
+    assert json.loads(resp.body)["error"]["code"] == "safety_block"
+    assert all(secret[i : i + 4].encode() not in resp.body for i in range(len(secret) - 3))
+
+
 async def test_upstream_400_anthropic_body_passed_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,6 +240,48 @@ async def test_upstream_200_happy_path_unchanged(
     assert completions[0]["output_tokens"] == 2
 
 
+async def test_streamed_secret_split_across_deltas_is_never_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    sse_body = (
+        "".join(
+            f"data: {json.dumps({'choices': [{'delta': {'content': part}}]})}\n\n"
+            for part in (secret[:9], secret[9:])
+        )
+        + "data: [DONE]\n\n"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+
+    _patch_transport(monkeypatch, handler)
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    completions: list[dict[str, Any]] = []
+    resp = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={"Content-Type": "application/json"},
+        call_id="call-test",
+        input_text="hi",
+        registry=registry,
+        policy=EnforcementPolicy(),
+        on_complete=lambda **kw: completions.append(kw),
+    )
+    assert isinstance(resp, StreamingResponse)
+    body = await _collect_body(resp)
+    assert "aep_safety_block" in body
+    assert "data: [DONE]" not in body
+    assert all(secret[i : i + 4] not in body for i in range(len(secret) - 3))
+    assert all(secret[i : i + 4] not in str(dict(resp.headers)) for i in range(len(secret) - 3))
+    assert len(completions) == 1
+    assert completions[0]["decision"].action == "block"
+    assert all(
+        secret[i : i + 4] not in completions[0]["decision"].reason for i in range(len(secret) - 3)
+    )
+
+
 async def test_mid_stream_failure_emits_error_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -256,7 +314,7 @@ async def test_mid_stream_failure_emits_error_event(
     payload = json.loads(last_data[6:])
     assert payload["type"] == "error"
     assert payload["error"]["type"] == "api_error"
-    assert "connection reset by upstream" in payload["error"]["message"]
+    assert payload["error"]["message"] == "AEP proxy: upstream stream interrupted"
 
     # Interrupted streams are not metered as successful completions
     assert completions == []

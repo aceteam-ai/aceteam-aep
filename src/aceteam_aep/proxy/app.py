@@ -42,6 +42,7 @@ from ..safety.custom import (
     CustomSafetyDetector,
     default_custom_policies,
 )
+from ..safety.secrets import SecretDetector
 from ..spans import SpanTracker
 from ..types import Usage
 from .headers import build_response_headers, parse_aep_headers, strip_aep_headers
@@ -575,19 +576,13 @@ def create_proxy_app(
                 )
             )
 
-        # Debug logging for all requests (both input and output)
+        # Debug logging must not copy request bodies or authorization headers.
         if debug:
-            try:
-                body = json.loads(body_bytes) if body_bytes else {}
-            except json.JSONDecodeError:
-                body = {}
             log.debug(
-                "REQUEST %s %s %s: headers=%s, body=%s",
+                "REQUEST %s %s %s",
                 call_id,
                 request.method,
                 path,
-                dict(request.headers),
-                body,
             )
 
         # Parse request body
@@ -657,14 +652,22 @@ def create_proxy_app(
                 )
                 state._last_pipeline_result = pipeline_result
                 input_signals = pipeline_result.signals
-                input_decision = evaluate_pipeline(pipeline_result, state.policy) if input_signals or pipeline_result.verdict == "block" else EnforcementDecision(action="pass")
+                input_decision = (
+                    evaluate_pipeline(pipeline_result, state.policy)
+                    if input_signals or pipeline_result.verdict == "block"
+                    else EnforcementDecision(action="pass")
+                )
             else:
                 input_signals = await state.registry.run_all(
                     input_text=input_text,
                     output_text="",
                     call_id=call_id,
                 )
-                input_decision = evaluate(input_signals, state.policy) if input_signals else EnforcementDecision(action="pass")
+                input_decision = (
+                    evaluate(input_signals, state.policy)
+                    if input_signals
+                    else EnforcementDecision(action="pass")
+                )
 
             if input_decision.action == "block":
                 state.signals.extend(input_signals)
@@ -756,9 +759,7 @@ def create_proxy_app(
                     status_code=400,
                     content={
                         "error": {
-                            "message": (
-                                f"AEP safety: request blocked — {input_decision.reason}"
-                            ),
+                            "message": (f"AEP safety: request blocked — {input_decision.reason}"),
                             "type": "aep_safety_block",
                             "code": "safety_block",
                         }
@@ -986,6 +987,22 @@ def create_proxy_app(
         # If upstream errored, pass through
         if upstream_resp.status_code >= 400:
             state.span_tracker.end_span(span.span_id, status="ERROR")
+            leaked = await SecretDetector().check(
+                input_text="",
+                output_text=upstream_resp.content.decode("utf-8", errors="replace"),
+                call_id=call_id,
+            )
+            if leaked:
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": "AEP safety: secret blocked",
+                            "type": "aep_safety_block",
+                            "code": "safety_block",
+                        }
+                    },
+                    status_code=400,
+                )
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -997,6 +1014,22 @@ def create_proxy_app(
             resp_data = upstream_resp.json()
         except json.JSONDecodeError:
             state.span_tracker.end_span(span.span_id, status="ERROR")
+            leaked = await SecretDetector().check(
+                input_text="",
+                output_text=upstream_resp.content.decode("utf-8", errors="replace"),
+                call_id=call_id,
+            )
+            if leaked:
+                return JSONResponse(
+                    {
+                        "error": {
+                            "message": "AEP safety: secret blocked",
+                            "type": "aep_safety_block",
+                            "code": "safety_block",
+                        }
+                    },
+                    status_code=400,
+                )
             return Response(
                 content=upstream_resp.content,
                 status_code=upstream_resp.status_code,
@@ -1202,8 +1235,7 @@ def create_proxy_app(
         # Sign verdict and add attestation headers (if signing enabled)
         if attestation_engine is not None:
             signal_dicts = [
-                {"signal_type": s.signal_type, "severity": s.severity, "detail": s.detail}
-                for s in all_signals
+                {"signal_type": s.signal_type, "severity": s.severity} for s in all_signals
             ]
             attest_headers = attestation_engine.sign_verdict(
                 call_id=call_id,
@@ -1220,13 +1252,10 @@ def create_proxy_app(
             )
             resp_headers.update(attest_headers)
 
-        # Debug: log the response
+        # Debug metadata only; model text may contain credentials.
         if debug:
             log.debug(
-                (
-                    "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, "
-                    "status=%d, body=%s"
-                ),
+                ("RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, status=%d"),
                 call_id,
                 request.method,
                 path,
@@ -1234,7 +1263,6 @@ def create_proxy_app(
                 input_tokens,
                 output_tokens,
                 upstream_resp.status_code,
-                resp_data,
             )
 
         return Response(
