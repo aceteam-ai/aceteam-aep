@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections import defaultdict
@@ -28,6 +27,25 @@ ROW_FIELDS = {
 }
 EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)\.[A-Za-z]{2,}\b")
 PHONE = re.compile(r"\b(?:\+1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b")
+SYNTHETIC_ID = re.compile(r"^syn-.+-g(\d{2})-v\d{2}$")
+SCENARIO_COUNTER = re.compile(r"\s+This is fictional scenario \d+\.$", re.IGNORECASE)
+SCENES = (
+    "The setting is a tabletop exercise for a neighborhood cooperative.",
+    "This appears in a scripted exchange at an imaginary design studio.",
+    "The audience is a role-play team preparing a classroom demonstration.",
+    "The scenario concerns a fictional nonprofit planning a practice event.",
+    "This is a sample conversation for a made-up community workshop.",
+)
+
+
+def normalized_text(text: str) -> str:
+    """Remove presentation-only differences before checking split leakage."""
+    text = SCENARIO_COUNTER.sub("", text)
+    for scene in SCENES:
+        if text.endswith(" " + scene):
+            text = text[: -len(scene) - 1]
+            break
+    return " ".join(text.casefold().split())
 
 
 def assign_split(row_id: str, category: str, source: str) -> str:
@@ -35,8 +53,10 @@ def assign_split(row_id: str, category: str, source: str) -> str:
         return "dev"
     if category == HOLDOUT_CATEGORY or source != "synthetic_v1":
         return "test_xd"
-    digest = hashlib.sha256(row_id.encode()).digest()
-    return "dev" if digest[0] < 128 else "test_id"
+    match = SYNTHETIC_ID.fullmatch(row_id)
+    if match is None or int(match.group(1)) >= 8:
+        raise ValueError("synthetic row id must name a template group from 00 to 07")
+    return "dev" if int(match.group(1)) % 2 == 0 else "test_id"
 
 
 @dataclass(frozen=True)
@@ -155,6 +175,7 @@ def load_dataset(
 ) -> list[LabeledRow]:
     rows = []
     seen = set()
+    text_splits: dict[str, str] = {}
     for line_number, line in enumerate(Path(labeled_path).read_text().splitlines(), start=1):
         if not line.strip():
             continue
@@ -188,6 +209,10 @@ def load_dataset(
             raise ValueError("labeled row split differs from deterministic assignment")
         if item["source"] == "synthetic_v1":
             _validate_fake_data(item["text"])
+        normalized = normalized_text(item["text"])
+        prior_split = text_splits.setdefault(normalized, item["split"])
+        if prior_split != item["split"]:
+            raise ValueError("normalized text overlaps across splits")
         item["votes"] = _validate_votes(item["votes"])
         row = LabeledRow(**item)
         if row.disagreed and row.split != "dev" and not include_disagreements:

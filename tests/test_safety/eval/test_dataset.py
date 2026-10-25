@@ -17,6 +17,7 @@ from aceteam_aep.safety.eval.dataset import (
     assign_split,
     load_dataset,
     load_policies,
+    normalized_text,
     rows_by_source,
     verification_summary,
     verify_rows,
@@ -83,6 +84,12 @@ def test_splits_reproduce_and_hold_out_whole_category(tmp_path: Path) -> None:
     )
     assert assign_split("public-example", "security", "deepset_prompt_injections") == "test_xd"
     assert assign_split("training-example", "security", "FuzzyBench_training") == "dev"
+    by_kind_split = Counter((row.category, row.kind, row.split) for row in rows)
+    for category in {row.category for row in rows} - {"ethics"}:
+        for kind in {"violation", "hard_negative", "easy_negative"}:
+            assert (
+                by_kind_split[(category, kind, "dev")] == by_kind_split[(category, kind, "test_id")]
+            )
     main(["splits", "--labeled", str(LABELED), "--check"])
     data = [row.to_dict() for row in rows]
     data[0]["split"] = "test_xd" if data[0]["split"] != "test_xd" else "dev"
@@ -91,6 +98,25 @@ def test_splits_reproduce_and_hold_out_whole_category(tmp_path: Path) -> None:
         main(["splits", "--labeled", str(mutated), "--check"])
     with pytest.raises(ValueError, match="split differs"):
         load_dataset(mutated, policies)
+
+
+def test_normalized_text_never_crosses_splits(tmp_path: Path) -> None:
+    policies, rows = _fixture()
+    by_split: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        by_split[row.split].add(normalized_text(row.text))
+    assert all(
+        by_split[left].isdisjoint(by_split[right])
+        for left, right in (("dev", "test_id"), ("dev", "test_xd"), ("test_id", "test_xd"))
+    )
+    assert len({normalized_text(row.text) for row in rows}) == 120
+
+    dev = next(row for row in rows if row.split == "dev")
+    test = next(row for row in rows if row.split == "test_id")
+    mutation = [dev.to_dict(), test.to_dict()]
+    mutation[1]["text"] = dev.text + " This is fictional scenario 999."
+    with pytest.raises(ValueError, match="normalized text overlaps"):
+        load_dataset(_write_mutation(tmp_path, mutation), policies)
 
 
 def test_loader_rejects_bad_ids_catalog_links_and_fuzzybench_test_source(tmp_path: Path) -> None:
