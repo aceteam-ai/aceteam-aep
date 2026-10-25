@@ -336,9 +336,15 @@ def build_pipeline_from_policy(
     from .safety.trust_engine import TrustEngineDetector
 
     detector_map: dict[str, SafetyDetector] = {d.name: d for d in detectors}
-    configured_layers = {
-        layer["name"] for layer in policy.pipeline.layers if isinstance(layer, dict)
-    }
+    supported_layers = {"regex", "paw", "content_model", "trust_engine"}
+    configured_layers: set[str] = set()
+    for layer in policy.pipeline.layers:
+        name = layer.get("name") if isinstance(layer, dict) else None
+        if not isinstance(name, str) or name not in supported_layers:
+            raise ValueError(f"Unknown pipeline layer: {name!r}")
+        if name in configured_layers:
+            raise ValueError(f"Duplicate pipeline layer: {name}")
+        configured_layers.add(name)
 
     layers = []
 
@@ -363,6 +369,11 @@ def build_pipeline_from_policy(
         te = detector_map.get("trust_engine")
         if te and isinstance(te, TrustEngineDetector):
             layers.append(TrustEngineLayer(te))
+
+    if configured_layers:
+        missing = configured_layers - {layer.name for layer in layers}
+        if missing:
+            raise ValueError(f"Configured pipeline layer unavailable: {', '.join(sorted(missing))}")
 
     if not layers:
         return None

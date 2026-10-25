@@ -996,3 +996,65 @@ async def test_paw_layer_flag_band_escalation():
 
     assert result.verdict == "flag"
     assert result.p_safe is not None and 0.3 < result.p_safe < 0.7
+
+
+@pytest.mark.parametrize(
+    ("configured", "error"),
+    [
+        ([{"name": "regex"}, {"name": "trust_engine"}], "trust_engine"),
+        ([{"name": "regex"}, {"name": "paw"}], "paw"),
+        ([{"name": "regex"}, {"name": "trst_engine"}], "Unknown pipeline layer"),
+    ],
+)
+def test_explicit_pipeline_layers_cannot_be_silently_dropped(configured, error):
+    from aceteam_aep.enforcement import EnforcementPolicy, build_pipeline_from_policy
+    from aceteam_aep.safety.agent_threat import AgentThreatDetector
+
+    policy = EnforcementPolicy.from_dict({"pipeline": {"enabled": True, "layers": configured}})
+    with pytest.raises(ValueError, match=error):
+        build_pipeline_from_policy(policy, [AgentThreatDetector()])
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (503, {"safe": True, "confidence": 0.99}),
+        (200, {}),
+        (200, {"safe": "yes", "confidence": 0.9}),
+        (200, {"safe": True, "confidence": float("nan")}),
+        (200, {"safe": True, "confidence": 1.1}),
+        (
+            200,
+            {
+                "safe": True,
+                "confidence": 0.9,
+                "category_results": {"pii": {"safe": "yes", "confidence": 0.9}},
+            },
+        ),
+    ],
+)
+async def test_strict_judge_service_rejects_http_errors_and_malformed_scores(
+    monkeypatch, status, payload
+):
+    import httpx
+
+    from aceteam_aep.safety.pipeline import TrustEngineLayer
+    from aceteam_aep.safety.trust_engine import TrustEngineDetector
+
+    def fake_post(*args, **kwargs):
+        return httpx.Response(
+            status,
+            json=payload,
+            request=httpx.Request("POST", "https://judge.example.test/judge"),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    detector = TrustEngineDetector(judge_service_url="https://judge.example.test")
+    result = await SafetyPipeline(layers=[TrustEngineLayer(detector)]).evaluate(
+        input_text="clean", output_text="", call_id="judge-strict"
+    )
+
+    assert result.verdict == "block"
+    assert result.p_safe is None
+    assert result.layer_results[0].status == "unavailable"
+    assert result.evaluation_unavailable_reason is not None

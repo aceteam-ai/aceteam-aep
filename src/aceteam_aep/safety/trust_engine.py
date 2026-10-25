@@ -592,7 +592,34 @@ class TrustEngineDetector(SafetyDetector):
                 },
                 timeout=30.0,
             )
+            if strict:
+                resp.raise_for_status()
             data = resp.json()
+            if strict:
+                if not isinstance(data, dict):
+                    raise ValueError("judge service response must be an object")
+                safe = data.get("safe")
+                confidence = data.get("confidence")
+                if (
+                    not isinstance(safe, bool)
+                    or not isinstance(confidence, (int, float))
+                    or isinstance(confidence, bool)
+                    or not math.isfinite(confidence)
+                    or not 0 <= confidence <= 1
+                ):
+                    raise ValueError("judge service response has invalid safety fields")
+                category_results = data.get("category_results", {})
+                if not isinstance(category_results, dict) or any(
+                    not isinstance(name, str)
+                    or not isinstance(result, dict)
+                    or not isinstance(result.get("safe"), bool)
+                    or not isinstance(result.get("confidence"), (int, float))
+                    or isinstance(result.get("confidence"), bool)
+                    or not math.isfinite(result["confidence"])
+                    or not 0 <= result["confidence"] <= 1
+                    for name, result in category_results.items()
+                ):
+                    raise ValueError("judge service response has invalid category results")
             conf = data.get("confidence", 0.5)
             p_safe = conf if data.get("safe") else 1 - conf
 
