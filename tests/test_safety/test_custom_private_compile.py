@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import socket
 import sys
 from pathlib import Path
@@ -89,6 +91,17 @@ async def test_refuses_explicit_hosted_urls(monkeypatch: pytest.MonkeyPatch, url
     assert posts == []
 
 
+@pytest.mark.parametrize("dot", ("\u3002", "\uff0e", "\uff61"))
+async def test_refuses_idna_equivalent_hosted_urls(
+    monkeypatch: pytest.MonkeyPatch, dot: str
+) -> None:
+    posts = _stub_compiler(monkeypatch)
+    monkeypatch.setenv("PAW_API_URL", f"https://api{dot}programasweights.com")
+    with pytest.raises(PrivateCompileUnavailableError):
+        await AsyncPawFunction("private rule").prepare()
+    assert posts == []
+
+
 async def test_refuses_hosted_url_from_config_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -142,3 +155,33 @@ async def test_private_endpoint_error_never_falls_back(
     with pytest.raises(httpx.ConnectError):
         await AsyncPawFunction("tenant rule").prepare()
     assert calls == ["http://paw-compile.test/api/v1/compile"]
+
+
+async def test_eager_compile_failure_logs_policy_id_without_policy_text(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("PAW_API_URL", "http://paw-compile.test")
+    policy = CustomPolicy(
+        id="policy-log-test", name="Private", rule="sensitive policy text", enabled=True
+    )
+
+    def fail_compile(_spec: str, *, public: bool) -> None:
+        assert public is False
+        raise RuntimeError(f"compile failed: {policy.rule}")
+
+    monkeypatch.setattr(paw, "compile_and_load", fail_compile)
+    with caplog.at_level(logging.ERROR, logger="aceteam_aep.safety.custom"):
+        policy.eager()
+        task = policy._paw._eager_task
+        assert task is not None
+        with pytest.raises(RuntimeError):
+            await task
+        await asyncio.sleep(0)
+
+    records = [record for record in caplog.records if record.name == "aceteam_aep.safety.custom"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert "policy-log-test" in records[0].message
+    assert "RuntimeError" in records[0].message
+    assert policy.rule not in records[0].message
+    assert records[0].exc_info is None

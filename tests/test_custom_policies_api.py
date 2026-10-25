@@ -667,7 +667,9 @@ async def test_pipeline_cannot_pass_before_enabled_policy_fails() -> None:
         result = await pipeline.evaluate(input_text="hello", output_text="", call_id="call")
     assert result.layers_executed == 2
     assert result.verdict == "block"
-    assert result.signals[0].signal_type == "evaluation_unavailable"
+    assert result.layer_results[-1].status == "failed"
+    assert result.evaluation_unavailable_reason is not None
+    assert "paw (failed)" in result.evaluation_unavailable_reason
     policy = EnforcementPolicy.from_dict({"allow_types": ["evaluation_unavailable"]})
     assert evaluate_pipeline(result, policy).action == "block"
 
@@ -684,7 +686,9 @@ async def test_enabled_paw_layer_crash_blocks_request() -> None:
             input_text="hello", output_text="", call_id="call"
         )
     assert result.verdict == "block"
-    assert result.signals[0].signal_type == "evaluation_unavailable"
+    assert result.layer_results[0].status == "failed"
+    assert result.evaluation_unavailable_reason is not None
+    assert "paw (failed)" in result.evaluation_unavailable_reason
     assert evaluate_pipeline(result, EnforcementPolicy()).action == "block"
 
 
@@ -692,7 +696,7 @@ async def test_policy_enabled_after_pipeline_build_still_blocks() -> None:
     store = CustomPolicyStore()
     detector = CustomSafetyDetector(store)
     policy = EnforcementPolicy.from_dict(
-        {"pipeline": {"enabled": True, "layers": [{"name": "regex"}]}}
+        {"pipeline": {"enabled": True, "layers": [{"name": "paw"}]}}
     )
     pipeline = build_pipeline_from_policy(policy, [detector])
     assert pipeline is not None
