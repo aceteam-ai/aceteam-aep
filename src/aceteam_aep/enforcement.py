@@ -182,6 +182,14 @@ def evaluate(
     if not signals:
         return EnforcementDecision(action="pass")
 
+    unavailable = [s for s in signals if s.signal_type == "evaluation_unavailable"]
+    if unavailable:
+        return EnforcementDecision(
+            action="block",
+            signals=list(signals),
+            reason="; ".join(f"evaluation_unavailable: {s.detail}" for s in unavailable),
+        )
+
     active = [s for s in signals if s.signal_type not in policy.allow_types]
     if len(active) == 0:
         return EnforcementDecision(action="pass", signals=list(signals))
@@ -303,6 +311,18 @@ def evaluate_pipeline(
     if not isinstance(pipeline_result, PipelineResult):
         raise TypeError(f"Expected PipelineResult, got {type(pipeline_result).__name__}")
 
+    unavailable = [
+        signal
+        for signal in pipeline_result.signals
+        if signal.signal_type == "evaluation_unavailable"
+    ]
+    if unavailable:
+        return EnforcementDecision(
+            action="block",
+            signals=pipeline_result.signals,
+            reason="; ".join(f"evaluation_unavailable: {s.detail}" for s in unavailable),
+        )
+
     reasons: list[str] = []
     if pipeline_result.evaluation_unavailable_reason:
         reasons.append(f"pipeline: {pipeline_result.evaluation_unavailable_reason}")
@@ -383,10 +403,11 @@ def build_pipeline_from_policy(
         if regex_detectors:
             layers.append(RegexLayer(regex_detectors))
 
-    if "paw" in configured_layers or not configured_layers:
-        custom = detector_map.get("custom_safety")
-        if custom and isinstance(custom, CustomSafetyDetector):
-            layers.append(PawLayer(custom))
+    custom = detector_map.get("custom_safety")
+    # Dashboard policy writes can enable a rule after this pipeline is built.
+    # Keep the layer present so that change cannot bypass request-time checks.
+    if isinstance(custom, CustomSafetyDetector):
+        layers.append(PawLayer(custom))
 
     if "content_model" in configured_layers or not configured_layers:
         content = detector_map.get("content_safety")

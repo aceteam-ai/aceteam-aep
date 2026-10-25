@@ -9,15 +9,56 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
-from .base import SafetyDetector, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
 
 log = logging.getLogger(__name__)
+
+
+class PrivateCompileUnavailableError(EvaluationUnavailableError):
+    """An enabled custom policy has no acceptable private compiler."""
+
+
+def require_private_compile_endpoint() -> str:
+    """Resolve the SDK's compile endpoint and refuse its hosted service."""
+    try:
+        import programasweights as paw
+    except ImportError as exc:
+        raise PrivateCompileUnavailableError(
+            "Custom policies require the custom-policies extra and a private PAW compiler"
+        ) from exc
+
+    try:
+        raw_url = paw.get_api_url()
+        if not isinstance(raw_url, str):
+            raise ValueError("PAW API URL is not a string")
+        url = raw_url.strip()
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        # Accessing port validates malformed brackets and out-of-range ports.
+        _ = parsed.port
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Invalid PAW API URL")
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise PrivateCompileUnavailableError("A private PAW compile endpoint is required") from exc
+    if host == "programasweights.com" or host.endswith(".programasweights.com"):
+        raise PrivateCompileUnavailableError(
+            "The hosted PAW compiler cannot receive custom policy text"
+        )
+    return url.rstrip("/")
 
 
 @dataclass
@@ -173,9 +214,10 @@ class AsyncPawFunction:
         def _compile_and_load() -> None:
             with paw_lock:
                 if self._fn is None:
+                    require_private_compile_endpoint()
                     import programasweights as paw
 
-                    self._fn = paw.compile_and_load(self._spec)
+                    self._fn = paw.compile_and_load(self._spec, public=False)
 
         await asyncio.to_thread(_compile_and_load)
         assert self._fn is not None
@@ -422,6 +464,10 @@ class CustomSafetyDetector(SafetyDetector):
     def store(self) -> CustomPolicyStore:
         return self._store
 
+    @property
+    def has_enabled_policies(self) -> bool:
+        return any(policy.enabled for policy in self._store.all())
+
     async def check(
         self,
         *,
@@ -489,6 +535,16 @@ class CustomSafetyDetector(SafetyDetector):
                 log.warning("Custom safety check failed for %s", policy.name, exc_info=True)
                 if kwargs.get("strict"):
                     raise
+                else:
+                    signals.append(
+                        SafetySignal(
+                            signal_type="evaluation_unavailable",
+                            severity="high",
+                            call_id=call_id,
+                            detail=f"custom policy {policy.name} evaluation unavailable",
+                            score=1.0,
+                        )
+                    )
             return signals, details
 
         signals: list[SafetySignal] = []
@@ -509,7 +565,9 @@ __all__ = [
     "CustomPolicySeverity",
     "CustomPolicyStore",
     "CustomSafetyDetector",
+    "PrivateCompileUnavailableError",
     "PawResult",
     "PawPolicyResult",
     "default_custom_policies",
+    "require_private_compile_endpoint",
 ]
