@@ -19,12 +19,15 @@ Or from a YAML file::
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .attestation import canonical_json
 from .safety.base import SafetyDetector, SafetySignal
+from .safety.custom import CustomPolicy, CustomPolicyStore
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,56 @@ class EnforcementPolicy:
         if isinstance(config, str):
             return cls.from_yaml(config)
         raise TypeError(f"Cannot create EnforcementPolicy from {type(config).__name__}")
+
+
+def policy_commitment(
+    policy: EnforcementPolicy,
+    custom_policies: CustomPolicyStore | Iterable[CustomPolicy] = (),
+) -> str:
+    """Commit to the effective policy without placing custom rule text in a receipt.
+
+    The caller supplies the current policy and store at decision time. Disabled
+    custom rules are excluded because they cannot affect this evaluation.
+    """
+    policies = (
+        custom_policies.all()
+        if isinstance(custom_policies, CustomPolicyStore)
+        else list(custom_policies)
+    )
+    enabled_rules = [
+        {
+            "id": item.id,
+            "rule_hash": "sha256:" + hashlib.sha256(item.rule.encode("utf-8")).hexdigest(),
+            "applies_to": item.applies_to,
+            "severity": item.severity,
+        }
+        for item in policies
+        if item.enabled
+    ]
+    enabled_rules.sort(key=lambda item: item["id"])
+    payload = {
+        "block_on": sorted(policy.block_on),
+        "flag_on": sorted(policy.flag_on),
+        "allow_types": sorted(policy.allow_types),
+        "default_action": policy.default_action,
+        "overrides": {
+            name: {
+                "action": override.action,
+                "threshold": override.threshold,
+                "enabled": override.enabled,
+                "extra": override.extra,
+            }
+            for name, override in policy.overrides.items()
+        },
+        "pipeline": {
+            "enabled": policy.pipeline.enabled,
+            "pass_below": policy.pipeline.pass_below,
+            "block_above": policy.pipeline.block_above,
+            "layers": policy.pipeline.layers,
+        },
+        "custom_policies": enabled_rules,
+    }
+    return "sha256:" + hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
 @dataclass
@@ -309,7 +362,12 @@ def evaluate_pipeline(
     elif pipeline_result.verdict in ("block", "flag"):
         reasons.append(
             f"pipeline: P(safe)={pipeline_result.p_safe:.4f} "
-            f"({pipeline_result.layers_executed} layers)"
+            f"({pipeline_result.layers_executed} layers"
+            + (
+                f", short-circuited at {pipeline_result.short_circuited_at})"
+                if pipeline_result.short_circuited_at
+                else ")"
+            )
         )
 
     return EnforcementDecision(
@@ -469,4 +527,5 @@ __all__ = [
     "evaluate",
     "evaluate_pipeline",
     "evaluate_pipeline_with_residual",
+    "policy_commitment",
 ]
