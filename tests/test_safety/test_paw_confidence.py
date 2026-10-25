@@ -9,6 +9,7 @@ from unittest.mock import PropertyMock, patch
 
 import pytest
 
+from aceteam_aep.safety.base import SafetySignal
 from aceteam_aep.safety.custom import (
     CustomPolicy,
     CustomPolicyStore,
@@ -129,7 +130,26 @@ def test_paw_layer_p_safe_uses_raw_gap_on_every_policy_and_chunk() -> None:
         is None
     )
     assert paw_layer_p_safe([PawResult(compliant=True, chunk_logit_diffs=[])], identity) is None
-    assert paw_layer_p_safe([], identity) == 1.0
+    assert paw_layer_p_safe([], identity) is None
+
+
+@pytest.mark.asyncio
+async def test_paw_subclass_keeps_legacy_layer_rounding() -> None:
+    class SubclassDetector(CustomSafetyDetector):
+        async def check(self, **kwargs):
+            return [
+                SafetySignal(
+                    signal_type="custom_safety",
+                    severity="high",
+                    call_id="call",
+                    detail="test",
+                    score=0.49996,
+                )
+            ]
+
+    layer = PawLayer(SubclassDetector(CustomPolicyStore()))
+    result = await layer.score(input_text="", output_text="", call_id="call", prior_results=[])
+    assert result.p_safe == 0.5
 
 
 @pytest.mark.asyncio

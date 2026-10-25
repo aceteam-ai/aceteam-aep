@@ -109,6 +109,17 @@ def test_override_threshold_applies_above() -> None:
     assert result.action == "block"
 
 
+def test_custom_safety_override_keeps_legacy_rounded_boundary() -> None:
+    policy = EnforcementPolicy(
+        overrides={"custom_safety": DetectorPolicy(action="block", threshold=0.5)},
+    )
+    assert evaluate([_sig("custom_safety", "high", score=0.49996)], policy).action == "block"
+    assert evaluate([_sig("custom_safety", "high", score=0.49994)], policy).action != "block"
+    # Other detector score comparisons retain their original raw precision.
+    other = EnforcementPolicy(overrides={"pii": DetectorPolicy(action="block", threshold=0.5)})
+    assert evaluate([_sig("pii", "high", score=0.49996)], other).action != "block"
+
+
 def test_override_no_score_always_applies() -> None:
     """Signal with score=None should always match (above any threshold)."""
     policy = EnforcementPolicy(

@@ -91,7 +91,7 @@ def paw_layer_p_safe(
             if not _valid_score(p_safe):
                 raise ValueError("PAW calibrator returned an invalid score")
             probabilities.append(float(p_safe))
-    return min(probabilities, default=1.0)
+    return min(probabilities) if probabilities else None
 
 
 @dataclass
@@ -236,7 +236,7 @@ class PawLayer(CascadeLayer):
             from .custom import CustomSafetyDetector
 
             scores = [
-                round(s.score, 4) if type(self._detector) is CustomSafetyDetector else s.score
+                round(s.score, 4) if isinstance(self._detector, CustomSafetyDetector) else s.score
                 for s in signals
                 if s.score is not None
             ]

@@ -71,12 +71,6 @@ def _extract_yn_logits(fn: PawFunction) -> tuple[float, float] | None:
         return None
 
 
-def _extract_yn_probability(fn: PawFunction) -> float | None:
-    """Keep the existing probability-only extractor available to callers."""
-    values = _extract_yn_logits(fn)
-    return values[0] if values is not None else None
-
-
 def _extract_yn_logit_diff(fn: PawFunction) -> float | None:
     """Return the unrounded Y minus N logit difference."""
     values = _extract_yn_logits(fn)
@@ -210,16 +204,6 @@ class AsyncPawFunction:
     async def __call__(self, text: str) -> str:
         fn = await self.prepare()
         return fn(text)
-
-    async def call_with_confidence(self, text: str) -> tuple[str, float | None]:
-        """Run PAW inference and extract Y/N token probability.
-
-        Returns (output_text, p_compliant) where p_compliant is the softmax
-        probability of the Y token, or None if logit extraction failed.
-        Falls back to normal __call__ if logprob extraction is unavailable.
-        """
-        output, p_compliant, _ = await self.call_with_logit_diff(text)
-        return output, p_compliant
 
     async def call_with_logit_diff(self, text: str) -> tuple[str, float | None, float | None]:
         """Run inference with the raw Y/N logit gap for calibration."""
