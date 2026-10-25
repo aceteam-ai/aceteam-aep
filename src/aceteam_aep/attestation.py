@@ -315,6 +315,8 @@ def _validate_evaluation_decision(
 
     decided_by = evaluation["decided_by"]
     pipeline = final["pipeline"]
+    if pipeline and pipeline["unavailable"] and action != "block":
+        raise ValueError("an unavailable final pipeline must block")
     if decided_by == "pipeline:unavailable":
         if action != "block" or not pipeline or not pipeline["unavailable"]:
             raise ValueError("pipeline:unavailable requires a blocked unavailable final phase")

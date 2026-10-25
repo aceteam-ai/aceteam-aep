@@ -102,6 +102,22 @@ def test_signer_rejects_unavailable_decision_without_unavailable_layer():
         statement_for(evaluated_pipeline_record())
 
 
+def test_signer_cannot_pass_when_final_pipeline_has_an_unavailable_layer():
+    record = evaluation()
+    record["decided_by"] = "none"
+    record["phases"][-1]["action"] = "pass"
+    with pytest.raises(ValueError, match="unavailable final pipeline must block"):
+        statement_for(record, action="pass")
+
+
+def test_signer_cannot_attribute_unavailable_pipeline_block_to_residual():
+    record = evaluation()
+    record["decided_by"] = "residual:rules"
+    record["phases"][-1]["residual"] = ["rules"]
+    with pytest.raises(ValueError, match="final-phase residual"):
+        statement_for(record)
+
+
 def test_signer_checks_aggregate_decision_and_threshold_action():
     record = evaluation()
     record["decided_by"] = "pipeline:aggregate"
