@@ -311,6 +311,26 @@ def evaluate_pipeline(
     )
 
 
+def evaluate_pipeline_with_residual(
+    pipeline_result: Any,
+    residual_signals: Sequence[SafetySignal],
+    policy: EnforcementPolicy,
+) -> EnforcementDecision:
+    """Keep the stricter verdict after applying legacy policy to residual signals."""
+    pipeline_decision = evaluate_pipeline(pipeline_result, policy)
+    residual_decision = evaluate(residual_signals, policy)
+    return EnforcementDecision(
+        action=max(
+            (pipeline_decision.action, residual_decision.action),
+            key=_ACTION_PRIORITY.__getitem__,
+        ),
+        signals=[*pipeline_decision.signals, *residual_decision.signals],
+        reason="; ".join(
+            reason for reason in (pipeline_decision.reason, residual_decision.reason) if reason
+        ),
+    )
+
+
 def build_pipeline_from_policy(
     policy: EnforcementPolicy,
     detectors: list[SafetyDetector],
@@ -440,4 +460,5 @@ __all__ = [
     "discover_policy",
     "evaluate",
     "evaluate_pipeline",
+    "evaluate_pipeline_with_residual",
 ]

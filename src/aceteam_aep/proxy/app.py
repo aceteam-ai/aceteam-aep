@@ -31,7 +31,7 @@ from ..enforcement import (
     EnforcementPolicy,
     build_pipeline_from_policy,
     evaluate,
-    evaluate_pipeline,
+    evaluate_pipeline_with_residual,
 )
 from ..observability.events import FlaggedCall, ObservabilityEvent
 from ..observability.store import EventStore
@@ -272,6 +272,13 @@ class ProxyState:
             self.registry.add(det)
 
         self.pipeline = build_pipeline_from_policy(self.policy, to_register)
+        self.residual_registry: DetectorRegistry | None = None
+        if self.pipeline is not None:
+            covered_ids = {id(detector) for detector in self.pipeline.covered_detectors}
+            self.residual_registry = DetectorRegistry()
+            for detector in to_register:
+                if id(detector) not in covered_ids:
+                    self.residual_registry.add(detector)
         self._last_pipeline_result: Any = None
         if self.pipeline:
             log.info("Safety pipeline enabled with %d layers", len(self.pipeline._layers))
@@ -421,7 +428,12 @@ class ProxyState:
     def _serialize_pipeline(self) -> dict[str, Any] | None:
         if not self.pipeline:
             return None
-        info: dict[str, Any] = {"enabled": True}
+        info: dict[str, Any] = {
+            "enabled": True,
+            "residual_detectors": [detector.name for detector in self.residual_registry._detectors]
+            if self.residual_registry is not None
+            else [],
+        }
         pr = self._last_pipeline_result
         if pr is not None:
             info["last_result"] = {
@@ -651,6 +663,7 @@ def create_proxy_app(
                 body["messages"], exclude_roles=_SAFETY_UNTRUSTED_ROLES
             )
 
+        input_residual_signals: Sequence[SafetySignal] = ()
         if state.safety_enabled:
             if state.pipeline:
                 pipeline_result = await state.pipeline.evaluate(
@@ -659,8 +672,16 @@ def create_proxy_app(
                     call_id=call_id,
                 )
                 state._last_pipeline_result = pipeline_result
-                input_signals = pipeline_result.signals
-                input_decision = evaluate_pipeline(pipeline_result, state.policy)
+                if state.residual_registry is not None:
+                    input_residual_signals = await state.residual_registry.run_all(
+                        input_text=input_text,
+                        output_text="",
+                        call_id=call_id,
+                    )
+                input_signals = [*pipeline_result.signals, *input_residual_signals]
+                input_decision = evaluate_pipeline_with_residual(
+                    pipeline_result, input_residual_signals, state.policy
+                )
             else:
                 input_signals = await state.registry.run_all(
                     input_text=input_text,
@@ -959,6 +980,7 @@ def create_proxy_app(
                 call_id=call_id,
                 input_text=input_text,
                 registry=state.registry,
+                residual_registry=state.residual_registry,
                 policy=state.policy,
                 pipeline=state.pipeline,
                 on_complete=on_stream_complete,
@@ -1029,6 +1051,8 @@ def create_proxy_app(
 
         # --- OUTPUT SAFETY CHECK ---
         if state.safety_enabled:
+            pipeline_result: Any = None
+            output_residual_signals: Sequence[SafetySignal] = ()
             if state.pipeline:
                 pipeline_result = await state.pipeline.evaluate(
                     input_text=input_text,
@@ -1037,7 +1061,14 @@ def create_proxy_app(
                     call_cost=cost_node.total_cost(),
                 )
                 state._last_pipeline_result = pipeline_result
-                output_signals = pipeline_result.signals
+                if state.residual_registry is not None:
+                    output_residual_signals = await state.residual_registry.run_all(
+                        input_text=input_text,
+                        output_text=output_text,
+                        call_id=call_id,
+                        call_cost=cost_node.total_cost(),
+                    )
+                output_signals = [*pipeline_result.signals, *output_residual_signals]
             else:
                 output_signals = await state.registry.run_all(
                     input_text=input_text,
@@ -1066,7 +1097,11 @@ def create_proxy_app(
             state.signals.extend(all_signals)
 
             decision = (
-                evaluate_pipeline(pipeline_result, state.policy)
+                evaluate_pipeline_with_residual(
+                    pipeline_result,
+                    [*input_residual_signals, *output_residual_signals],
+                    state.policy,
+                )
                 if state.pipeline
                 else evaluate(all_signals, state.policy)
             )

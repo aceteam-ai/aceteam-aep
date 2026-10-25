@@ -37,7 +37,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
-from .base import EvaluationUnavailableError, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class CascadeLayer(Protocol):
 
 
 class RegexLayer(CascadeLayer):
-    """Deterministic regex detectors (PII, agent threat, FERPA, secrets).
+    """Deterministic regex detectors (PII, agent threat).
 
     Hit → p_safe near 0 (certain violation). Miss → prior unchanged.
     """
@@ -113,6 +113,10 @@ class RegexLayer(CascadeLayer):
     def __init__(self, detectors: list, *, prior_p_safe: float = 0.95) -> None:
         self._detectors = detectors
         self.prior_p_safe = prior_p_safe
+
+    @property
+    def detectors(self) -> tuple[SafetyDetector, ...]:
+        return tuple(self._detectors)
 
     async def score(
         self,
@@ -176,6 +180,10 @@ class PawLayer(CascadeLayer):
         self._detector = detector
         self.prior_p_safe = prior_p_safe
 
+    @property
+    def detectors(self) -> tuple[SafetyDetector, ...]:
+        return (self._detector,)
+
     async def score(
         self,
         *,
@@ -232,6 +240,10 @@ class ContentModelLayer(CascadeLayer):
             raise TypeError(f"Expected ContentSafetyDetector, got {type(detector).__name__}")
         self._detector = detector
         self.prior_p_safe = prior_p_safe
+
+    @property
+    def detectors(self) -> tuple[SafetyDetector, ...]:
+        return (self._detector,)
 
     async def score(
         self,
@@ -290,6 +302,10 @@ class TrustEngineLayer(CascadeLayer):
             raise TypeError(f"Expected TrustEngineDetector, got {type(detector).__name__}")
         self._detector = detector
         self.prior_p_safe = prior_p_safe
+
+    @property
+    def detectors(self) -> tuple[SafetyDetector, ...]:
+        return (self._detector,)
 
     async def score(
         self,
@@ -374,6 +390,18 @@ class SafetyPipeline:
         self._layers = list(layers)
         self._pass_above = pass_above
         self._block_below = block_below
+
+    @property
+    def covered_detectors(self) -> tuple[SafetyDetector, ...]:
+        """Detector instances consumed by constructed layers, in first-use order."""
+        covered: list[SafetyDetector] = []
+        seen: set[int] = set()
+        for layer in self._layers:
+            for detector in getattr(layer, "detectors", ()):
+                if id(detector) not in seen:
+                    seen.add(id(detector))
+                    covered.append(detector)
+        return tuple(covered)
 
     def _compute_p_safe(self, layer_results: Sequence[LayerResult]) -> float:
         """Product of fully evaluated layer scores only."""
