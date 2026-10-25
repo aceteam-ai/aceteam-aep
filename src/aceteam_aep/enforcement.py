@@ -20,6 +20,7 @@ Or from a YAML file::
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +49,19 @@ class PipelinePolicy:
     pass_below: float = 0.3
     block_above: float = 0.7
     layers: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _pipeline_threshold(value: Any, name: str) -> float:
+    """Reject missing or unusable thresholds before enforcement or commitment."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"pipeline.{name} must be a finite number between 0 and 1")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"pipeline.{name} must be a finite number between 0 and 1") from exc
+    if not math.isfinite(number) or not 0 <= number <= 1:
+        raise ValueError(f"pipeline.{name} must be a finite number between 0 and 1")
+    return number
 
 
 @dataclass(frozen=True)
@@ -85,8 +99,8 @@ class EnforcementPolicy:
         pipeline_data = data.get("pipeline", {})
         pipeline = PipelinePolicy(
             enabled=pipeline_data.get("enabled", False),
-            pass_below=pipeline_data.get("pass_below", 0.3),
-            block_above=pipeline_data.get("block_above", 0.7),
+            pass_below=_pipeline_threshold(pipeline_data.get("pass_below", 0.3), "pass_below"),
+            block_above=_pipeline_threshold(pipeline_data.get("block_above", 0.7), "block_above"),
             layers=pipeline_data.get("layers", []),
         )
 

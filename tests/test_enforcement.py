@@ -2,6 +2,8 @@
 
 import tempfile
 
+import pytest
+
 from aceteam_aep.enforcement import (
     DetectorPolicy,
     EnforcementPolicy,
@@ -27,6 +29,18 @@ def _sig(
 def test_no_signals_passes() -> None:
     result = evaluate([], EnforcementPolicy())
     assert result.action == "pass"
+
+
+@pytest.mark.parametrize("name", ["pass_below", "block_above"])
+def test_from_dict_rejects_null_pipeline_threshold_before_commitment(name: str) -> None:
+    with pytest.raises(ValueError, match=rf"pipeline\.{name}"):
+        EnforcementPolicy.from_dict({"pipeline": {name: None}})
+
+
+@pytest.mark.parametrize("value", [True, float("nan"), -0.1, 1.1])
+def test_from_dict_rejects_unusable_pipeline_threshold(value: object) -> None:
+    with pytest.raises(ValueError, match="pipeline.pass_below"):
+        EnforcementPolicy.from_dict({"pipeline": {"pass_below": value}})
 
 
 def test_high_severity_blocks() -> None:

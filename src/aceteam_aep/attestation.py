@@ -305,6 +305,44 @@ def _validate_evaluation(value: Any) -> dict[str, Any]:
     return deepcopy(record)
 
 
+def _validate_evaluation_decision(
+    evaluation: dict[str, Any], action: str, signals: list[dict[str, Any]]
+) -> None:
+    """Refuse a signer claim that contradicts the final evaluated phase."""
+    final = evaluation["phases"][-1]
+    if final["action"] != action:
+        raise ValueError("statement action must match the final evaluation phase")
+
+    decided_by = evaluation["decided_by"]
+    pipeline = final["pipeline"]
+    if decided_by == "pipeline:unavailable":
+        if action != "block" or not pipeline or not pipeline["unavailable"]:
+            raise ValueError("pipeline:unavailable requires a blocked unavailable final phase")
+    elif decided_by == "pipeline:aggregate":
+        if not pipeline or pipeline["unavailable"] or pipeline["p_safe"] is None:
+            raise ValueError("pipeline:aggregate requires an evaluated final pipeline")
+        p_safe = pipeline["p_safe"]
+        pipeline_action = (
+            "block"
+            if p_safe <= pipeline["block_below"]
+            else "pass"
+            if p_safe >= pipeline["pass_above"]
+            else "flag"
+        )
+        if action != pipeline_action:
+            raise ValueError("pipeline:aggregate action must match its thresholds")
+    elif decided_by.startswith("residual:"):
+        detector = decided_by.split(":", 1)[1]
+        if detector not in final["residual"] or (pipeline and pipeline["unavailable"]):
+            raise ValueError("residual decision must name a final-phase residual detector")
+    elif decided_by.startswith("legacy:"):
+        detector = decided_by.split(":", 1)[1]
+        if detector not in {signal["detector"] for signal in signals}:
+            raise ValueError("legacy decision must name a signed signal detector")
+    elif decided_by == "none" and action != "pass":
+        raise ValueError("none can only decide a pass action")
+
+
 def _evaluation_from_canonical_json(value: Any) -> dict[str, Any]:
     """Restore required null fields omitted by canonical_json in an HTTP header."""
     if not isinstance(value, dict):
@@ -426,6 +464,7 @@ def build_statement(
     if evaluation is not None:
         statement["evaluation"] = _validate_evaluation(evaluation)
         statement["signals"] = _validate_v3_signals(signals)
+        _validate_evaluation_decision(statement["evaluation"], action, statement["signals"])
     return statement
 
 
