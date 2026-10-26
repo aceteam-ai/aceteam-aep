@@ -2,12 +2,35 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
 ### Added
 - Version 3 attestation statements bind a structured evaluation and optional
   commitments to the signed decision. Verifiers from older SDK releases report
   version 3 chains as `legacy_unsupported`; upgrade the verifier to check them.
+- Version 3 adds strict chain verification, policy commitments, and CLI
+  verification output while version 2 remains the default (#161).
+- A synthetic safety catalog contains five policies and 400 labeled cases, with an
+  offline loader and verifier adapter. The labels remain unverified (#164).
+- A shared PAW interpreter runtime reuses local models and manages bounded adapter
+  contexts through an injected backend (#165).
+- PAW results expose raw Y/N logit differences and per-policy results for future
+  calibration without changing the current layer verdict (#166).
+
 ### Changed
+- Safety pipelines run every configured layer before deciding. Required evaluations
+  that fail or are unavailable block explicitly, and streaming blocks appear before
+  terminal markers (#151).
+- Pipeline mode also runs uncovered detectors through the residual registry on input,
+  nonstreaming output, and streaming output (#157).
+- Custom policies require a private PAW compiler, compile with `public=False`,
+  and block requests when an enabled policy cannot be evaluated (#159).
+- The pipeline sample now builds, clean Trust Engine evaluations use their measured
+  score, and streaming passes residual detectors into the route handler (#162).
+
 ### Fixed
+- Version 3 signing validates pipeline thresholds, the final action and decision
+  source, and unavailable-layer blocks before accepting a chain entry (#167).
 
 ## [0.11.9] - 2026-09-26
 
