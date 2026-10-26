@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from starlette.responses import Response, StreamingResponse
 
-from ..enforcement import EnforcementPolicy, evaluate, evaluate_pipeline
+from ..enforcement import EnforcementPolicy, evaluate, evaluate_pipeline_with_residual
 from ..safety.base import DetectorRegistry
 
 log = logging.getLogger(__name__)
@@ -101,6 +101,7 @@ async def handle_streaming_request(
     registry: DetectorRegistry,
     policy: EnforcementPolicy,
     pipeline: Any = None,
+    residual_registry: DetectorRegistry | None = None,
     on_complete: Any = None,
     debug: bool = False,
 ) -> Response:
@@ -119,6 +120,7 @@ async def handle_streaming_request(
         call_id: Unique call ID for this request
         input_text: Extracted input text for safety checking
         registry: Safety detector registry
+        residual_registry: Detectors not covered by pipeline layers, if enabled
         policy: Enforcement policy
         on_complete: Callback(model, input_tokens, output_tokens, output_text, signals, decision)
         debug: Enable debug logging for the stream
@@ -270,8 +272,17 @@ async def handle_streaming_request(
                 output_text=output_text,
                 call_id=call_id,
             )
-            signals = pipeline_result.signals
-            decision = evaluate_pipeline(pipeline_result, policy)
+            residual_signals = (
+                await residual_registry.run_all(
+                    input_text=input_text,
+                    output_text=output_text,
+                    call_id=call_id,
+                )
+                if residual_registry is not None
+                else ()
+            )
+            signals = [*pipeline_result.signals, *residual_signals]
+            decision = evaluate_pipeline_with_residual(pipeline_result, residual_signals, policy)
         else:
             signals = await registry.run_all(
                 input_text=input_text,
