@@ -212,10 +212,6 @@ class PawLayer(CascadeLayer):
     def detectors(self) -> tuple[SafetyDetector, ...]:
         return (self._detector,)
 
-    @property
-    def has_enabled_policies(self) -> bool:
-        return self._detector.has_enabled_policies
-
     async def score(
         self,
         *,
