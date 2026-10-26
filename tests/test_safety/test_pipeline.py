@@ -641,6 +641,28 @@ async def test_evaluate_pipeline_integration():
     assert "P(safe)" in decision.reason
 
 
+async def test_evaluate_pipeline_blocks_unavailable_signal_despite_safe_score_and_allowlist():
+    from aceteam_aep.enforcement import EnforcementPolicy, evaluate_pipeline
+
+    unavailable = SafetySignal(
+        signal_type="evaluation_unavailable",
+        severity="high",
+        call_id="unavailable",
+        detail="required detector did not run",
+    )
+    pipeline = SafetyPipeline(layers=[FakeLayer("custom", p_safe=0.99, signals=[unavailable])])
+    result = await pipeline.evaluate(input_text="clean", output_text="", call_id="unavailable")
+    assert result.verdict == "pass"
+    assert result.evaluation_unavailable_reason is None
+
+    policy = EnforcementPolicy(allow_types=frozenset({"evaluation_unavailable"}))
+    decision = evaluate_pipeline(result, policy)
+
+    assert decision.action == "block"
+    assert decision.signals == [unavailable]
+    assert decision.reason == "evaluation_unavailable: required detector did not run"
+
+
 async def test_nonstreaming_proxy_fails_closed_before_upstream_on_evaluator_error():
     import httpx
 

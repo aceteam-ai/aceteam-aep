@@ -472,10 +472,6 @@ class CustomSafetyDetector(SafetyDetector):
     def store(self) -> CustomPolicyStore:
         return self._store
 
-    @property
-    def has_enabled_policies(self) -> bool:
-        return any(policy.enabled for policy in self._store.all())
-
     async def check(
         self,
         *,
