@@ -149,10 +149,18 @@ def _resolve_signal_action(signal: SafetySignal, policy: EnforcementPolicy) -> s
         if not override.enabled:
             return "pass"
         # If override has a threshold and signal has a score, check it
+        # PAW custom-safety scores now retain raw precision for recording.
+        # Compare at the legacy four-decimal precision until calibrated
+        # thresholds land, preserving the prior boundary decision.
+        threshold_score = (
+            round(signal.score, 4)
+            if signal.score is not None and signal.signal_type == "custom_safety"
+            else signal.score
+        )
         if (
             override.threshold is not None
-            and signal.score is not None
-            and signal.score < override.threshold
+            and threshold_score is not None
+            and threshold_score < override.threshold
         ):
             # Below threshold — downgrade to the lesser of default_action and "flag"
             return "pass" if policy.default_action == "pass" else "flag"

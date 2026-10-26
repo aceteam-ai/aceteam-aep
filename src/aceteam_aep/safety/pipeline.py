@@ -33,11 +33,14 @@ from __future__ import annotations
 import logging
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
+
+if TYPE_CHECKING:
+    from .custom import PawResult
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +67,31 @@ def _signal_score(signal: SafetySignal, default: float) -> float:
     if not _valid_score(score):
         raise ValueError("detector returned an invalid score")
     return float(score)
+
+
+def paw_layer_p_safe(
+    results: Sequence[PawResult], calibrator: Callable[[float], float]
+) -> float | None:
+    """Score all PAW policy and chunk results from raw logits.
+
+    None means at least one measurement is unavailable. The caller decides how
+    to handle that marker. This helper is not wired into enforcement yet.
+    """
+    probabilities: list[float] = []
+    for result in results:
+        gaps = result.chunk_logit_diffs
+        if gaps is None:
+            gaps = [result.logit_diff]
+        if not gaps:
+            return None
+        for gap in gaps:
+            if gap is None or not math.isfinite(gap):
+                return None
+            p_safe = calibrator(gap)
+            if not _valid_score(p_safe):
+                raise ValueError("PAW calibrator returned an invalid score")
+            probabilities.append(float(p_safe))
+    return min(probabilities) if probabilities else None
 
 
 @dataclass
@@ -210,7 +238,16 @@ class PawLayer(CascadeLayer):
         if signals:
             for signal in signals:
                 _signal_score(signal, 0.0)
-            scores = [s.score for s in signals if s.score is not None]
+            # Real CustomSafetyDetector signals now retain raw precision for
+            # recording. Keep the legacy four-decimal layer score until the
+            # calibrated enforcement slice changes verdicts deliberately.
+            from .custom import CustomSafetyDetector
+
+            scores = [
+                round(s.score, 4) if isinstance(self._detector, CustomSafetyDetector) else s.score
+                for s in signals
+                if s.score is not None
+            ]
             p_safe = 1.0 - max(scores) if scores else 0.2
             return LayerResult(
                 layer_name=self.name,
@@ -526,6 +563,7 @@ __all__ = [
     "EvaluationStatus",
     "LayerResult",
     "PawLayer",
+    "paw_layer_p_safe",
     "PipelineResult",
     "RegexLayer",
     "SafetyPipeline",
