@@ -64,6 +64,98 @@ def evaluation() -> dict:
     }
 
 
+def statement_for(record: dict, *, action: str = "block", signals: list[dict] | None = None):
+    return build_statement(
+        signer_id="proxy:test",
+        execution_id="run",
+        call_id="call",
+        action=action,
+        signals=signals if signals is not None else [],
+        timestamp="2026-01-01T00:00:00Z",
+        sequence=0,
+        prev_link="sha256:" + "0" * 64,
+        evaluation=record,
+    )
+
+
+def evaluated_pipeline_record() -> dict:
+    record = evaluation()
+    pipeline = record["phases"][-1]["pipeline"]
+    pipeline["layers"][1].update(status="evaluated", p_safe=0.9, reason_code=None)
+    pipeline["unavailable"] = []
+    pipeline["p_safe"] = 0.9
+    return record
+
+
+def test_signer_rejects_action_different_from_final_phase():
+    with pytest.raises(ValueError, match="final evaluation phase"):
+        statement_for(evaluation(), action="pass")
+    engine, _ = signer()
+    with pytest.raises(ValueError, match="final evaluation phase"):
+        engine.sign_verdict(call_id="call-1", action="pass", signals=[], evaluation=evaluation())
+    assert engine.chain == []
+    assert engine.chain_height == 0
+
+
+def test_signer_rejects_unavailable_decision_without_unavailable_layer():
+    with pytest.raises(ValueError, match="pipeline:unavailable"):
+        statement_for(evaluated_pipeline_record())
+
+
+def test_signer_cannot_pass_when_final_pipeline_has_an_unavailable_layer():
+    record = evaluation()
+    record["decided_by"] = "none"
+    record["phases"][-1]["action"] = "pass"
+    with pytest.raises(ValueError, match="unavailable final pipeline must block"):
+        statement_for(record, action="pass")
+
+
+def test_signer_cannot_attribute_unavailable_pipeline_block_to_residual():
+    record = evaluation()
+    record["decided_by"] = "residual:rules"
+    record["phases"][-1]["residual"] = ["rules"]
+    with pytest.raises(ValueError, match="final-phase residual"):
+        statement_for(record)
+
+
+def test_signer_checks_aggregate_decision_and_threshold_action():
+    record = evaluation()
+    record["decided_by"] = "pipeline:aggregate"
+    with pytest.raises(ValueError, match="pipeline:aggregate"):
+        statement_for(record)
+
+    record = evaluated_pipeline_record()
+    record["decided_by"] = "pipeline:aggregate"
+    with pytest.raises(ValueError, match="thresholds"):
+        statement_for(record)
+    record["phases"][-1]["action"] = "pass"
+    assert statement_for(record, action="pass")["action"] == "pass"
+
+
+def test_signer_requires_named_residual_in_final_phase():
+    record = evaluated_pipeline_record()
+    record["decided_by"] = "residual:rules"
+    with pytest.raises(ValueError, match="final-phase residual"):
+        statement_for(record)
+    record["phases"][-1]["residual"] = ["rules"]
+    assert statement_for(record)["evaluation"]["decided_by"] == "residual:rules"
+
+
+def test_signer_requires_named_legacy_signal_and_none_only_for_pass():
+    record = {
+        "mode": "legacy",
+        "decided_by": "legacy:rules",
+        "phases": [{"phase": "input", "action": "flag", "pipeline": None, "residual": []}],
+    }
+    with pytest.raises(ValueError, match="signed signal detector"):
+        statement_for(record, action="flag")
+    signal = {"signal_type": "policy_hit", "detector": "rules", "severity": "medium", "score": None}
+    assert statement_for(record, action="flag", signals=[signal])["action"] == "flag"
+    record["decided_by"] = "none"
+    with pytest.raises(ValueError, match="only decide a pass"):
+        statement_for(record, action="flag", signals=[signal])
+
+
 def signer():
     private, public = generate_keypair()
     return AttestationEngine(_private_key=private, signer_id="proxy:test"), public

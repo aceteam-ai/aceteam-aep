@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Version 3 attestation statements bind a structured evaluation and optional
+  commitments to the signed decision. Verifiers from older SDK releases report
+  version 3 chains as `legacy_unsupported`; upgrade the verifier to check them.
 ### Changed
 ### Fixed
 
