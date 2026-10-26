@@ -12,6 +12,8 @@ def detector() -> ContentSafetyDetector:
     return ContentSafetyDetector()
 
 
+# Model acceptance requires the real toxicity model and its optional runtime.
+@pytest.mark.integration
 async def test_flags_toxic_content(detector: ContentSafetyDetector) -> None:
     signals = await detector.check(
         input_text="",

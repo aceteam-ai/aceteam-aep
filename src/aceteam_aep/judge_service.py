@@ -64,7 +64,8 @@ class FeedbackStore:
             if not os.environ.get("OPENAI_API_KEY"):
                 log.warning(
                     "OPENAI_API_KEY not set — feedback embeddings will fail. "
-                    "The feedback feature requires OPENAI_API_KEY even with alternative LLM backends."
+                    "The feedback feature requires OPENAI_API_KEY "
+                    "even with alternative LLM backends."
                 )
             try:
                 import lancedb
