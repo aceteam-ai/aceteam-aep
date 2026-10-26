@@ -296,11 +296,12 @@ def evaluate_pipeline(
         raise TypeError(f"Expected PipelineResult, got {type(pipeline_result).__name__}")
 
     reasons: list[str] = []
-    if pipeline_result.verdict in ("block", "flag"):
+    if pipeline_result.evaluation_unavailable_reason:
+        reasons.append(f"pipeline: {pipeline_result.evaluation_unavailable_reason}")
+    elif pipeline_result.verdict in ("block", "flag"):
         reasons.append(
             f"pipeline: P(safe)={pipeline_result.p_safe:.4f} "
-            f"({pipeline_result.layers_executed} layers"
-            + (f", short-circuited at {pipeline_result.short_circuited_at})" if pipeline_result.short_circuited_at else ")")
+            f"({pipeline_result.layers_executed} layers)"
         )
 
     return EnforcementDecision(
@@ -335,14 +336,21 @@ def build_pipeline_from_policy(
     from .safety.trust_engine import TrustEngineDetector
 
     detector_map: dict[str, SafetyDetector] = {d.name: d for d in detectors}
-    configured_layers = {l["name"] for l in policy.pipeline.layers if isinstance(l, dict)}
+    supported_layers = {"regex", "paw", "content_model", "trust_engine"}
+    configured_layers: set[str] = set()
+    for layer in policy.pipeline.layers:
+        name = layer.get("name") if isinstance(layer, dict) else None
+        if not isinstance(name, str) or name not in supported_layers:
+            raise ValueError(f"Unknown pipeline layer: {name!r}")
+        if name in configured_layers:
+            raise ValueError(f"Duplicate pipeline layer: {name}")
+        configured_layers.add(name)
 
     layers = []
 
     if "regex" in configured_layers or not configured_layers:
         regex_detectors = [
-            d for d in detectors
-            if isinstance(d, (PiiDetector, AgentThreatDetector))
+            d for d in detectors if isinstance(d, (PiiDetector, AgentThreatDetector))
         ]
         if regex_detectors:
             layers.append(RegexLayer(regex_detectors))
@@ -361,6 +369,11 @@ def build_pipeline_from_policy(
         te = detector_map.get("trust_engine")
         if te and isinstance(te, TrustEngineDetector):
             layers.append(TrustEngineLayer(te))
+
+    if configured_layers:
+        missing = configured_layers - {layer.name for layer in layers}
+        if missing:
+            raise ValueError(f"Configured pipeline layer unavailable: {', '.join(sorted(missing))}")
 
     if not layers:
         return None

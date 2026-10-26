@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Sequence
 
-from .base import SafetyDetector, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ class ContentSafetyDetector(SafetyDetector):
         if not self._load_attempted:
             self._load()
         if not self._available:
+            if kwargs.get("strict"):
+                raise EvaluationUnavailableError("content safety model unavailable")
             return []
 
         signals: list[SafetySignal] = []
@@ -79,6 +82,23 @@ class ContentSafetyDetector(SafetyDetector):
                 continue
             try:
                 result = self._pipeline(text[:512])  # type: ignore[operator]
+                if kwargs.get("strict"):
+                    if (
+                        not isinstance(result, list)
+                        or not result
+                        or not isinstance(result[0], dict)
+                    ):
+                        raise EvaluationUnavailableError("content classifier returned no score")
+                    raw_score = result[0].get("score")
+                    if (
+                        not isinstance(raw_score, (int, float))
+                        or isinstance(raw_score, bool)
+                        or not math.isfinite(raw_score)
+                        or not 0 <= raw_score <= 1
+                    ):
+                        raise EvaluationUnavailableError(
+                            "content classifier returned an invalid score"
+                        )
                 if result:
                     label = result[0].get("label", "").lower()
                     score = result[0].get("score", 0)
@@ -95,6 +115,8 @@ class ContentSafetyDetector(SafetyDetector):
                         )
             except Exception:
                 log.warning("Content safety check failed for %s", source, exc_info=True)
+                if kwargs.get("strict"):
+                    raise
         return signals
 
 
