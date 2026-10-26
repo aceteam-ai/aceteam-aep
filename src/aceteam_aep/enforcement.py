@@ -403,11 +403,10 @@ def build_pipeline_from_policy(
         if regex_detectors:
             layers.append(RegexLayer(regex_detectors))
 
-    custom = detector_map.get("custom_safety")
-    # Dashboard policy writes can enable a rule after this pipeline is built.
-    # Keep the layer present so that change cannot bypass request-time checks.
-    if isinstance(custom, CustomSafetyDetector):
-        layers.append(PawLayer(custom))
+    if "paw" in configured_layers or not configured_layers:
+        custom = detector_map.get("custom_safety")
+        if custom and isinstance(custom, CustomSafetyDetector):
+            layers.append(PawLayer(custom))
 
     if "content_model" in configured_layers or not configured_layers:
         content = detector_map.get("content_safety")

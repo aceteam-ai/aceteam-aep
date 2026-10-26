@@ -16,13 +16,15 @@ from aceteam_aep.enforcement import (
     evaluate,
     evaluate_pipeline,
 )
-from aceteam_aep.proxy.app import create_proxy_app
+from aceteam_aep.proxy.app import ProxyState, create_proxy_app
+from aceteam_aep.safety.agent_threat import AgentThreatDetector
 from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 from aceteam_aep.safety.custom import (
     CustomPolicy,
     CustomPolicyStore,
     CustomSafetyDetector,
     PawResult,
+    PrivateCompileUnavailableError,
 )
 from aceteam_aep.safety.pipeline import LayerResult, PawLayer, SafetyPipeline
 
@@ -709,3 +711,35 @@ async def test_policy_enabled_after_pipeline_build_still_blocks() -> None:
         result = await pipeline.evaluate(input_text="hello", output_text="", call_id="call")
     assert result.verdict == "block"
     assert evaluate_pipeline(result, policy).action == "block"
+
+
+def test_late_enabled_policy_without_paw_layer_blocks_through_residual() -> None:
+    store = CustomPolicyStore()
+    detectors = [AgentThreatDetector(), CustomSafetyDetector(store)]
+    policy = {"pipeline": {"enabled": True, "layers": [{"name": "regex"}]}}
+    state = ProxyState(detectors=detectors, policy=policy)
+    assert state.pipeline is not None
+    assert [layer.name for layer in state.pipeline._layers] == ["regex"]
+    assert state.residual_registry is not None
+    assert [detector.name for detector in state.residual_registry._detectors] == ["custom_safety"]
+
+    client = TestClient(create_proxy_app(detectors=detectors, policy=policy, dashboard=True))
+    store.upsert(CustomPolicy(name="Late policy", rule="private", enabled=True, applies_to="input"))
+    with (
+        patch.object(
+            CustomPolicy,
+            "check_with_confidence",
+            side_effect=PrivateCompileUnavailableError("private compiler unavailable"),
+        ) as unavailable,
+        patch("aceteam_aep.proxy.app.httpx.AsyncClient") as upstream,
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "safety_block"
+    unavailable.assert_awaited_once()
+    upstream.assert_not_called()
