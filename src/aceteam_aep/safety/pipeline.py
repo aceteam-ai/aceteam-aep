@@ -381,7 +381,7 @@ class TrustEngineLayer(CascadeLayer):
 
         return LayerResult(
             layer_name=self.name,
-            p_safe=self.prior_p_safe,
+            p_safe=self._detector.last_p_safe,
             signals=[],
             latency_ms=latency,
         )

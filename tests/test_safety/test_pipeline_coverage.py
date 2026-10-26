@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from aceteam_aep.enforcement import (
@@ -342,3 +343,52 @@ async def test_pipeline_enabled_streaming_secret_emits_block_event(monkeypatch):
     )
     assert '"aep_safety_block": true' in body
     assert body.index('"aep_safety_block": true') < body.index("data: [DONE]")
+
+
+async def test_proxy_streaming_handoff_passes_residual_registry():
+    app = create_proxy_app(
+        detectors=[SecretDetector(), AgentThreatDetector(), NoopCustomDetector()],
+        policy={"pipeline": {"enabled": True}},
+        dashboard=False,
+    )
+    stream = StreamingResponse(iter([b"data: [DONE]\n\n"]), media_type="text/event-stream")
+    body = json.dumps(
+        {
+            "model": "gpt-4o",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    ).encode()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/chat/completions",
+        "raw_path": b"/v1/chat/completions",
+        "path_params": {"path": "chat/completions"},
+        "headers": [
+            (b"authorization", b"Bearer sk-test"),
+            (b"content-type", b"application/json"),
+        ],
+        "query_string": b"",
+        "http_version": "1.1",
+        "scheme": "http",
+        "server": ("test", 80),
+        "client": ("test", 1234),
+        "app": app,
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    with patch(
+        "aceteam_aep.proxy.streaming.handle_streaming_request",
+        new_callable=AsyncMock,
+        return_value=stream,
+    ) as handle:
+        request = Request(scope, receive)
+        response = await app.routes[0].endpoint(request)
+    assert response.status_code == 200
+    handle.assert_awaited_once()
+    residual = handle.await_args.kwargs["residual_registry"]
+    assert residual is not None
+    assert [detector.name for detector in residual._detectors] == ["secret_leak"]

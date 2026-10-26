@@ -439,7 +439,9 @@ def build_pipeline_from_policy(
     supported_layers = {"regex", "paw", "content_model", "trust_engine"}
     configured_layers: set[str] = set()
     for layer in policy.pipeline.layers:
-        name = layer.get("name") if isinstance(layer, dict) else None
+        if not isinstance(layer, dict):
+            raise ValueError("Pipeline layer must be a mapping with a name")
+        name = layer.get("name")
         if not isinstance(name, str) or name not in supported_layers:
             raise ValueError(f"Unknown pipeline layer: {name!r}")
         if name in configured_layers:

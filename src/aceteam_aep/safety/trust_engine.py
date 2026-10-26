@@ -519,6 +519,7 @@ class TrustEngineDetector(SafetyDetector):
         self._last_dimension_results: list[DimensionResult] = []
         self._last_judge_results: list[JudgeResult] = []
         self._last_latency_ms: float = 0
+        self._last_p_safe: float | None = None
 
     async def check(
         self,
@@ -531,6 +532,8 @@ class TrustEngineDetector(SafetyDetector):
         """Evaluate using configured mode. Returns signals if P(safe) is low."""
 
         strict = bool(kwargs.get("strict"))
+        if strict:
+            self._last_p_safe = None
         cached = None if strict else self._cache.get(input_text, output_text)
         if cached is not None:
             return cached
@@ -567,10 +570,16 @@ class TrustEngineDetector(SafetyDetector):
         if strict and (not math.isfinite(p_safe) or not 0 <= p_safe <= 1):
             raise ValueError("trust engine returned an invalid score")
 
+        self._last_p_safe = p_safe
         signals = self._produce_signals(p_safe, call_id)
         if not strict:
             self._cache.put(input_text, output_text, signals)
         return signals
+
+    @property
+    def last_p_safe(self) -> float | None:
+        """Most recent completed evaluation score for pipeline consumers."""
+        return self._last_p_safe
 
     def _eval_judge_service(
         self, input_text: str, output_text: str, *, strict: bool = False

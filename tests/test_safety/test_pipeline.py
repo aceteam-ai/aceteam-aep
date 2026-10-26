@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -65,6 +66,45 @@ async def test_product_of_safe_layers():
 
     assert result.p_safe is not None and abs(result.p_safe - 0.72) < 0.001
     assert result.verdict == "flag"
+
+
+async def test_clean_trust_engine_result_uses_measured_score(monkeypatch):
+    from aceteam_aep.safety import trust_engine
+    from aceteam_aep.safety.pipeline import TrustEngineLayer
+    from aceteam_aep.safety.trust_engine import DimensionResult, TrustEngineDetector
+
+    monkeypatch.setattr(
+        trust_engine,
+        "_call_multi_perspective",
+        lambda **kwargs: ([DimensionResult(name="pii", safe=True, confidence=0.9)], 1),
+    )
+    detector = TrustEngineDetector(dimensions=["pii"])
+    result = await SafetyPipeline(layers=[TrustEngineLayer(detector)]).evaluate(
+        input_text="clean", output_text="safe", call_id="trust-clean"
+    )
+    assert result.verdict == "pass"
+    assert result.p_safe == 1.0
+    assert result.signals == []
+
+
+def test_uncommented_sample_policy_builds_pipeline():
+    import yaml
+
+    from aceteam_aep.enforcement import EnforcementPolicy, build_detectors_from_policy
+    from aceteam_aep.proxy.app import ProxyState
+
+    sample = Path(__file__).resolve().parents[2] / "policies/pipeline.yaml"
+    lines = sample.read_text().splitlines()
+    start = lines.index("# pipeline:")
+    for index in range(start, len(lines)):
+        if lines[index] == "#":
+            lines[index] = ""
+        elif lines[index].startswith("# pipeline:") or lines[index].startswith("#   "):
+            lines[index] = lines[index][2:]
+    policy = EnforcementPolicy.from_dict(yaml.safe_load("\n".join(lines)))
+    state = ProxyState(policy=policy, detectors=build_detectors_from_policy(policy))
+    assert state.pipeline is not None
+    assert [layer.name for layer in state.pipeline._layers] == ["regex", "paw", "content_model"]
 
 
 async def test_product_with_unsafe_layer():
@@ -517,7 +557,8 @@ async def test_trust_complete_dimensions_evaluate_and_legacy_defaults_remain(mon
         input_text="clean", output_text="", call_id="complete"
     )
     assert result.layer_results[0].status == "evaluated"
-    assert result.verdict == "flag"
+    assert result.verdict == "pass"
+    assert result.p_safe == 1.0
 
     content = '{"dimensions":{"pii":{"safe":true,"confidence":0.9}}}'
     legacy = TrustEngineDetector(dimensions=["pii", "toxicity"])
@@ -1004,6 +1045,8 @@ async def test_paw_layer_flag_band_escalation():
         ([{"name": "regex"}, {"name": "trust_engine"}], "trust_engine"),
         ([{"name": "regex"}, {"name": "paw"}], "paw"),
         ([{"name": "regex"}, {"name": "trst_engine"}], "Unknown pipeline layer"),
+        ([{"name": "regex"}, {"name": "regex"}], "Duplicate pipeline layer: regex"),
+        (["regex"], "Pipeline layer must be a mapping with a name"),
     ],
 )
 def test_explicit_pipeline_layers_cannot_be_silently_dropped(configured, error):
