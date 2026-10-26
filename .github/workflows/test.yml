@@ -1,0 +1,45 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ""
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install test dependencies
+        id: install
+        run: |
+          # Keep locked dev tools and PAW fixtures; omit optional Torch model stacks.
+          uv export --frozen --extra dev --no-emit-project \
+            --prune torch --prune transformers \
+            --output-file "$RUNNER_TEMP/aep-test-requirements.txt"
+          uv venv
+          uv pip sync "$RUNNER_TEMP/aep-test-requirements.txt"
+          uv pip install --no-deps -e .
+
+      - name: Ruff
+        run: uv run --no-sync ruff check
+
+      - name: Pytest
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: uv run --no-sync pytest -m "not integration"
