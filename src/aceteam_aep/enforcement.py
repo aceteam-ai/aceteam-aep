@@ -249,6 +249,14 @@ def evaluate(
     if not signals:
         return EnforcementDecision(action="pass")
 
+    unavailable = [s for s in signals if s.signal_type == "evaluation_unavailable"]
+    if unavailable:
+        return EnforcementDecision(
+            action="block",
+            signals=list(signals),
+            reason="; ".join(f"evaluation_unavailable: {s.detail}" for s in unavailable),
+        )
+
     active = [s for s in signals if s.signal_type not in policy.allow_types]
     if len(active) == 0:
         return EnforcementDecision(action="pass", signals=list(signals))
@@ -369,6 +377,18 @@ def evaluate_pipeline(
 
     if not isinstance(pipeline_result, PipelineResult):
         raise TypeError(f"Expected PipelineResult, got {type(pipeline_result).__name__}")
+
+    unavailable = [
+        signal
+        for signal in pipeline_result.signals
+        if signal.signal_type == "evaluation_unavailable"
+    ]
+    if unavailable:
+        return EnforcementDecision(
+            action="block",
+            signals=pipeline_result.signals,
+            reason="; ".join(f"evaluation_unavailable: {s.detail}" for s in unavailable),
+        )
 
     reasons: list[str] = []
     if pipeline_result.evaluation_unavailable_reason:

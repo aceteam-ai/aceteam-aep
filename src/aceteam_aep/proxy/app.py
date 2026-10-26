@@ -40,7 +40,9 @@ from ..safety.custom import (
     CustomPolicy,
     CustomPolicyStore,
     CustomSafetyDetector,
+    PrivateCompileUnavailableError,
     default_custom_policies,
+    require_private_compile_endpoint,
 )
 from ..spans import SpanTracker
 from ..types import Usage
@@ -105,12 +107,28 @@ def _custom_policy_from_write_fields(
     if policy_id is not None:
         payload["id"] = policy_id
     try:
-        return CustomPolicy.model_validate(payload).eager()
+        policy = CustomPolicy.model_validate(payload)
     except ValidationError as exc:
         return JSONResponse(
             {"error": "validation failed", "detail": exc.errors()},
             status_code=422,
         )
+    if policy.enabled:
+        try:
+            require_private_compile_endpoint()
+        except PrivateCompileUnavailableError:
+            return _private_compile_unavailable_response()
+    return policy.eager()
+
+
+def _private_compile_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "private policy compiler unavailable",
+            "code": "paw_private_compile_unavailable",
+        },
+        status_code=503,
+    )
 
 
 # Roles whose content must never reach the safety classifier as trusted
@@ -1714,7 +1732,13 @@ def create_proxy_app(
         if policy is None:
             return JSONResponse({"error": "custom policy not found"}, status_code=404)
         try:
+            require_private_compile_endpoint()
+        except PrivateCompileUnavailableError:
+            return _private_compile_unavailable_response()
+        try:
             passes = await policy(text)
+        except PrivateCompileUnavailableError:
+            return _private_compile_unavailable_response()
         except Exception as exc:
             log.warning("Policy test failed for %s: %s", policy.name, exc)
             return JSONResponse(
