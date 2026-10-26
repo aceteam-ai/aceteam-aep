@@ -21,12 +21,13 @@ Three levels of attestation, each building on the previous:
 
 This specification covers L1. L2 and L3 are follow-ups.
 
-L1 has two statement formats:
+L1 has three statement formats:
 
 - **format_version 1** (original, 2026-03-29): signs a narrow 5-field verdict (`call_id`, `action`, `signals`, `timestamp`, `confidence`). Chain position (`chain_height`/`chain_hash`/`prev_chain_hash`) and the signer's session identity live **outside** the signed bytes.
-- **format_version 2** (current, 2026-09-12): signs a complete statement that additionally binds schema/domain, signer identity, session/execution identity, sequence position, and the previous *authenticated* link. This is the format `AttestationEngine.sign_verdict` produces and `verify_chain`/`verify_chain_report` check today.
+- **format_version 2** (default, 2026-09-12): signs a complete statement that additionally binds schema/domain, signer identity, session/execution identity, sequence position, and the previous *authenticated* link. This remains the output of `AttestationEngine.sign_verdict` when no evaluation is supplied.
+- **format_version 3**: adds one signed `evaluation` object to the version 2 statement. The signer emits it when a caller supplies `evaluation`; a fresh signer called without it emits version 2. A signer keeps that first format version for its lifetime and rejects a call that would switch versions.
 
-format_version 1 is documented in §3–§4 and §6.1–§6.3 below for reference and because every format_version 2 entry still carries the equivalent format_version 1 fields unchanged (`verdict_hash`/`signature`/`chain_hash`) for callers that only need the narrow single-verdict guarantee. **A format_version 1 chain does not satisfy the strict full-chain guarantee in §8.2** — see §10 for why, and §5 / §6.5–§6.8 for the format_version 2 statement that replaces it.
+format_version 1 is documented in §3–§4 and §6.1–§6.3 below for reference and because every format_version 2 or 3 entry still carries the equivalent format_version 1 fields (`verdict_hash`/`signature`/`chain_hash`) for callers that only need the narrow single-verdict guarantee. **A format_version 1 chain does not satisfy the strict full-chain guarantee in §8.2** — see §10 for why, and §5 / §6.5–§6.9 for the authenticated statements that replace it.
 
 ## 2. Verdict Structure
 
@@ -150,6 +151,8 @@ X-AEP-Statement-Signature: ed25519:...
 
 `X-AEP-Confidence` is present only when the verdict has a confidence score (its absence, like a `null` field in the canonical JSON, means no confidence was supplied — not zero confidence). When signing is not enabled, all attestation headers are omitted.
 
+When supplied, commitments travel as `X-AEP-Input-Commitment`, `X-AEP-Output-Commitment`, and `X-AEP-Policy-Commitment`. A version 3 response also carries `X-AEP-Evaluation`, the canonical JSON of the signed evaluation. `entry_from_headers()` reconstructs the statement from these headers plus the proxy's `X-AEP-Call-Id` and `X-AEP-Enforcement` headers. It rejects case-colliding header names, duplicate JSON object keys, and noncanonical evaluation header bytes, then restores required `null` members omitted by canonical JSON before verification.
+
 ## 6. Audit Chain
 
 ### 6.1 format_version 1 Chain Structure (legacy, unsigned links)
@@ -236,6 +239,41 @@ A `"valid"` result from §8.2 proves the presented entries are an unbroken, auth
 
 **It does not prove that sequence is the complete history.** A presenter can still legitimately withhold everything after some point, or (for a chain persisted externally, e.g. as a JSONL export) present a truncated prefix. Detecting truncation or a forked/conflicting history requires a previously trusted checkpoint external to the chain itself — an expected final `sequence`/`statement_digest`/`execution_id` obtained out of band — not something this specification adds automatically. Certificate Transparency's signed checkpoints and consistency proofs are a useful precedent for this problem ([RFC 9162](https://www.rfc-editor.org/rfc/rfc9162.html)); it likewise does not prove unobserved events never occurred. This slice does not add a public transparency service — only the authenticated-statement primitive a checkpoint scheme would sit on top of.
 
+### 6.9 format_version 3: Bound Evaluation
+
+Version 3 adds one required `evaluation` object to the version 2 statement. It is included in `statement_digest` and the Ed25519 statement signature. The existing narrow `verdict_hash` and signature retain their version 1 meaning; they do not authenticate `evaluation`. `confidence` also retains its existing meaning and is not a pipeline score.
+
+```json
+{
+  "mode": "pipeline",
+  "decided_by": "pipeline:unavailable",
+  "phases": [
+    {
+      "phase": "input",
+      "action": "block",
+      "pipeline": {
+        "layers": [
+          {"name": "rules", "status": "evaluated", "p_safe": 0.8, "reason_code": null},
+          {"name": "judge", "status": "unavailable", "p_safe": null, "reason_code": "evaluator_unavailable"}
+        ],
+        "p_safe": null,
+        "calibrated": false,
+        "pass_above": 0.8,
+        "block_below": 0.2,
+        "unavailable": ["judge"]
+      },
+      "residual": []
+    }
+  ]
+}
+```
+
+`mode` is `pipeline` or `legacy`. A receipt has an input phase and, if output was checked, an output phase. Each phase action is `pass`, `flag`, or `block`. A legacy phase has `pipeline: null`; a pipeline phase carries the listed thresholds and layers. Layer status is `evaluated`, `skipped`, `unavailable`, or `failed`. `reason_code` is one of `evaluator_unavailable`, `evaluator_raised`, `invalid_result`, or `invalid_score`, or `null`; arbitrary exception text is rejected. The `unavailable` list names, in layer order, every layer that did not evaluate. Its aggregate `p_safe` is `null` whenever that list is nonempty. `calibrated` remains `false` until a calibration model is available. All `p_safe` values are heuristic scores, not a calibrated probability of safety.
+
+`decided_by` is `pipeline:aggregate`, `pipeline:unavailable`, `residual:<detector>`, `legacy:<detector>`, or `none`. Detector and layer names are identifiers, never free text. The evaluation schema rejects extra fields and non-finite or out-of-range scores before signing. Version 2 statements remain byte-for-byte compatible when no evaluation is supplied. A strict verifier accepts a chain of one version only: all version 2 or all version 3. A mixed chain is invalid; a version 1 or incomplete chain is `legacy_unsupported`. Older SDK verifiers cannot verify version 3 and must report it as unsupported.
+
+`policy_commitment(policy, custom_policies)` hashes canonical JSON of the effective enforcement policy, including its thresholds, detector overrides, and ordered pipeline layers. Numeric thresholds are serialized as floats, so `0` and `0.0` commit identically. Each enabled custom policy contributes its ID, action-relevant settings, and a SHA-256 digest of its rule. The rule text never enters the receipt or the commitment input. Disabled custom policies do not affect the digest. The caller must pass the current policy and custom policy store at decision time.
+
 ## 7. Key Management
 
 ### 7.1 Key Generation
@@ -295,18 +333,21 @@ Multiple keys support rotation. Verifiers match `X-AEP-Signer-Id` to the key lis
 
 Never raises: malformed hex, wrong-length signatures, or other crypto-library errors are treated as "does not verify," not as an exception.
 
-### 8.2 Chain Verification (strict, format_version 2)
+### 8.2 Chain Verification (strict, format_version 2 or 3)
 
 ```
 1. Obtain all entries E_0 .. E_N (from archived response headers or the
    engine's exported chain).
-2. If ANY entry lacks a complete format_version 2 statement (schema,
+2. If an entry lacks the version 2 authenticated fields (schema,
    format_version, signer_id, execution_id, call_id, action, signals,
    timestamp, sequence, prev_link, statement_digest, statement_signature):
      -> status = "legacy_unsupported". Not evidence of tampering — the
         older format's bytes cannot honestly be reinterpreted under this
-        guarantee. Do not silently upgrade it.
-3. All entries must share exactly one execution_id (§6.7); if an expected
+        guarantee. Do not silently upgrade it. A declared version 3 entry
+        missing its required evaluation is invalid.
+3. Every entry must have the same format_version, either 2 or 3. A mixed
+   version chain is invalid. All entries must share exactly one execution_id
+   (§6.7); if an expected
    execution_id was supplied, it must match.
 4. For each E_i (i = 0..N):
    a. sequence must equal i exactly (an int, not a bool).
@@ -314,7 +355,8 @@ Never raises: malformed hex, wrong-length signatures, or other crypto-library er
         - genesis_link(execution_id)          if i == 0   (§6.5)
         - statement_digest recomputed for E_{i-1}   otherwise
       (never a value read directly off E_i's own presented fields).
-   c. Recompute statement_digest from E_i's presented fields (§3.1, §6.5)
+   c. Recompute statement_digest from E_i's presented fields (§3.1, §6.5,
+      and §6.9 for version 3)
       — never trust a presented "statement_digest" field for this decision.
    d. Ed25519_Verify(public_key, recomputed_digest, E_i.statement_signature)
       must succeed.
@@ -339,13 +381,13 @@ Exit codes: `0` for `"valid"` (also for an empty chain), non-zero for `"legacy_u
 
 An AEP-Attestation L1 conformant proxy MUST:
 
-1. Sign every verdict with Ed25519 when `--sign-key` is provided, producing both the format_version 1 narrow fields (backward compatibility) and the format_version 2 authenticated statement.
-2. Include the format_version 1 and format_version 2 attestation headers (§5) in every signed response, including `signals` and `timestamp` — omitting fields needed to recompute the statement digest from the transport is a conformance failure (this is the exact defect fixed by aceteam-ai/aceteam#9657).
+1. Sign every verdict with Ed25519 when `--sign-key` is provided, producing the format_version 1 narrow fields (backward compatibility) and a format_version 2 or 3 authenticated statement.
+2. Include the narrow and authenticated statement headers (§5) in every signed response, including `signals`, `timestamp`, and `evaluation` for version 3 — omitting fields needed to recompute the statement digest from the transport is a conformance failure (this is the exact defect fixed by aceteam-ai/aceteam#9657).
 3. Generate a distinct `execution_id` per engine instance and never reuse one across sessions.
 4. Maintain a monotonically increasing, contiguous `sequence` per session.
 5. Serve public keys at `/.well-known/aep-keys.json`.
 6. Use the canonicalization contract in §3.1 for both `verdict_hash` and `statement_digest`, rejecting non-finite floats and malformed field types rather than silently reinterpreting them.
-7. Verifiers MUST report format_version 1 (or otherwise incomplete) chains as `"legacy_unsupported"` rather than upgrading them to the format_version 2 guarantee, and MUST NOT make an authentication decision based on `chain_hash`/`prev_chain_hash`/`chain_height` alone.
+7. Verifiers MUST report format_version 1 and incomplete version 2 chains as `"legacy_unsupported"` rather than upgrading them to the strict guarantee. A malformed version 3 entry or a mixed version chain is invalid. Verifiers MUST NOT make an authentication decision based on `chain_hash`/`prev_chain_hash`/`chain_height` alone.
 
 ## 10. Security Considerations
 

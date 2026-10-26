@@ -455,7 +455,7 @@ def _run_keygen(args: argparse.Namespace) -> None:
 
 
 def _run_verify(args: argparse.Namespace) -> None:
-    """Verify an audit chain (format_version 2 strict guarantee)."""
+    """Verify a format_version 2 or 3 authenticated audit chain."""
     import json
     from pathlib import Path
 
@@ -486,6 +486,9 @@ def _run_verify(args: argparse.Namespace) -> None:
         print(f"  Height:  0 → {len(chain) - 1}")
         print(f"  Execution: {chain[-1].get('execution_id')}")
         print(f"  Final statement digest: {chain[-1].get('statement_digest')}")
+        for index, entry in enumerate(chain):
+            if entry.get("format_version") == 3:
+                print(f"  Entry {index} decided by: {entry['evaluation']['decided_by']}")
         print(
             "  Note: a valid chain proves an unbroken authenticated sequence, "
             "not that it is the complete history — see docs/protocol/aep-attestation.md §6.5."
@@ -496,7 +499,7 @@ def _run_verify(args: argparse.Namespace) -> None:
         print(
             "  These entries may still satisfy the narrow per-verdict signature check, "
             "but cannot be upgraded to the strict full-chain guarantee. Re-sign with a "
-            "current proxy to get format_version 2 statements."
+            "current proxy to get format_version 2 or 3 statements."
         )
         sys.exit(1)
     else:
