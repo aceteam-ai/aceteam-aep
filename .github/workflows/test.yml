@@ -29,9 +29,9 @@ jobs:
       - name: Install test dependencies
         id: install
         run: |
-          # Keep locked dev tools and lightweight extras, without native ML builds.
+          # Keep locked dev tools and PAW fixtures; omit optional Torch model stacks.
           uv export --frozen --extra dev --no-emit-project \
-            --prune torch --prune transformers --prune programasweights \
+            --prune torch --prune transformers \
             --output-file "$RUNNER_TEMP/aep-test-requirements.txt"
           uv venv
           uv pip sync "$RUNNER_TEMP/aep-test-requirements.txt"
