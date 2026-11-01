@@ -149,3 +149,21 @@ def test_tool_argument_secret_is_blocked_without_echo() -> None:
         response = _request(client, "hello")
     assert response.status_code == 400
     _assert_no_secret_fragment(response.text)
+
+
+def test_refusal_sibling_secret_is_blocked_without_echo() -> None:
+    client = TestClient(create_proxy_app(detectors=[SecretDetector()], dashboard=False))
+    response_data = {
+        "model": "gpt-4o",
+        "choices": [{"message": {"role": "assistant", "content": "safe", "refusal": _SECRET}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 2},
+    }
+    with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as upstream_cls:
+        upstream = AsyncMock()
+        upstream.__aenter__ = AsyncMock(return_value=upstream)
+        upstream.__aexit__ = AsyncMock(return_value=False)
+        upstream.request = AsyncMock(return_value=httpx.Response(200, json=response_data))
+        upstream_cls.return_value = upstream
+        response = _request(client, "hello")
+    assert response.status_code == 400
+    _assert_no_secret_fragment(response.text)

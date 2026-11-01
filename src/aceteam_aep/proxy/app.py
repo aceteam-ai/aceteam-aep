@@ -167,26 +167,20 @@ def _extract_text_from_messages(
 
 
 def _extract_output_text(data: dict[str, Any]) -> str:
-    """Extract all client-facing assistant text, including tool arguments."""
+    """Extract all strings returned to the client for output safety checks."""
     parts: list[str] = []
-    for choice in data.get("choices", []):
-        msg = choice.get("message", {})
-        content = msg.get("content")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            parts.extend(block.get("text", "") for block in content if isinstance(block, dict))
-        function_call = msg.get("function_call") or {}
-        if isinstance(function_call, dict) and isinstance(function_call.get("arguments"), str):
-            parts.append(function_call["arguments"])
-        for tool in msg.get("tool_calls") or []:
-            if isinstance(tool, dict):
-                function = tool.get("function") or {}
-                if isinstance(function, dict) and isinstance(function.get("arguments"), str):
-                    parts.append(function["arguments"])
-    for block in data.get("content") or []:
-        if isinstance(block, dict) and isinstance(block.get("text"), str):
-            parts.append(block["text"])
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(data)
     return " ".join(parts)
 
 

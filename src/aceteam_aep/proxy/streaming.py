@@ -44,63 +44,37 @@ _LABEL_TAIL = re.compile(
 
 
 def _stream_fields(chunk: dict[str, Any]) -> dict[str, str]:
-    """Return client-facing text by stable stream channel, without protocol metadata."""
-    fields: dict[str, str] = {}
-    for position, choice in enumerate(chunk.get("choices") or []):
-        if not isinstance(choice, dict):
-            continue
-        choice_id = choice.get("index", position)
-        delta = choice.get("delta") or {}
-        if not isinstance(delta, dict):
-            continue
-        for key in ("content", "refusal"):
-            if isinstance(delta.get(key), str):
-                fields[f"choice/{choice_id}/{key}"] = delta[key]
-        function = delta.get("function_call") or {}
-        if isinstance(function, dict) and isinstance(function.get("arguments"), str):
-            fields[f"choice/{choice_id}/function"] = function["arguments"]
-        for tool_position, tool in enumerate(delta.get("tool_calls") or []):
-            if not isinstance(tool, dict):
-                continue
-            function = tool.get("function") or {}
-            if isinstance(function, dict) and isinstance(function.get("arguments"), str):
-                tool_id = tool.get("index", tool_position)
-                fields[f"choice/{choice_id}/tool/{tool_id}"] = function["arguments"]
-    delta = chunk.get("delta") or {}
-    if isinstance(delta, dict):
-        for key in ("text", "partial_json"):
-            if isinstance(delta.get(key), str):
-                fields[f"anthropic/{chunk.get('index', 0)}/{key}"] = delta[key]
-    error = chunk.get("error")
-    if isinstance(error, dict):
-        for key, value in error.items():
-            if isinstance(value, str) and key not in {"type", "code"}:
-                fields[f"error/{key}"] = value
-    elif isinstance(error, str):
-        fields["error"] = error
-    if not fields:
-        # Unknown provider frames must not become an unchecked escape hatch.
-        # Stable paths preserve fragments split across frames.
-        def collect(value: Any, path: str) -> None:
-            if isinstance(value, str):
-                fields[path] = value
-            elif isinstance(value, dict):
-                for key, item in value.items():
-                    if key not in {
-                        "model",
-                        "id",
-                        "type",
-                        "object",
-                        "role",
-                        "index",
-                        "finish_reason",
-                    }:
-                        collect(item, f"{path}/{key}")
-            elif isinstance(value, list):
-                for index, item in enumerate(value):
-                    collect(item, f"{path}/{index}")
+    """Return every semantic string by stable stream channel.
 
-        collect(chunk, "unknown")
+    Protocol metadata is checked in the complete raw frame separately. Its
+    values are not delta fragments and would otherwise hold every frame until
+    the stream limit (for example a repeated ``id`` or ``model``).
+    """
+    fields: dict[str, str] = {}
+
+    def collect(value: Any, path: str) -> None:
+        if isinstance(value, str):
+            fields[path] = value
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if key not in {
+                    "model",
+                    "id",
+                    "type",
+                    "object",
+                    "role",
+                    "index",
+                    "finish_reason",
+                    "created",
+                    "created_at",
+                }:
+                    collect(item, f"{path}/{key}")
+        elif isinstance(value, list):
+            for position, item in enumerate(value):
+                channel_index = item.get("index", position) if isinstance(item, dict) else position
+                collect(item, f"{path}/{channel_index}")
+
+    collect(chunk, "stream")
     return fields
 
 
@@ -309,6 +283,10 @@ async def handle_streaming_request(
             if pending_size > _MAX_FRAME_CHARS:
                 raise ValueError("stream holdback limit exceeded")
             for chunk in chunks:
+                raw_text = json.dumps(chunk, ensure_ascii=False)
+                if await contains_blocked_secret(raw_text, registry, policy, call_id):
+                    pending_fields["raw/frame"] = raw_text
+                    return True, False
                 for channel, fragment in _stream_fields(chunk).items():
                     pending_fields[channel] = pending_fields.get(channel, "") + fragment
                     if await contains_blocked_secret(

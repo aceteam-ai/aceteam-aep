@@ -229,6 +229,10 @@ async def _call_handler(on_complete: Any = None) -> Any:
         ),
         ({"error": {"message": "AKIA"}}, {"error": {"message": "A" * 16}}),
         ({"provider_text": "AKIA"}, {"provider_text": "A" * 16}),
+        (
+            {"choices": [{"delta": {"content": "safe ", "unrecognized": "AKIA"}}]},
+            {"choices": [{"delta": {"content": "next ", "unrecognized": "A" * 16}}]},
+        ),
     ],
 )
 async def test_split_secret_never_reaches_stream_client(
@@ -275,6 +279,30 @@ async def test_secret_policy_flag_streams_without_block(monkeypatch: pytest.Monk
     body = await _collect_body(response)
     assert secret in body
     assert '"aep_safety_block": true' not in body
+
+
+async def test_complete_secret_in_sibling_field_is_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "AKIA" + "A" * 16
+    chunk = {"choices": [{"delta": {"content": "safe ", "unrecognized": secret}}]}
+    content = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, text=content))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="mixed-fields",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert secret not in body
+    assert '"aep_safety_block": true' in body
 
 
 async def test_oversize_comment_frame_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
