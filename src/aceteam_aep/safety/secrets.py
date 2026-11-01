@@ -77,13 +77,12 @@ class SecretDetector(SafetyDetector):
             for pattern, desc in _SECRET_PATTERNS:
                 for match in pattern.finditer(text):
                     start, end = match.span()
-                    redacted = text[start : min(start + 8, end)] + "..."
                     signals.append(
                         SafetySignal(
                             signal_type="secret_leak",
                             severity="high",
                             call_id=call_id,
-                            detail=f"{desc} detected in {source} [{start}:{end}] ({redacted})",
+                            detail=f"{desc} detected in {source} [{start}:{end}]",
                             score=1.0,
                         )
                     )
