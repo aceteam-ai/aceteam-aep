@@ -22,7 +22,12 @@ from typing import Any
 import httpx
 from starlette.responses import Response, StreamingResponse
 
-from ..enforcement import EnforcementPolicy, evaluate, evaluate_pipeline_with_residual
+from ..enforcement import (
+    EnforcementDecision,
+    EnforcementPolicy,
+    evaluate,
+    evaluate_pipeline_with_residual,
+)
 from ..safety.base import DetectorRegistry
 from ..safety.secrets import SecretDetector
 
@@ -67,8 +72,35 @@ def _stream_fields(chunk: dict[str, Any]) -> dict[str, str]:
             if isinstance(delta.get(key), str):
                 fields[f"anthropic/{chunk.get('index', 0)}/{key}"] = delta[key]
     error = chunk.get("error")
-    if error is not None:
-        fields["error"] = json.dumps(error, ensure_ascii=False)
+    if isinstance(error, dict):
+        for key, value in error.items():
+            if isinstance(value, str) and key not in {"type", "code"}:
+                fields[f"error/{key}"] = value
+    elif isinstance(error, str):
+        fields["error"] = error
+    if not fields:
+        # Unknown provider frames must not become an unchecked escape hatch.
+        # Stable paths preserve fragments split across frames.
+        def collect(value: Any, path: str) -> None:
+            if isinstance(value, str):
+                fields[path] = value
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    if key not in {
+                        "model",
+                        "id",
+                        "type",
+                        "object",
+                        "role",
+                        "index",
+                        "finish_reason",
+                    }:
+                        collect(item, f"{path}/{key}")
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    collect(item, f"{path}/{index}")
+
+        collect(chunk, "unknown")
     return fields
 
 
@@ -90,11 +122,7 @@ async def contains_blocked_secret(
 
 def _needs_holdback(text: str) -> bool:
     """Keep an unfinished credential token or label until its boundary is known."""
-    return bool(
-        _TOKEN_END.search(text)
-        or _LABEL_TAIL.search(text)
-        or "-----BEGIN" in text
-    )
+    return bool(_TOKEN_END.search(text) or _LABEL_TAIL.search(text) or "-----BEGIN" in text)
 
 
 def _sse_field_value(line: str) -> tuple[str, str] | None:
@@ -220,7 +248,25 @@ async def handle_streaming_request(
     # shape preserved) instead of returning an empty 200 SSE stream.
     if upstream.status_code < 200 or upstream.status_code >= 300:
         try:
-            error_body = await upstream.aread()
+            error_parts: list[bytes] = []
+            error_size = 0
+            error_iterator = upstream.aiter_bytes().__aiter__()
+            error_deadline = time.monotonic() + _STREAM_SECONDS
+            while True:
+                try:
+                    part = await asyncio.wait_for(
+                        error_iterator.__anext__(),
+                        timeout=max(0, error_deadline - time.monotonic()),
+                    )
+                except StopAsyncIteration:
+                    break
+                error_size += len(part)
+                if error_size > _MAX_FRAME_CHARS:
+                    raise ValueError("upstream error body too large")
+                error_parts.append(part)
+            error_body = b"".join(error_parts)
+        except (TimeoutError, ValueError):
+            error_body = b'{"error":{"message":"AEP proxy: upstream response unavailable"}}'
         finally:
             await upstream.aclose()
             await client.aclose()
@@ -228,7 +274,14 @@ async def handle_streaming_request(
         if secret_guard and await contains_blocked_secret(
             error_body.decode("utf-8", errors="replace"), registry, policy, call_id
         ):
-            error_body = b'{"error":{"message":"AEP safety: upstream response blocked","code":"safety_block"}}'
+            error_body = json.dumps(
+                {
+                    "error": {
+                        "message": "AEP safety: upstream response blocked",
+                        "code": "safety_block",
+                    }
+                }
+            ).encode()
         return Response(
             content=error_body,
             status_code=upstream.status_code,
@@ -276,7 +329,10 @@ async def handle_streaming_request(
                 except StopAsyncIteration:
                     break
                 stream_size += len(line) + 1
-                if stream_size > _MAX_STREAM_CHARS or sum(map(len, event_lines)) + len(line) > _MAX_FRAME_CHARS:
+                if (
+                    stream_size > _MAX_STREAM_CHARS
+                    or sum(map(len, event_lines)) + len(line) > _MAX_FRAME_CHARS
+                ):
                     raise ValueError("stream size limit exceeded")
                 if upstream_done:
                     if line.strip():
@@ -289,7 +345,11 @@ async def handle_streaming_request(
                 # SSE fields form an event only at the blank-line boundary.
                 # Classify the whole frame so terminal fields in either order
                 # are withheld, without swallowing later non-terminal events.
-                frame = "".join(f"{event_line}\n" for event_line in event_lines)
+                frame = "".join(
+                    f"{event_line}\n"
+                    for event_line in event_lines
+                    if not (secret_guard and event_line.startswith(":"))
+                )
                 if any(_is_terminal_sse_line(event_line) for event_line in event_lines):
                     upstream_done = True
                     event_lines.clear()
@@ -299,6 +359,37 @@ async def handle_streaming_request(
                     for event_line in event_lines
                     if (parsed := _parse_sse_line(event_line)) is not None
                 ]
+                if secret_guard:
+                    data_lines = [
+                        item
+                        for item in event_lines
+                        if (_sse_field_value(item) or (None,))[0] == "data"
+                    ]
+                    if len(data_lines) != len(parsed_chunks):
+                        raise ValueError("unsupported stream data frame")
+                    for item in event_lines:
+                        field_value = _sse_field_value(item)
+                        if field_value is None:
+                            continue
+                        if field_value[0] not in {"data", "event"}:
+                            raise ValueError("unsupported stream field")
+                        if field_value[0] == "event" and field_value[1] not in {
+                            "message",
+                            "message_start",
+                            "message_stop",
+                            "message_delta",
+                            "content_block_start",
+                            "content_block_delta",
+                            "content_block_stop",
+                            "ping",
+                            "error",
+                        }:
+                            raise ValueError("unsupported stream event")
+                    if not parsed_chunks and not any(
+                        _is_message_stop_sse_line(item) for item in event_lines
+                    ):
+                        event_lines.clear()
+                        continue
                 is_message_stop = any(_is_message_stop_sse_line(item) for item in event_lines)
                 is_message_stop |= any(
                     parsed.get("type") == "message_stop" for parsed in parsed_chunks
@@ -342,6 +433,8 @@ async def handle_streaming_request(
                         _is_message_stop_sse_line(item) for item in event_lines
                     ) or any(parsed.get("type") == "message_stop" for parsed in partial_chunks)
                     if not is_message_stop:
+                        if secret_guard and not partial_chunks:
+                            raise ValueError("unsupported trailing stream frame")
                         accumulated_chunks.extend(partial_chunks)
                         frame = "".join(f"{event_line}\n" for event_line in event_lines)
                         if secret_guard:
@@ -392,8 +485,24 @@ async def handle_streaming_request(
                 output_tokens,
             )
 
-        # Run safety detectors
-        if pipeline:
+        # A blocked secret is never released, even when a pipeline handles
+        # other signal types or the upstream terminates without a final frame.
+        if blocked_early:
+            signals = []
+            for detector in registry._detectors:
+                if isinstance(detector, SecretDetector):
+                    for channel_text in pending_fields.values():
+                        detected = await detector.check(
+                            input_text="", output_text=channel_text, call_id=call_id
+                        )
+                        for signal in detected:
+                            signal.detector = detector.name
+                        signals.extend(detected)
+            decision = evaluate(signals, policy)
+        elif not safety_enabled:
+            signals = []
+            decision = EnforcementDecision(action="pass")
+        elif pipeline:
             pipeline_result = await pipeline.evaluate(
                 input_text=input_text,
                 output_text=output_text,
@@ -424,10 +533,7 @@ async def handle_streaming_request(
                 "aep_safety_block": True,
                 "action": decision.action,
                 "reason": decision.reason,
-                "signals": [
-                    {"type": s.signal_type, "severity": s.severity}
-                    for s in signals
-                ],
+                "signals": [{"type": s.signal_type, "severity": s.severity} for s in signals],
             }
             yield f"data: {json.dumps(safety_event)}\n\n"
 
@@ -445,7 +551,12 @@ async def handle_streaming_request(
         # Forward exactly one OpenAI terminal marker, after any safety block.
         # Other SSE protocols (for example Anthropic message_stop) do not use
         # [DONE], so do not synthesize one for them.
-        if upstream_done:
+        if blocked_early:
+            if "/v1/messages" in target_url:
+                yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+            else:
+                yield "data: [DONE]\n\n"
+        elif upstream_done:
             yield "data: [DONE]\n\n"
         elif terminal_event is not None:
             yield terminal_event

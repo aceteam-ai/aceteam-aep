@@ -1044,7 +1044,12 @@ def create_proxy_app(
                 upstream_resp.text, state.registry, state.policy, call_id
             ):
                 return JSONResponse(
-                    {"error": {"message": "AEP safety: upstream response blocked", "code": "safety_block"}},
+                    {
+                        "error": {
+                            "message": "AEP safety: upstream response blocked",
+                            "code": "safety_block",
+                        }
+                    },
                     status_code=upstream_resp.status_code,
                 )
             return Response(
@@ -1064,7 +1069,12 @@ def create_proxy_app(
                 upstream_resp.text, state.registry, state.policy, call_id
             ):
                 return JSONResponse(
-                    {"error": {"message": "AEP safety: upstream response blocked", "code": "safety_block"}},
+                    {
+                        "error": {
+                            "message": "AEP safety: upstream response blocked",
+                            "code": "safety_block",
+                        }
+                    },
                     status_code=upstream_resp.status_code,
                 )
             return Response(
@@ -1285,8 +1295,7 @@ def create_proxy_app(
         # Sign verdict and add attestation headers (if signing enabled)
         if attestation_engine is not None:
             signal_dicts = [
-                {"signal_type": s.signal_type, "severity": s.severity}
-                for s in all_signals
+                {"signal_type": s.signal_type, "severity": s.severity} for s in all_signals
             ]
             attest_headers = attestation_engine.sign_verdict(
                 call_id=call_id,
@@ -1306,10 +1315,7 @@ def create_proxy_app(
         # Debug: log the response
         if debug:
             log.debug(
-                (
-                    "RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, "
-                    "status=%d"
-                ),
+                ("RESPONSE %s %s %s: model=%s, input_tokens=%d, output_tokens=%d, status=%d"),
                 call_id,
                 request.method,
                 path,

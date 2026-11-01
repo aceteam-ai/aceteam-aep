@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
@@ -20,6 +21,7 @@ from aceteam_aep.proxy.streaming import (
 )
 from aceteam_aep.safety.base import DetectorRegistry
 from aceteam_aep.safety.pipeline import LayerResult, SafetyPipeline
+from aceteam_aep.safety.secrets import SecretDetector
 
 
 def test_parse_sse_data_line() -> None:
@@ -180,6 +182,249 @@ async def _call_handler(on_complete: Any = None) -> Any:
         policy=EnforcementPolicy(),
         on_complete=on_complete,
     )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (
+            {"choices": [{"delta": {"content": "AKIA"}}]},
+            {"choices": [{"delta": {"content": "A" * 16}}]},
+        ),
+        (
+            {
+                "choices": [
+                    {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "AKIA"}}]}}
+                ]
+            },
+            {
+                "choices": [
+                    {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "A" * 16}}]}}
+                ]
+            },
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "AKIA"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "A" * 16},
+            },
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "AKIA"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "A" * 16},
+            },
+        ),
+        ({"error": {"message": "AKIA"}}, {"error": {"message": "A" * 16}}),
+        ({"provider_text": "AKIA"}, {"provider_text": "A" * 16}),
+    ],
+)
+async def test_split_secret_never_reaches_stream_client(
+    monkeypatch: pytest.MonkeyPatch, first: dict[str, Any], second: dict[str, Any]
+) -> None:
+    content = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in (first, second))
+    content += "data: [DONE]\n\n"
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, text=content))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="split-secret",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert "AKIA" not in body
+    assert "A" * 16 not in body
+    assert '"aep_safety_block": true' in body
+
+
+async def test_secret_policy_flag_streams_without_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "AKIA" + "A" * 16
+    content = f"data: {json.dumps({'choices': [{'delta': {'content': secret}}]})}\n\n"
+    content += "data: [DONE]\n\n"
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, text=content))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="flag-secret",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy.from_dict({"detectors": {"secret_leak": {"action": "flag"}}}),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert secret in body
+    assert '"aep_safety_block": true' not in body
+
+
+async def test_oversize_comment_frame_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_transport(
+        monkeypatch,
+        lambda _request: httpx.Response(200, text=":" + "x" * (65 * 1024) + "\n\n"),
+    )
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="oversize-frame",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert "x" * 100 not in body
+    assert "event: error" in body
+
+
+async def test_unparsed_data_is_never_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = "data: AKIA" + "A" * 16 + "\n\n"
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, text=raw))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="malformed-frame",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert "AKIA" not in body
+    assert "event: error" in body
+
+
+async def test_comment_payload_is_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = ": AKIA" + "A" * 16 + "\n\n"
+    raw += 'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n'
+    raw += "data: [DONE]\n\n"
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, text=raw))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="comment-frame",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert "AKIA" not in body
+    assert "hello " in body
+
+
+async def test_clean_stream_flushes_before_upstream_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = asyncio.Event()
+
+    class PausedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n'
+            await release.wait()
+            yield b'data: {"choices":[{"delta":{"content":"world "}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, stream=PausedStream()))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="early-flush",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    first = await asyncio.wait_for(anext(response.body_iterator), timeout=1)
+    assert "hello " in first
+    release.set()
+    assert "world " in await _collect_body(response)
+
+
+async def test_interrupted_secret_fragment_and_exception_are_not_echoed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "AKIA" + "A" * 16
+
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"type":"content_block_delta","delta":{"text":"AKIA"}}\n\n'
+            raise httpx.ReadError(f"upstream failed with {secret}")
+
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, stream=FailingStream()))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/messages",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="interrupted-secret",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert "AKIA" not in body
+    assert "upstream failed" not in body
+    assert "event: error" in body
+
+
+async def test_total_stream_deadline_closes_idle_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    class IdleStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield b'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n'
+            await asyncio.sleep(1)
+            yield b"data: [DONE]\n\n"
+
+    monkeypatch.setattr("aceteam_aep.proxy.streaming._STREAM_SECONDS", 0.02)
+    _patch_transport(monkeypatch, lambda _request: httpx.Response(200, stream=IdleStream()))
+    registry = DetectorRegistry()
+    registry.add(SecretDetector())
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={},
+        call_id="idle-stream",
+        input_text="clean",
+        registry=registry,
+        policy=EnforcementPolicy(),
+    )
+    assert isinstance(response, StreamingResponse)
+    body = await asyncio.wait_for(_collect_body(response), timeout=1)
+    assert "hello " in body
+    assert "event: error" in body
 
 
 @pytest.mark.parametrize("done_line", [b"data: [DONE]", b"data:[DONE]"])
@@ -456,7 +701,7 @@ async def test_mid_stream_failure_emits_error_event(
     payload = json.loads(last_data[6:])
     assert payload["type"] == "error"
     assert payload["error"]["type"] == "api_error"
-    assert "connection reset by upstream" in payload["error"]["message"]
+    assert payload["error"]["message"] == "AEP proxy: upstream stream interrupted"
 
     # Interrupted streams are not metered as successful completions
     assert completions == []

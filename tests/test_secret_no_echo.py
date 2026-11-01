@@ -9,7 +9,7 @@ import httpx
 from starlette.testclient import TestClient
 
 from aceteam_aep.attestation import generate_keypair
-from aceteam_aep.proxy.app import create_proxy_app
+from aceteam_aep.proxy.app import _extract_output_text, create_proxy_app
 from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 from aceteam_aep.safety.secrets import SecretDetector
 
@@ -113,3 +113,39 @@ async def test_secret_signal_detail_has_no_secret_fragment() -> None:
     assert len(signals) == 2
     for signal in signals:
         _assert_no_secret_fragment(signal.detail)
+
+
+def test_tool_arguments_are_output_safety_text() -> None:
+    data = {
+        "choices": [
+            {"message": {"tool_calls": [{"function": {"arguments": _SECRET}}]}},
+            {"message": {"function_call": {"arguments": _SECRET}}},
+        ]
+    }
+    assert _extract_output_text(data) == f"{_SECRET} {_SECRET}"
+
+
+def test_tool_argument_secret_is_blocked_without_echo() -> None:
+    client = TestClient(create_proxy_app(detectors=[SecretDetector()], dashboard=False))
+    response_data = {
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"function": {"arguments": _SECRET}}],
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 2},
+    }
+    with patch("aceteam_aep.proxy.app.httpx.AsyncClient") as upstream_cls:
+        upstream = AsyncMock()
+        upstream.__aenter__ = AsyncMock(return_value=upstream)
+        upstream.__aexit__ = AsyncMock(return_value=False)
+        upstream.request = AsyncMock(return_value=httpx.Response(200, json=response_data))
+        upstream_cls.return_value = upstream
+        response = _request(client, "hello")
+    assert response.status_code == 400
+    _assert_no_secret_fragment(response.text)
