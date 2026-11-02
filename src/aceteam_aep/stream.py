@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .costs import CostNode
-from .types import Usage
+from .types import AepResponseMetadata, Usage
 
 StreamEventType = Literal[
     "span_start",
@@ -18,6 +18,7 @@ StreamEventType = Literal[
     "budget_warning",
     "error",
     "end",
+    "response_metadata",
 ]
 
 
@@ -27,6 +28,20 @@ class StreamEvent:
 
     type: StreamEventType
     data: dict[str, Any] = field(default_factory=dict)
+    response_metadata: AepResponseMetadata | None = None
+
+
+def response_metadata_event(
+    metadata: AepResponseMetadata,
+    *,
+    complete: bool,
+) -> StreamEvent:
+    """Report gateway headers, including on streams that later fail or close."""
+    return StreamEvent(
+        type="response_metadata",
+        data={"complete": complete},
+        response_metadata=metadata,
+    )
 
 
 def span_start_event(
@@ -111,6 +126,7 @@ def end_event(usage: Usage | None = None, finish_reason: str | None = None) -> S
 __all__ = [
     "StreamEvent",
     "StreamEventType",
+    "response_metadata_event",
     "chunk_event",
     "cost_event",
     "end_event",

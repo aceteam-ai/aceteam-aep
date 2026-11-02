@@ -2,7 +2,7 @@
 
 from .agent import run_agent_loop, run_agent_loop_stream
 from .budget import BudgetEnforcer, BudgetExceededError, BudgetState, ReservationToken
-from .client import ChatClient
+from .client import ChatClient, ContextChatClient, GatewayResponseError, current_tool_origin
 from .costs import CostNode, CostTracker
 from .embeddings import CohereEmbeddings, EmbeddingClient, OllamaEmbeddings, OpenAIEmbeddings
 from .enforcement import DetectorPolicy, EnforcementDecision, EnforcementPolicy
@@ -33,6 +33,8 @@ from .structured import structured_output
 from .text_splitter import split_text
 from .tools import Tool, tool
 from .types import (
+    AepRequestContext,
+    AepResponseMetadata,
     AgentResult,
     ChatMessage,
     ChatResponse,
@@ -55,6 +57,9 @@ __all__ = [
     "ReservationToken",
     # Client
     "ChatClient",
+    "ContextChatClient",
+    "GatewayResponseError",
+    "current_tool_origin",
     "create_client",
     # Costs
     "CostNode",
@@ -130,6 +135,8 @@ __all__ = [
     "uninstrument",
     # Types
     "AgentResult",
+    "AepRequestContext",
+    "AepResponseMetadata",
     "ChatMessage",
     "ChatResponse",
     "ContentBlock",
