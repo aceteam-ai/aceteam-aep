@@ -55,9 +55,13 @@ def _price_custom_usage(pricing: PricingProvider, model: str, usage: Usage) -> D
         parameters = signature(pricing.get_cost).parameters
     except (TypeError, ValueError):
         parameters = {}
-    accepts_kwargs = any(p.kind is Parameter.VAR_KEYWORD for p in parameters.values())
-    accepts_read = accepts_kwargs or "cached_input_tokens" in parameters
-    accepts_creation = accepts_kwargs or "cache_creation_input_tokens" in parameters
+    # A variadic **kwargs can swallow a cache argument without billing it.
+    # Only an explicit parameter establishes support for that token category.
+    keyword_kinds = (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+    read_parameter = parameters.get("cached_input_tokens")
+    creation_parameter = parameters.get("cache_creation_input_tokens")
+    accepts_read = read_parameter is not None and read_parameter.kind in keyword_kinds
+    accepts_creation = creation_parameter is not None and creation_parameter.kind in keyword_kinds
     kwargs: dict[str, int] = {}
     if accepts_read:
         kwargs["cached_input_tokens"] = usage.cache_read_input_tokens
