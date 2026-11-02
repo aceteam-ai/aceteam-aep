@@ -105,6 +105,39 @@ def test_trailing_dns_dot_proxy_alias_is_ignored_and_explicit_upstream_rejected(
     assert url not in caplog.text
 
 
+@pytest.mark.parametrize("provider", ["OPENAI", "ANTHROPIC"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "127.1",
+        "2130706433",
+        "0x7f000001",
+        "0177.0.0.1",
+        "127.0.1",
+        "0x7f.1",
+        "0",
+        "00",
+        "0x0",
+        "0.0",
+        "127.1.",
+    ],
+)
+def test_legacy_numeric_local_alias_is_ignored_and_explicit_upstream_rejected(
+    provider: str,
+    host: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    url = f"http://{host}:8899/v1"
+    with pytest.raises(ValueError, match="points back"):
+        load_provider_targets(listen_port=8899, env={f"UPSTREAM_{provider}_BASE_URL": url})
+    assert (
+        load_provider_targets(listen_port=8899, env={f"{provider}_BASE_URL": url})
+        == UpstreamTargets()
+    )
+    assert f"Ignoring {provider}_BASE_URL" in caplog.text
+    assert url not in caplog.text
+
+
 def test_trailing_dns_dot_nonproxy_and_different_bridge_port_keep_prefix() -> None:
     for value in [
         "https://remote.example.test.:9000/tenant/v1",

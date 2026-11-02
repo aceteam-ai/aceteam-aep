@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
@@ -69,7 +70,14 @@ def normalize_upstream_url(value: str, *, listen_port: int) -> str:
         address = ip_address(hostname)
         local_address = address.is_loopback or address.is_unspecified
     except ValueError:
-        local_address = False
+        # Match the resolver's legacy numeric IPv4 literals (short, packed,
+        # octal and hex) without performing a DNS lookup or opening a socket.
+        try:
+            address = ip_address(socket.inet_aton(hostname))
+        except OSError:
+            local_address = False
+        else:
+            local_address = address.is_loopback or address.is_unspecified
     local_proxy = hostname in local_hosts or local_address
     host_bridge = hostname in {"host.docker.internal", "host.containers.internal"}
     if local_proxy and (not host_bridge or port == listen_port):
