@@ -78,12 +78,11 @@ All detectors implement `check(*, input_text, output_text, call_id, **kwargs) ->
 
 ### Safety Pipeline (`safety/pipeline.py`)
 
-Optional cascading confidence pipeline that replaces parallel detector execution with sequential evaluation and short-circuit. Each layer produces a probability; the system stops when confident enough.
+Optional sequential safety pipeline. Every configured layer runs; completed P(safe) scores are multiplied as a product heuristic. A required layer that cannot be evaluated blocks without a combined score.
 
-- **Layers**: RegexLayer → PawLayer → ContentModelLayer → TrustEngineLayer
-- **Short-circuit**: confident PASS or BLOCK exits early, skipping expensive layers
-- **Calibration**: weighted average of layer scores (research track: temperature scaling, linear probes)
-- **Opt-in**: enabled via `pipeline:` section in policy YAML; without it, behavior is unchanged
+- **Layers**: RegexLayer, PawLayer, ContentModelLayer, and optionally TrustEngineLayer
+- **Residual coverage**: detectors outside those layers run through the legacy registry and their verdict is combined by severity
+- **Opt-in**: enabled via `pipeline:` in policy YAML; otherwise the detector registry retains its existing behavior
 
 See `docs/engineering/safety-pipeline.md` for full details.
 
@@ -119,7 +118,7 @@ src/aceteam_aep/
 ├── mcp_gateway.py       # FastMCP Streamable HTTP gateway — 4 Tier 1 tools
 ├── safety/
 │   ├── base.py          # SafetySignal, DetectorRegistry — detector interface
-│   ├── pipeline.py      # SafetyPipeline — cascading confidence with short-circuit
+│   ├── pipeline.py      # SafetyPipeline with completed-score product evaluation
 │   ├── custom.py        # CustomSafetyDetector — PAW LoRA policies with logprob confidence
 │   ├── pii.py           # PII detector (HuggingFace piiranha + regex fallback)
 │   ├── content.py       # Content safety (HuggingFace toxicity classifier)

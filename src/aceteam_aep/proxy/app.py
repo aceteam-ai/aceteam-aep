@@ -31,7 +31,7 @@ from ..enforcement import (
     EnforcementPolicy,
     build_pipeline_from_policy,
     evaluate,
-    evaluate_pipeline,
+    evaluate_pipeline_with_residual,
 )
 from ..observability.events import FlaggedCall, ObservabilityEvent
 from ..observability.store import EventStore
@@ -40,7 +40,9 @@ from ..safety.custom import (
     CustomPolicy,
     CustomPolicyStore,
     CustomSafetyDetector,
+    PrivateCompileUnavailableError,
     default_custom_policies,
+    require_private_compile_endpoint,
 )
 from ..spans import SpanTracker
 from ..types import Usage
@@ -106,12 +108,28 @@ def _custom_policy_from_write_fields(
     if policy_id is not None:
         payload["id"] = policy_id
     try:
-        return CustomPolicy.model_validate(payload).eager()
+        policy = CustomPolicy.model_validate(payload)
     except ValidationError as exc:
         return JSONResponse(
             {"error": "validation failed", "detail": exc.errors()},
             status_code=422,
         )
+    if policy.enabled:
+        try:
+            require_private_compile_endpoint()
+        except PrivateCompileUnavailableError:
+            return _private_compile_unavailable_response()
+    return policy.eager()
+
+
+def _private_compile_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "private policy compiler unavailable",
+            "code": "paw_private_compile_unavailable",
+        },
+        status_code=503,
+    )
 
 
 # Roles whose content must never reach the safety classifier as trusted
@@ -289,6 +307,13 @@ class ProxyState:
             self.registry.add(det)
 
         self.pipeline = build_pipeline_from_policy(self.policy, to_register)
+        self.residual_registry: DetectorRegistry | None = None
+        if self.pipeline is not None:
+            covered_ids = {id(detector) for detector in self.pipeline.covered_detectors}
+            self.residual_registry = DetectorRegistry()
+            for detector in to_register:
+                if id(detector) not in covered_ids:
+                    self.residual_registry.add(detector)
         self._last_pipeline_result: Any = None
         if self.pipeline:
             log.info("Safety pipeline enabled with %d layers", len(self.pipeline._layers))
@@ -440,7 +465,12 @@ class ProxyState:
     def _serialize_pipeline(self) -> dict[str, Any] | None:
         if not self.pipeline:
             return None
-        info: dict[str, Any] = {"enabled": True}
+        info: dict[str, Any] = {
+            "enabled": True,
+            "residual_detectors": [detector.name for detector in self.residual_registry._detectors]
+            if self.residual_registry is not None
+            else [],
+        }
         pr = self._last_pipeline_result
         if pr is not None:
             info["last_result"] = {
@@ -448,14 +478,17 @@ class ProxyState:
                 "p_unsafe": pr.p_unsafe,
                 "confidence": pr.confidence,
                 "verdict": pr.verdict,
+                "evaluation_unavailable_reason": pr.evaluation_unavailable_reason,
                 "layers_executed": pr.layers_executed,
                 "short_circuited_at": pr.short_circuited_at,
                 "total_latency_ms": pr.total_latency_ms,
                 "layer_results": [
                     {
                         "layer_name": lr.layer_name,
+                        "status": lr.status,
+                        "reason": lr.reason,
                         "p_safe": lr.p_safe,
-                        "p_unsafe": round(1.0 - lr.p_safe, 4),
+                        "p_unsafe": round(1.0 - lr.p_safe, 4) if lr.p_safe is not None else None,
                         "latency_ms": lr.latency_ms,
                         "signal_count": len(lr.signals),
                     }
@@ -682,6 +715,7 @@ def create_proxy_app(
                 body["messages"], exclude_roles=_SAFETY_UNTRUSTED_ROLES
             )
 
+        input_residual_signals: Sequence[SafetySignal] = ()
         if state.safety_enabled:
             if state.pipeline:
                 pipeline_result = await state.pipeline.evaluate(
@@ -690,11 +724,15 @@ def create_proxy_app(
                     call_id=call_id,
                 )
                 state._last_pipeline_result = pipeline_result
-                input_signals = pipeline_result.signals
-                input_decision = (
-                    evaluate_pipeline(pipeline_result, state.policy)
-                    if input_signals or pipeline_result.verdict == "block"
-                    else EnforcementDecision(action="pass")
+                if state.residual_registry is not None:
+                    input_residual_signals = await state.residual_registry.run_all(
+                        input_text=input_text,
+                        output_text="",
+                        call_id=call_id,
+                    )
+                input_signals = [*pipeline_result.signals, *input_residual_signals]
+                input_decision = evaluate_pipeline_with_residual(
+                    pipeline_result, input_residual_signals, state.policy
                 )
             else:
                 input_signals = await state.registry.run_all(
@@ -997,6 +1035,7 @@ def create_proxy_app(
                 call_id=call_id,
                 input_text=input_text,
                 registry=state.registry,
+                residual_registry=state.residual_registry,
                 policy=state.policy,
                 pipeline=state.pipeline,
                 on_complete=on_stream_complete,
@@ -1067,6 +1106,8 @@ def create_proxy_app(
 
         # --- OUTPUT SAFETY CHECK ---
         if state.safety_enabled:
+            pipeline_result: Any = None
+            output_residual_signals: Sequence[SafetySignal] = ()
             if state.pipeline:
                 pipeline_result = await state.pipeline.evaluate(
                     input_text=input_text,
@@ -1075,7 +1116,14 @@ def create_proxy_app(
                     call_cost=cost_node.total_cost(),
                 )
                 state._last_pipeline_result = pipeline_result
-                output_signals = pipeline_result.signals
+                if state.residual_registry is not None:
+                    output_residual_signals = await state.residual_registry.run_all(
+                        input_text=input_text,
+                        output_text=output_text,
+                        call_id=call_id,
+                        call_cost=cost_node.total_cost(),
+                    )
+                output_signals = [*pipeline_result.signals, *output_residual_signals]
             else:
                 output_signals = await state.registry.run_all(
                     input_text=input_text,
@@ -1104,7 +1152,11 @@ def create_proxy_app(
             state.signals.extend(all_signals)
 
             decision = (
-                evaluate_pipeline(pipeline_result, state.policy)
+                evaluate_pipeline_with_residual(
+                    pipeline_result,
+                    [*input_residual_signals, *output_residual_signals],
+                    state.policy,
+                )
                 if state.pipeline
                 else evaluate(all_signals, state.policy)
             )
@@ -1731,7 +1783,13 @@ def create_proxy_app(
         if policy is None:
             return JSONResponse({"error": "custom policy not found"}, status_code=404)
         try:
+            require_private_compile_endpoint()
+        except PrivateCompileUnavailableError:
+            return _private_compile_unavailable_response()
+        try:
             passes = await policy(text)
+        except PrivateCompileUnavailableError:
+            return _private_compile_unavailable_response()
         except Exception as exc:
             log.warning("Policy test failed for %s: %s", policy.name, exc)
             return JSONResponse(

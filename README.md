@@ -27,6 +27,10 @@ The `safety` extra pulls in `transformers` + `torch` (ML detectors). The `custom
 extra pulls in `programasweights` (natural-language policy compilation, large native build).
 Both are opt-in so a default `[proxy]` install stays slim.
 
+Custom policies require `PAW_API_URL` to point at a self-hosted PAW compile
+server. Compilation is refused against programasweights.com and its subdomains,
+and policy programs are always private.
+
 ## Quick Start
 
 ```bash
