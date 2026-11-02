@@ -24,6 +24,18 @@ def test_default_pricing_zero_tokens():
     assert cost == Decimal("0")
 
 
+def test_default_pricing_anthropic_cache_tokens():
+    provider = DefaultPricingProvider()
+    cost = provider.get_cost(
+        "claude-sonnet-4-5-20250514",
+        input_tokens=1,
+        output_tokens=0,
+        cached_input_tokens=1000,
+        cache_creation_input_tokens=100,
+    )
+    assert cost == Decimal("0.000678")
+
+
 def test_custom_pricing_provider():
     """A custom PricingProvider implementation works via protocol."""
 
