@@ -92,3 +92,13 @@ def test_anthropic_cache_read_and_write_are_priced_in_both_cost_paths():
         assert tracker.total_spent() == expected
         assert node.metadata["cache_read_input_tokens"] == 1000
         assert node.metadata["cache_creation_input_tokens"] == 100
+
+
+def test_custom_pricing_without_cache_arguments_still_handles_uncached_usage():
+    class LegacyPricing:
+        def get_cost(self, model: str, input_tokens: int, output_tokens: int) -> Decimal:
+            return Decimal(input_tokens + output_tokens) / 1000
+
+    tracker = CostTracker(pricing=LegacyPricing())  # type: ignore[arg-type]
+    node = tracker.record_llm_cost("span", "custom", Usage(prompt_tokens=5, completion_tokens=3))
+    assert node.compute_cost == Decimal("0.008")

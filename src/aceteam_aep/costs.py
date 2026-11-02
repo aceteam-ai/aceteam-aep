@@ -65,13 +65,27 @@ class CostTracker:
     ) -> CostNode:
         """Record cost for an LLM call based on token usage."""
         if self._pricing:
-            cost = self._pricing.get_cost(
-                model,
-                usage.prompt_tokens,
-                usage.completion_tokens,
-                cached_input_tokens=usage.cache_read_input_tokens,
-                cache_creation_input_tokens=usage.cache_creation_input_tokens,
-            )
+            if usage.cache_creation_input_tokens:
+                cost = self._pricing.get_cost(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    cached_input_tokens=usage.cache_read_input_tokens,
+                    cache_creation_input_tokens=usage.cache_creation_input_tokens,
+                )
+            elif usage.cache_read_input_tokens:
+                cost = self._pricing.get_cost(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    cached_input_tokens=usage.cache_read_input_tokens,
+                )
+            else:
+                cost = self._pricing.get_cost(
+                    model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                )
         else:
             info = MODEL_REGISTRY.get(model)
             input_rate = info.input_cost_per_token if info else _FALLBACK_LLM_COSTS[0]
