@@ -6,8 +6,54 @@
 - **Anthropic prompt caching on the static prefix.** The Anthropic client now attaches `cache_control: {"type": "ephemeral"}` breakpoints to the tool definitions and the system prompt (the last static block, which caches the tools+system prefix together). For agent/chat turns that re-send a large fixed prefix (system prompt + tool schemas) every round-trip, Anthropic now serves that prefix from cache at ~0.1x input price instead of re-billing it in full. Behavior-neutral: identical outputs, lower cost. Configurable via the `prompt_caching` param on `AnthropicClient`/`create_client()` or the `AEP_PROMPT_CACHING` env toggle (default ON; set to a false value for a byte-identical revert). Addresses aceteam-ai/aceteam#5856; follow-up to aceteam-ai/aceteam PR #5901.
 - **`Usage.cache_read_input_tokens` and `Usage.cache_creation_input_tokens`.** Anthropic's cache-token counts now surface on `Usage` (default 0; summed in `__add__`) so the host app can log and bill them. Populated from `response.usage` on the non-streaming path and from the `message_start` event on the streaming path.
 
+## [0.12.0] - 2026-10-26
+
+### Added
+- Version 3 attestation statements bind a structured evaluation and optional
+  commitments to the signed decision. Verifiers from older SDK releases report
+  version 3 chains as `legacy_unsupported`; upgrade the verifier to check them.
+  Version 3 also adds strict chain verification, policy commitments, and CLI
+  verification output while version 2 remains the default (#161).
+- A synthetic safety catalog contains five policies and 400 labeled cases, with an
+  offline loader and verifier adapter. The labels remain unverified (#164).
+- A shared PAW interpreter runtime reuses local models and manages bounded adapter
+  contexts through an injected backend (#165).
+- PAW results expose raw Y/N logit differences and per-policy results for future
+  calibration without changing the current layer verdict (#166).
+
 ### Changed
+- Safety pipelines run every configured layer before deciding. Behavior change:
+  when a required safety evaluation fails or is unavailable, the request now
+  blocks (fails closed) where it was previously allowed. Streaming blocks appear
+  before terminal markers (#151).
+- Pipeline mode also runs uncovered detectors through the residual registry on input,
+  nonstreaming output, and streaming output (#157).
+- Custom policies require a private PAW compiler and compile with `public=False`.
+  Enabling one returns HTTP 503 until `PAW_API_URL` points at a private compiler;
+  requests block when an enabled policy cannot be evaluated (#159).
+- The pipeline sample now builds, clean Trust Engine evaluations use their measured
+  score, and streaming passes residual detectors into the route handler (#162).
+
 ### Fixed
+- `EnforcementPolicy.from_dict` rejects invalid pipeline thresholds. Version 3
+  signing validates the final action, decision source, and unavailable-layer
+  blocks before accepting a chain entry (#167).
+
+## [0.11.9] - 2026-09-26
+
+### Added
+- **`EnvelopeBuilder.end_node_cancelled(span_id, cost=...)`.** Closes a node with the existing `CANCELLED` span status and a terminal timestamp, without appending an execution error. Already-incurred costs (plus an optional final cost) are retained. `EnvelopeBuilder.reconstruct` now preserves `CANCELLED` node records and their costs instead of turning them into `OK` spans. Envelope status remains caller-selected; a cancelled child alone does not establish that the whole execution was cancelled. Fixes #145.
+
+## [0.11.6] - 2026-07-22
+
+### Fixed
+- **Safety detectors no longer rebuild their transformers model per instance.** `PiiDetector` and `ContentSafetyDetector` held the pipeline as instance state with no shared cache, so every construction re-materialized the immutable model into memory — ~0.25–0.55s each even with a warm HuggingFace disk cache, plus N duplicate copies of identical read-only weights resident at once. Consumers that build detectors per session (a reasonable thing to do, since `ProxyState` owns genuinely mutable per-session state) and test suites that reset per-session state paid that cost on every construction. The built pipeline is now cached at module level, keyed by model name, behind a lock so concurrent first-loads don't each build a copy. Only the immutable pipeline is shared; per-instance `_available`/fallback state stays per-instance, and `check()` only runs inference, so sharing is safe. Fixes #122.
+- **Test suite no longer hangs at exit.** All 628 tests passed but the pytest process never returned, so CI reported a timeout rather than a result. Two non-daemon threads outlived the run and blocked interpreter shutdown: `aiosqlite.Connection` is a plain `Thread`, and four observability `store` fixtures returned a `SqliteEventStore` without ever closing it (they now yield and close); and `transformers` spawns a `Thread-auto_conversion` that calls out to the HuggingFace safetensors-conversion Space because the safety models ship only `pytorch_model.bin` (now opted out via `DISABLE_SAFETENSORS_CONVERSION`, which exists for exactly this case). Also repaired four assertions still expecting pre-rename strings — the dashboard title is "Agent Safety Net Dashboard", and the default custom policy set is `{"English only", "Social Security Number"}`.
+
+## [0.11.5] - 2026-07-16
+
+### Fixed
+- **Streaming proxy no longer swallows upstream errors into an empty 200 SSE stream.** `handle_streaming_request` opened the upstream connection inside the response generator, after `StreamingResponse` had already committed HTTP 200 headers, and never checked the upstream status. A non-2xx upstream (e.g. Anthropic 400 rejecting a beta-gated param) produced a 200 response with a zero-byte body; clients (Claude Code / Anthropic SDK) waited indefinitely on an SSE stream that never emitted, ending in Cloudflare 524s and silent retry loops. The upstream response is now opened and status-checked BEFORE the streaming response is constructed: a pre-stream non-2xx is passed through as-is (upstream status code + verbatim JSON error body, Anthropic/OpenAI error shape preserved, no SSE wrapping), and a mid-stream failure emits a final SSE `event: error` with an Anthropic-format `{"type": "error", "error": {"type": "api_error", ...}}` payload before closing so clients terminate instead of hanging. Upstream error status + first 500 bytes of the body are logged at warning level. Successful-stream metering/telemetry is unchanged; error paths no longer fire `on_complete` with zero tokens (which recorded a bogus "unknown model" call) — the pre-stream error path instead ends the span with `status="ERROR"`, mirroring the non-streaming error branch, and mid-stream interruptions are not metered as completions. Fixes aceteam-ai/aceteam#5988.
 
 ## [0.11.4] - 2026-07-16
 

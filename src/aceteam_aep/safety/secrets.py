@@ -17,7 +17,10 @@ log = logging.getLogger(__name__)
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS access key"),
     (
-        re.compile(r"(?:aws_secret_access_key|AWS_SECRET)\s*[:=]\s*['\"]?([0-9a-zA-Z/+=]{40})", re.IGNORECASE),
+        re.compile(
+            r"(?:aws_secret_access_key|AWS_SECRET)\s*[:=]\s*['\"]?([0-9a-zA-Z/+=]{40})",
+            re.IGNORECASE,
+        ),
         "AWS secret key",
     ),
     (re.compile(r"ghp_[0-9a-zA-Z]{36}"), "GitHub PAT"),
@@ -30,7 +33,10 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"pk_live_[0-9a-zA-Z]{24,}"), "Stripe live publishable key"),
     (re.compile(r"rk_live_[0-9a-zA-Z]{24,}"), "Stripe restricted key"),
     (re.compile(r"xox[bpors]-[0-9a-zA-Z\-]{10,}"), "Slack token"),
-    (re.compile(r"-----BEGIN\s*(?:RSA|EC|DSA|OPENSSH|ENCRYPTED)?\s*PRIVATE KEY-----"), "PEM private key"),
+    (
+        re.compile(r"-----BEGIN\s*(?:RSA|EC|DSA|OPENSSH|ENCRYPTED)?\s*PRIVATE KEY-----"),
+        "PEM private key",
+    ),
     (re.compile(r"sk-[0-9a-zA-Z]{20,}T3BlbkFJ[0-9a-zA-Z]{20,}"), "OpenAI API key"),
     (re.compile(r"sk-ant-api\d{2}-[0-9a-zA-Z\-]{80,}"), "Anthropic API key"),
     (re.compile(r"AIzaSy[0-9a-zA-Z\-_]{33}"), "Google API key"),
@@ -38,7 +44,10 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"sqOatp-[0-9a-zA-Z\-]{22,}"), "Square OAuth token"),
     (re.compile(r"EZAK[0-9a-zA-Z\-]{54,}"), "EasyPost API key"),
     (
-        re.compile(r"(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?([A-Za-z0-9\-._]{20,})", re.IGNORECASE),
+        re.compile(
+            r"(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?([A-Za-z0-9\-._]{20,})",
+            re.IGNORECASE,
+        ),
         "generic API key/token",
     ),
 ]

@@ -2,8 +2,24 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator, Sequence
+from typing import Any
+
+import httpx
+import pytest
+from starlette.responses import StreamingResponse
+
+from aceteam_aep.enforcement import EnforcementPolicy
 from aceteam_aep.proxy.app import _ensure_openai_stream_usage
-from aceteam_aep.proxy.streaming import _accumulate_stream_chunks, _parse_sse_line
+from aceteam_aep.proxy.streaming import (
+    _accumulate_stream_chunks,
+    _is_terminal_sse_line,
+    _parse_sse_line,
+    handle_streaming_request,
+)
+from aceteam_aep.safety.base import DetectorRegistry
+from aceteam_aep.safety.pipeline import LayerResult, SafetyPipeline
 
 
 def test_parse_sse_data_line() -> None:
@@ -77,3 +93,411 @@ def test_ensure_openai_stream_usage_skips_non_stream() -> None:
     body: dict = {"stream": False}
     _ensure_openai_stream_usage(body, "/v1/chat/completions")
     assert "stream_options" not in body
+
+
+# --- handle_streaming_request: upstream error surfacing (#5988) ---
+
+
+def _patch_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Any,
+) -> None:
+    """Route the handler's internal httpx.AsyncClient through a MockTransport."""
+    real_client = httpx.AsyncClient
+
+    def factory(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+
+async def _collect_body(resp: StreamingResponse) -> str:
+    parts: list[str] = []
+    async for chunk in resp.body_iterator:
+        assert isinstance(chunk, str)
+        parts.append(chunk)
+    return "".join(parts)
+
+
+async def _collect_until_done(resp: StreamingResponse) -> str:
+    """Model an SSE client that stops reading at the first terminal marker."""
+    parts: list[str] = []
+    async for chunk in resp.body_iterator:
+        assert isinstance(chunk, str)
+        parts.append(chunk)
+        if any(_is_terminal_sse_line(line) for line in chunk.splitlines()):
+            break
+    return "".join(parts)
+
+
+def _parse_anthropic_events(body: str) -> list[tuple[str, str]]:
+    events: list[tuple[str, str]] = []
+    for frame in body.split("\n\n"):
+        if not frame:
+            continue
+        event = "message"
+        data: list[str] = []
+        for line in frame.splitlines():
+            field, separator, value = line.partition(":")
+            if not separator:
+                continue
+            value = value.removeprefix(" ")
+            if field == "event":
+                event = value
+            elif field == "data":
+                data.append(value)
+        events.append((event, "\n".join(data)))
+    return events
+
+
+async def _anthropic_events_until_stop(resp: StreamingResponse) -> list[tuple[str, str]]:
+    """Consume complete SSE frames as a client that closes at message_stop."""
+    events: list[tuple[str, str]] = []
+    pending = ""
+    async for chunk in resp.body_iterator:
+        assert isinstance(chunk, str)
+        pending += chunk
+        while "\n\n" in pending:
+            frame, pending = pending.split("\n\n", 1)
+            if not frame:
+                continue
+            parsed_event = _parse_anthropic_events(frame + "\n\n")[0]
+            events.append(parsed_event)
+            if parsed_event[0] == "message_stop":
+                return events
+    return events
+
+
+async def _call_handler(on_complete: Any = None) -> Any:
+    return await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={"Content-Type": "application/json"},
+        call_id="call-test",
+        input_text="hi",
+        registry=DetectorRegistry(),
+        policy=EnforcementPolicy(),
+        on_complete=on_complete,
+    )
+
+
+@pytest.mark.parametrize("done_line", [b"data: [DONE]", b"data:[DONE]"])
+@pytest.mark.parametrize("ending", [b"\n\n", b"\n"])
+async def test_streaming_required_evaluator_failure_emits_unavailable_block(
+    monkeypatch: pytest.MonkeyPatch,
+    done_line: bytes,
+    ending: bytes,
+) -> None:
+    class FailingLayer:
+        name = "required"
+        prior_p_safe = 0.99
+
+        async def score(
+            self,
+            *,
+            input_text: str,
+            output_text: str,
+            call_id: str,
+            prior_results: Sequence[LayerResult],
+            **kwargs: Any,
+        ) -> LayerResult:
+            raise RuntimeError("private inference detail")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"model": "gpt-4o", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+                + done_line
+                + ending
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/chat/completions",
+        body_bytes=b'{"stream": true}',
+        headers={"Content-Type": "application/json"},
+        call_id="stream-failed-evaluator",
+        input_text="clean",
+        registry=DetectorRegistry(),
+        policy=EnforcementPolicy(),
+        pipeline=SafetyPipeline(layers=[FailingLayer()]),
+    )
+
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_until_done(response)
+    assert '"aep_safety_block": true' in body
+    assert "evaluation unavailable" in body
+    assert "private inference detail" not in body
+    assert "P(safe)" not in body
+    assert body.count("data: [DONE]") == 1
+    assert body.index('"aep_safety_block": true') < body.index("data: [DONE]")
+
+
+async def test_upstream_400_openai_body_passed_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-2xx before any bytes stream -> upstream status + JSON body, no SSE."""
+    error = {
+        "error": {
+            "message": "Unsupported parameter: 'context_management'",
+            "type": "invalid_request_error",
+            "param": "context_management",
+            "code": None,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            content=json.dumps(error).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    completions: list[dict[str, Any]] = []
+    resp = await _call_handler(on_complete=lambda **kw: completions.append(kw))
+
+    assert not isinstance(resp, StreamingResponse)
+    assert resp.status_code == 400
+    assert json.loads(resp.body) == error
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.headers["x-aep-call-id"] == "call-test"
+    assert completions == []
+
+
+async def test_upstream_400_anthropic_body_passed_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic-wire error shape is preserved verbatim."""
+    error = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "context-management-2025-06-27 requires the beta header",
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            content=json.dumps(error).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    resp = await _call_handler()
+
+    assert not isinstance(resp, StreamingResponse)
+    assert resp.status_code == 400
+    assert json.loads(resp.body) == error
+
+
+async def test_upstream_200_happy_path_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2xx upstream still streams through and fires on_complete metering."""
+    sse_body = (
+        b'data: {"model": "gpt-4o", "choices": [{"delta": {"content": "Hello"}}]}\n\n'
+        b'data: {"model": "gpt-4o", "choices": [{"delta": {}}],'
+        b' "usage": {"prompt_tokens": 3, "completion_tokens": 2}}\n\n'
+        b"data: [DONE]\n\n"
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    completions: list[dict[str, Any]] = []
+    resp = await _call_handler(on_complete=lambda **kw: completions.append(kw))
+
+    assert isinstance(resp, StreamingResponse)
+    assert resp.status_code == 200
+    out = await _collect_body(resp)
+    assert "Hello" in out
+    assert "data: [DONE]" in out
+    assert out.count("data: [DONE]") == 1
+    assert "event: error" not in out
+    assert len(completions) == 1
+    assert completions[0]["model"] == "gpt-4o"
+    assert completions[0]["input_tokens"] == 3
+    assert completions[0]["output_tokens"] == 2
+
+
+@pytest.mark.parametrize("event_line", [b"event: message_stop", b"event:message_stop"])
+async def test_anthropic_success_emits_one_terminal_and_no_done(
+    monkeypatch: pytest.MonkeyPatch,
+    event_line: bytes,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=event_line + b'\ndata: {"type":"message_stop"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await _call_handler()
+    assert isinstance(response, StreamingResponse)
+    events = await _anthropic_events_until_stop(response)
+    assert events == [("message_stop", '{"type":"message_stop"}')]
+
+
+async def test_anthropic_duplicate_terminals_keep_one_complete_frame_and_other_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+                b'event: update\ndata: {"type":"update","note":"keep"}\n\n'
+                b'id: duplicate\ndata: {"type":"message_stop"}\nevent:message_stop\n\n'
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await _call_handler()
+    assert isinstance(response, StreamingResponse)
+    body = await _collect_body(response)
+    assert _parse_anthropic_events(body) == [
+        ("update", '{"type":"update","note":"keep"}'),
+        ("message_stop", '{"type":"message_stop"}'),
+    ]
+    assert "data: [DONE]" not in body
+
+
+@pytest.mark.parametrize("event_line", [b"event: message_stop", b"event:message_stop"])
+async def test_anthropic_client_sees_distinct_block_before_message_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    event_line: bytes,
+) -> None:
+    class FailingLayer:
+        name = "required"
+        prior_p_safe = 0.99
+
+        async def score(
+            self,
+            *,
+            input_text: str,
+            output_text: str,
+            call_id: str,
+            prior_results: Sequence[LayerResult],
+            **kwargs: Any,
+        ) -> LayerResult:
+            raise RuntimeError("private detail")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=event_line + b'\ndata: {"type":"message_stop"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    response = await handle_streaming_request(
+        target_url="https://upstream.test/v1/messages",
+        body_bytes=b'{"stream": true}',
+        headers={"Content-Type": "application/json"},
+        call_id="anthropic-terminal",
+        input_text="clean",
+        registry=DetectorRegistry(),
+        policy=EnforcementPolicy(),
+        pipeline=SafetyPipeline(layers=[FailingLayer()]),
+    )
+    assert isinstance(response, StreamingResponse)
+
+    events = await _anthropic_events_until_stop(response)
+    assert len(events) == 2
+    assert events[0][0] == "message"
+    assert json.loads(events[0][1])["aep_safety_block"] is True
+    assert events[1] == ("message_stop", '{"type":"message_stop"}')
+
+
+async def test_mid_stream_failure_emits_error_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Upstream dropping mid-stream -> final SSE error event, no hang."""
+
+    class FailingStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield (b'data: {"model": "gpt-4o", "choices": [{"delta": {"content": "Hi"}}]}\n\n')
+            raise httpx.ReadError("connection reset by upstream")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=FailingStream(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    completions: list[dict[str, Any]] = []
+    resp = await _call_handler(on_complete=lambda **kw: completions.append(kw))
+
+    assert isinstance(resp, StreamingResponse)
+    out = await _collect_body(resp)
+    assert "Hi" in out
+
+    # Stream must terminate with an Anthropic-format error event
+    assert "event: error\n" in out
+    last_data = out.rstrip().splitlines()[-1]
+    assert last_data.startswith("data: ")
+    payload = json.loads(last_data[6:])
+    assert payload["type"] == "error"
+    assert payload["error"]["type"] == "api_error"
+    assert "connection reset by upstream" in payload["error"]["message"]
+
+    # Interrupted streams are not metered as successful completions
+    assert completions == []
+
+
+def test_app_streaming_400_passes_through_upstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Full proxy route: stream=true + upstream 400 -> 400 JSON, not empty 200 SSE."""
+    from starlette.testclient import TestClient
+
+    from aceteam_aep.proxy.app import create_proxy_app
+
+    error = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "context-management-2025-06-27 requires the beta header",
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            content=json.dumps(error).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    _patch_transport(monkeypatch, handler)
+    app = create_proxy_app(detectors=[])
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json() == error
+    assert resp.headers["content-type"].startswith("application/json")

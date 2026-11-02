@@ -72,10 +72,12 @@ class TestGetMaxEntities:
 
 class TestEntityForRequest:
     def test_explicit_header_wins(self):
-        req = _request_with_headers(**{
-            ENTITY_HEADER: "org:acme",
-            "Authorization": "Bearer act_someothertoken",
-        })
+        req = _request_with_headers(
+            **{
+                ENTITY_HEADER: "org:acme",
+                "Authorization": "Bearer act_someothertoken",
+            }
+        )
         assert entity_for_request(req) == "org:acme"
 
     def test_header_is_stripped(self):

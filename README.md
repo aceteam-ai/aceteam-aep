@@ -27,6 +27,10 @@ The `safety` extra pulls in `transformers` + `torch` (ML detectors). The `custom
 extra pulls in `programasweights` (natural-language policy compilation, large native build).
 Both are opt-in so a default `[proxy]` install stays slim.
 
+Custom policies require `PAW_API_URL` to point at a self-hosted PAW compile
+server. Compilation is refused against programasweights.com and its subdomains,
+and policy programs are always private.
+
 ## Quick Start
 
 ```bash
@@ -62,6 +66,21 @@ The proxy intercepts **both directions**:
 - **Outgoing responses** — blocks PII, toxic content, and cost anomalies before the agent sees them
 
 Works with OpenClaw, LangChain, CrewAI, curl, or any tool that calls the OpenAI API.
+
+## Workflow cancellation spans
+
+`EnvelopeBuilder.end_node_cancelled(span_id, cost=...)` closes a node with the
+existing `CANCELLED` span status and an end timestamp. Use it for work aborted
+before completion. It records no execution error and retains already-incurred
+costs. `EnvelopeBuilder.reconstruct` also preserves `CANCELLED` node records.
+
+Span consumers should distinguish cancellation from both `OK` and `ERROR`.
+Cancellation is terminal but belongs in neither successful-work counts nor
+failure alerts. Duration and cost aggregation still include the aborted work.
+The caller continues to select the envelope's `success`, `partial`, or `failure`
+status through `finish()`; a cancelled child alone does not establish that the
+whole execution was cancelled. Whole-execution cancellation policy and run-ledger
+aggregation remain the host application's responsibility.
 
 ## What the Proxy Sees
 
@@ -376,4 +395,4 @@ Add this badge to your repo's README to show it uses AEP safety enforcement:
 
 ## Trademarks
 
-"Agentic Execution Protocol," "AEP," and "AceTeam" are trademarks of AceTeam. The software is licensed under Apache 2.0. The trademark is not included in the license grant — you may not use these names to endorse or promote derivative works without written permission.
+"Agentic Execution Protocol," "AEP," and "AceTeam" are trademarks of AceTeam. The software is licensed under Elastic License 2.0. The trademark is not included in the license grant — you may not use these names to endorse or promote derivative works without written permission.

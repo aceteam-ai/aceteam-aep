@@ -15,7 +15,6 @@ from aceteam_aep.observability.store import EventStore
 from aceteam_aep.proxy.app import _detect_provider, create_proxy_app
 from aceteam_aep.safety.base import SafetyDetector, SafetySignal
 
-
 # ---------------------------------------------------------------------------
 # In-memory event store for testing (avoids async SQLite + event loop issues)
 # ---------------------------------------------------------------------------
@@ -63,7 +62,13 @@ def _chat_response(
         "id": "chatcmpl-obs",
         "object": "chat.completion",
         "model": model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {
             "prompt_tokens": input_tokens,
             "completion_tokens": output_tokens,

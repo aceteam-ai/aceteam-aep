@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from aceteam_aep.observability.views.traffic import get_traffic_stats
 
 
 @pytest.fixture
-async def store(tmp_path: Path) -> SqliteEventStore:
+async def store(tmp_path: Path) -> AsyncIterator[SqliteEventStore]:
     s = SqliteEventStore(str(tmp_path / "views_test.db"))
     await s.initialize()
 
@@ -106,7 +107,8 @@ async def store(tmp_path: Path) -> SqliteEventStore:
         )
     )
 
-    return s
+    yield s
+    await s.close()
 
 
 async def test_timeline_returns_call_spans(store: SqliteEventStore) -> None:

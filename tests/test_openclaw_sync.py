@@ -46,9 +46,11 @@ def _patch_httpx(resp_or_exc):
     async def _aexit(self, *_):
         return None
 
-    return patch("httpx.AsyncClient.__aenter__", _aenter), patch(
-        "httpx.AsyncClient.__aexit__", _aexit
-    ), mock_client
+    return (
+        patch("httpx.AsyncClient.__aenter__", _aenter),
+        patch("httpx.AsyncClient.__aexit__", _aexit),
+        mock_client,
+    )
 
 
 class TestGetConfiguredPath:
@@ -239,10 +241,7 @@ class TestRefreshOpenclawConfig:
         assert (target.stat().st_mode & 0o777) == 0o666
 
         # Confirm the gateway URL was constructed correctly.
-        assert (
-            mock_client.get.await_args.args[0]
-            == "https://aceteam.ai/api/gateway/v1/models"
-        )
+        assert mock_client.get.await_args.args[0] == "https://aceteam.ai/api/gateway/v1/models"
 
     @pytest.mark.asyncio
     async def test_skips_for_non_act_keys(self, tmp_path) -> None:

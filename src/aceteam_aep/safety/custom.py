@@ -2,20 +2,160 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Literal, Self
+from urllib.parse import urlsplit
 
+import httpx
 from pydantic import BaseModel, Field
 
-from .base import SafetyDetector, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 if TYPE_CHECKING:
     from programasweights.runtime_llamacpp import PawFunction
 
 log = logging.getLogger(__name__)
+
+
+class PrivateCompileUnavailableError(EvaluationUnavailableError):
+    """An enabled custom policy has no acceptable private compiler."""
+
+
+def require_private_compile_endpoint() -> str:
+    """Resolve the SDK's compile endpoint and refuse its hosted service."""
+    try:
+        import programasweights as paw
+    except ImportError as exc:
+        raise PrivateCompileUnavailableError(
+            "Custom policies require the custom-policies extra and a private PAW compiler"
+        ) from exc
+
+    try:
+        raw_url = paw.get_api_url()
+        if not isinstance(raw_url, str):
+            raise ValueError("PAW API URL is not a string")
+        url = raw_url.strip()
+        parsed = urlsplit(url)
+        # Match the HTTP client's IDNA normalization before comparing hosts.
+        host = (httpx.URL(url).host or "").rstrip(".").lower()
+        # Accessing port validates malformed brackets and out-of-range ports.
+        _ = parsed.port
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Invalid PAW API URL")
+    except (AttributeError, OSError, TypeError, ValueError, httpx.InvalidURL) as exc:
+        raise PrivateCompileUnavailableError("A private PAW compile endpoint is required") from exc
+    if host == "programasweights.com" or host.endswith(".programasweights.com"):
+        raise PrivateCompileUnavailableError(
+            "The hosted PAW compiler cannot receive custom policy text"
+        )
+    return url.rstrip("/")
+
+
+@dataclass
+class PawResult:
+    """Result from a PAW policy check with optional confidence."""
+
+    compliant: bool
+    p_compliant: float | None = None
+    chunk_results: list[tuple[bool, float | None]] | None = None
+    logit_diff: float | None = None
+    chunk_logit_diffs: list[float | None] | None = None
+
+
+@dataclass(frozen=True)
+class PawPolicyResult:
+    """One policy and source result, including compliant Y paths."""
+
+    policy_id: str
+    source: str
+    result: PawResult
+
+
+def _extract_yn_logits(fn: PawFunction) -> tuple[float, float] | None:
+    """Extract P(Y) and raw Y minus N logit difference after eval.
+
+    Must be called after fn._llm.eval() and before sample().
+    Returns None on failure. The raw gap is retained even when softmax saturates.
+    """
+    try:
+        import llama_cpp as _llama
+
+        ctx = fn._llm.ctx
+        logits_ptr = _llama.llama_get_logits_ith(ctx, -1)
+        if not logits_ptr:
+            return None
+
+        y_ids = fn._llm.tokenize(b"Y", add_bos=False, special=False)
+        n_ids = fn._llm.tokenize(b"N", add_bos=False, special=False)
+        if not y_ids or not n_ids:
+            return None
+
+        logit_y = float(logits_ptr[y_ids[0]])
+        logit_n = float(logits_ptr[n_ids[0]])
+
+        max_l = max(logit_y, logit_n)
+        exp_y = math.exp(logit_y - max_l)
+        exp_n = math.exp(logit_n - max_l)
+        return exp_y / (exp_y + exp_n), logit_y - logit_n
+    except Exception:
+        log.debug("Failed to extract Y/N logprobs from PAW", exc_info=True)
+        return None
+
+
+def _extract_yn_logit_diff(fn: PawFunction) -> float | None:
+    """Return the unrounded Y minus N logit difference."""
+    values = _extract_yn_logits(fn)
+    return values[1] if values is not None else None
+
+
+def _paw_call_with_logprobs(fn: PawFunction, text: str) -> tuple[str, float | None, float | None]:
+    """Replicate PawFunction.__call__ with logit extraction before sampling."""
+    fn._llm.n_tokens = fn._n_prefix
+
+    input_with_suffix = text + fn._suffix_text
+    input_tokens = fn._llm.tokenize(
+        input_with_suffix.encode("utf-8"),
+        add_bos=False,
+        special=True,
+    )
+
+    tokens_used = fn._n_prefix + len(input_tokens)
+    remaining = fn._n_ctx - tokens_used
+    if remaining <= 0:
+        raise ValueError(
+            f"Input too long: {tokens_used} tokens used "
+            f"(prefix={fn._n_prefix}, input={len(input_tokens)}), "
+            f"context window={fn._n_ctx}."
+        )
+
+    fn._llm.eval(input_tokens)
+
+    logits = _extract_yn_logits(fn)
+    p_compliant, logit_diff = logits if logits is not None else (None, None)
+
+    output_tokens: list[int] = []
+    for _ in range(remaining):
+        token = fn._llm.sample(temp=0)
+        if token == fn._llm.token_eos():
+            break
+        output_tokens.append(token)
+        fn._llm.eval([token])
+
+    output_bytes = fn._llm.detokenize(output_tokens)
+    return output_bytes.decode("utf-8", errors="replace").strip(), p_compliant, logit_diff
+
 
 CustomPolicyAppliesTo = Literal["input", "output", "both"]
 CustomPolicySeverity = Literal["low", "medium", "high"]
@@ -32,12 +172,14 @@ def _iter_policy_text_chunks(text: str, max_chars: int) -> list[str]:
     return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
-def _retrieve_eager_task_exception(task: asyncio.Task[object]) -> None:
-    """Eager ``create_task``; retrieve the result so asyncio doesn't warn."""
+def _retrieve_eager_task_exception(task: asyncio.Task[object], policy_id: str) -> None:
+    """Report eager compile failures without logging policy text or exception messages."""
 
     if task.cancelled():
         return
-    task.exception()
+    exc = task.exception()
+    if exc is not None:
+        log.error("Custom policy %s eager compile failed: %s", policy_id, type(exc).__name__)
 
 
 # compile_and_load is synchronous; use a thread lock so prepare() is safe under
@@ -57,8 +199,9 @@ class AsyncPawFunction:
     overwhelming the compilation service.
     """
 
-    def __init__(self, spec: str):
+    def __init__(self, spec: str, *, policy_id: str | None = None):
         self._spec = spec
+        self._policy_id = policy_id or "unknown"
         self._fn: PawFunction | None = None
         self._prepare_task: asyncio.Task[PawFunction] | None = None
         self._prepare_lock = asyncio.Lock()
@@ -70,15 +213,18 @@ class AsyncPawFunction:
         else:
             # Single entry point: prepare() creates the compile task and awaits it.
             self._eager_task = asyncio.create_task(self.prepare())
-            self._eager_task.add_done_callback(_retrieve_eager_task_exception)
+            self._eager_task.add_done_callback(
+                lambda task: _retrieve_eager_task_exception(task, self._policy_id)
+            )
 
     async def _prepare_impl(self) -> PawFunction:
         def _compile_and_load() -> None:
             with paw_lock:
                 if self._fn is None:
+                    require_private_compile_endpoint()
                     import programasweights as paw
 
-                    self._fn = paw.compile_and_load(self._spec)
+                    self._fn = paw.compile_and_load(self._spec, public=False)
 
         await asyncio.to_thread(_compile_and_load)
         assert self._fn is not None
@@ -107,6 +253,16 @@ class AsyncPawFunction:
     async def __call__(self, text: str) -> str:
         fn = await self.prepare()
         return fn(text)
+
+    async def call_with_logit_diff(self, text: str) -> tuple[str, float | None, float | None]:
+        """Run inference with the raw Y/N logit gap for calibration."""
+        fn = await self.prepare()
+        try:
+            return _paw_call_with_logprobs(fn, text)
+        except Exception:
+            log.debug("Logprob path failed, falling back to standard call", exc_info=True)
+            output = fn(text)
+            return output, None, None
 
 
 class CustomPolicy(BaseModel):
@@ -177,7 +333,8 @@ class CustomPolicy(BaseModel):
             + self.rule
             + "\n\nYour answer must be a single character, either "
             + '"Y" (yes, the text complies with the rule) '
-            + 'or "N" (no, the text violates the rule).'
+            + 'or "N" (no, the text violates the rule).',
+            policy_id=self.id,
         )
 
     def eager(self) -> Self:
@@ -196,6 +353,37 @@ class CustomPolicy(BaseModel):
             if not raw.strip().upper().startswith("Y"):
                 return False
         return True
+
+    async def check_with_confidence(self, text: str) -> PawResult:
+        """Evaluate policy with per-chunk confidence scores.
+
+        Returns a PawResult with overall compliance and per-chunk P(compliant).
+        """
+        chunks = _iter_policy_text_chunks(text, _CUSTOM_POLICY_CHUNK_CHARS)
+        chunk_results: list[tuple[bool, float | None]] = []
+        chunk_logit_diffs: list[float | None] = []
+        overall_compliant = True
+        min_p: float | None = None
+
+        for piece in chunks:
+            raw, p_compliant, logit_diff = await self._paw.call_with_logit_diff(piece)
+            is_compliant = raw.strip().upper().startswith("Y")
+            chunk_results.append((is_compliant, p_compliant))
+            chunk_logit_diffs.append(logit_diff)
+            if not is_compliant:
+                overall_compliant = False
+            if p_compliant is not None:
+                min_p = p_compliant if min_p is None else min(min_p, p_compliant)
+
+        known_gaps = [gap for gap in chunk_logit_diffs if gap is not None]
+        overall_gap = min(known_gaps) if len(known_gaps) == len(chunk_logit_diffs) else None
+        return PawResult(
+            compliant=overall_compliant,
+            p_compliant=min_p,
+            chunk_results=chunk_results if len(chunks) > 1 else None,
+            logit_diff=overall_gap,
+            chunk_logit_diffs=chunk_logit_diffs if len(chunks) > 1 else None,
+        )
 
 
 def default_custom_policies() -> tuple[CustomPolicy, ...]:
@@ -292,6 +480,24 @@ class CustomSafetyDetector(SafetyDetector):
         call_id: str,
         **kwargs,
     ) -> Sequence[SafetySignal]:
+        signals, _ = await self.check_detailed(
+            input_text=input_text,
+            output_text=output_text,
+            call_id=call_id,
+            **kwargs,
+        )
+        return signals
+
+    async def check_detailed(
+        self,
+        *,
+        input_text: str,
+        output_text: str,
+        call_id: str,
+        **kwargs,
+    ) -> tuple[list[SafetySignal], list[PawPolicyResult]]:
+        """Return signals and every evaluated policy/source result in one pass."""
+
         def _sources_for_policy(p: CustomPolicy) -> tuple[tuple[str, str], ...]:
             if p.applies_to == "input":
                 return (("input", input_text),)
@@ -299,33 +505,62 @@ class CustomSafetyDetector(SafetyDetector):
                 return (("output", output_text),)
             return (("output", output_text), ("input", input_text))
 
-        async def _check_one(policy: CustomPolicy) -> Sequence[SafetySignal]:
+        async def _check_one(
+            policy: CustomPolicy,
+        ) -> tuple[list[SafetySignal], list[PawPolicyResult]]:
             signals: list[SafetySignal] = []
+            details: list[PawPolicyResult] = []
             try:
                 for source, text in _sources_for_policy(policy):
-                    is_safe = await policy(text)
-                    if not is_safe:
+                    result = await policy.check_with_confidence(text)
+                    details.append(PawPolicyResult(policy.id, source, result))
+                    if not result.compliant:
+                        p_unsafe = (
+                            1.0 - result.p_compliant if result.p_compliant is not None else None
+                        )
+                        detail = f"{source} violates {policy.name}"
+                        if p_unsafe is not None:
+                            detail += f" (p_unsafe={round(p_unsafe, 4)})"
+                        if result.chunk_results and len(result.chunk_results) > 1:
+                            failing = [
+                                i for i, (ok, _) in enumerate(result.chunk_results) if not ok
+                            ]
+                            detail += f" [chunks {failing}]"
                         signals.append(
                             SafetySignal(
                                 signal_type="custom_safety",
                                 severity=policy.severity,
                                 call_id=call_id,
-                                detail=f"{source} violates {policy.name}",
+                                detail=detail,
+                                score=p_unsafe,
                             )
                         )
             except Exception:
                 log.warning("Custom safety check failed for %s", policy.name, exc_info=True)
-                pass
-            return signals
+                if kwargs.get("strict"):
+                    raise
+                else:
+                    signals.append(
+                        SafetySignal(
+                            signal_type="evaluation_unavailable",
+                            severity="high",
+                            call_id=call_id,
+                            detail=f"custom policy {policy.name} evaluation unavailable",
+                            score=1.0,
+                        )
+                    )
+            return signals, details
 
         signals: list[SafetySignal] = []
+        details: list[PawPolicyResult] = []
 
         chunks = await asyncio.gather(
             *(_check_one(policy) for policy in self._store.all() if policy.enabled)
         )
-        for chunk in chunks:
-            signals.extend(chunk)
-        return signals
+        for policy_signals, policy_details in chunks:
+            signals.extend(policy_signals)
+            details.extend(policy_details)
+        return signals, details
 
 
 __all__ = [
@@ -334,5 +569,9 @@ __all__ = [
     "CustomPolicySeverity",
     "CustomPolicyStore",
     "CustomSafetyDetector",
+    "PrivateCompileUnavailableError",
+    "PawResult",
+    "PawPolicyResult",
     "default_custom_policies",
+    "require_private_compile_endpoint",
 ]

@@ -17,6 +17,7 @@ from .content import ContentSafetyDetector  # noqa: E402
 from .cost_anomaly import CostAnomalyDetector  # noqa: E402
 from .custom import CustomPolicyStore, CustomSafetyDetector  # noqa: E402
 from .pii import PiiDetector  # noqa: E402
+from .pipeline import SafetyPipeline  # noqa: E402
 from .secrets import SecretDetector  # noqa: E402
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "DetectorRegistry",
     "PiiDetector",
     "SafetyDetector",
+    "SafetyPipeline",
     "SafetySignal",
     "SecretDetector",
 ]

@@ -2,15 +2,48 @@
 
 from __future__ import annotations
 
+import socket
+import sys
 from collections.abc import Sequence
 from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
 
-from aceteam_aep.proxy.app import create_proxy_app
+from aceteam_aep.enforcement import (
+    EnforcementPolicy,
+    build_pipeline_from_policy,
+    evaluate,
+    evaluate_pipeline,
+)
+from aceteam_aep.proxy.app import ProxyState, create_proxy_app
+from aceteam_aep.safety.agent_threat import AgentThreatDetector
 from aceteam_aep.safety.base import SafetyDetector, SafetySignal
-from aceteam_aep.safety.custom import CustomPolicy, CustomPolicyStore, CustomSafetyDetector
+from aceteam_aep.safety.custom import (
+    CustomPolicy,
+    CustomPolicyStore,
+    CustomSafetyDetector,
+    PawResult,
+    PrivateCompileUnavailableError,
+)
+from aceteam_aep.safety.pipeline import LayerResult, PawLayer, SafetyPipeline
+
+
+@pytest.fixture(autouse=True)
+def _stub_private_paw_compiler(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """CRUD tests may start eager compilation; keep it local and deterministic."""
+    import programasweights as paw
+    import programasweights.config as paw_config
+
+    def refuse_socket(_self: socket.socket, _address: object) -> None:
+        raise AssertionError("real network access is forbidden in custom policy tests")
+
+    monkeypatch.setenv("PAW_API_URL", "http://paw-compile.test")
+    monkeypatch.setenv("PAW_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(paw_config, "_CONFIG_FILE", tmp_path / "paw-config.json", raising=False)
+    monkeypatch.delenv("PAW_API_KEY", raising=False)
+    monkeypatch.setattr(socket.socket, "connect", refuse_socket)
+    monkeypatch.setattr(paw, "compile_and_load", lambda _spec, *, public: lambda _text: "Y")
 
 
 class _NoopDetector(SafetyDetector):
@@ -27,7 +60,7 @@ class TestCustomPoliciesAPI:
 
         listed = client.get("/dashboard/api/custom-policies").json()
         names = {p["name"] for p in listed["policies"]}
-        assert names == {"English only", "US SSN pattern (input)"}
+        assert names == {"English only", "Social Security Number"}
         assert all(p["enabled"] is False for p in listed["policies"])
 
         create = client.post(
@@ -44,7 +77,7 @@ class TestCustomPoliciesAPI:
         assert body["severity"] == "high"
 
         listed = client.get("/dashboard/api/custom-policies").json()
-        assert len(listed["policies"]) == 4
+        assert len(listed["policies"]) == 3
         assert any(p["id"] == policy_id for p in listed["policies"])
 
         one = client.get(f"/dashboard/api/custom-policies/{policy_id}")
@@ -159,9 +192,7 @@ class TestCustomPoliciesAPI:
             "connected_account": None,
         }
 
-        saved = client.post(
-            "/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}
-        ).json()
+        saved = client.post("/dashboard/api/api-key", json={"api_key": "sk-abc123def456"}).json()
         assert saved["set"] is True
         assert saved["hint"].startswith("sk-abc1")
         assert saved["provider"] == "openai"
@@ -217,14 +248,13 @@ class TestCustomPoliciesAPI:
             "organization_id": "org_123",
             "organization_name": "Acme Corp",
         }
-        assert client.get("/dashboard/api/api-key").json()["connected_account"][
-            "email"
-        ] == "jason@example.com"
+        assert (
+            client.get("/dashboard/api/api-key").json()["connected_account"]["email"]
+            == "jason@example.com"
+        )
 
         # Replacing the key without supplying identity clears the stale account.
-        replaced = client.post(
-            "/dashboard/api/api-key", json={"api_key": "sk-fresh-byok"}
-        ).json()
+        replaced = client.post("/dashboard/api/api-key", json={"api_key": "sk-fresh-byok"}).json()
         assert replaced["connected_account"] is None
 
     def test_api_key_act_prefix_introspects_via_whoami(self) -> None:
@@ -341,9 +371,7 @@ class TestCustomPoliciesAPI:
         app = create_proxy_app(detectors=[_NoopDetector()], dashboard=True)
         client = TestClient(app)
         assert client.post("/dashboard/api/api-key", json={"api_key": ""}).status_code == 400
-        assert (
-            client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
-        )
+        assert client.post("/dashboard/api/api-key", json={"api_key": 42}).status_code == 400
         assert client.post("/dashboard/api/api-key", json={}).status_code == 400
 
     def test_routing_topology_endpoint(self) -> None:
@@ -441,9 +469,7 @@ class TestCustomPoliciesAPI:
         # Missing fields
         assert client.post("/dashboard/api/policy-test", json={}).status_code == 400
         # Bogus id
-        bad = client.post(
-            "/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"}
-        )
+        bad = client.post("/dashboard/api/policy-test", json={"policy_id": "nope", "text": "x"})
         assert bad.status_code == 400
         # Valid uuid but unknown policy
         from uuid import uuid4
@@ -480,10 +506,10 @@ class TestCustomSafetyDetector:
         )
         det = CustomSafetyDetector(store)
 
-        async def violation(_self: CustomPolicy, text: str) -> bool:
-            return text != "bad"
+        async def violation(_self: CustomPolicy, text: str) -> PawResult:
+            return PawResult(compliant=(text != "bad"), p_compliant=0.1 if text == "bad" else 0.9)
 
-        with patch.object(CustomPolicy, "__call__", violation):
+        with patch.object(CustomPolicy, "check_with_confidence", violation):
             sigs = await det.check(
                 input_text="bad",
                 output_text="ok",
@@ -506,10 +532,10 @@ class TestCustomSafetyDetector:
         )
         det = CustomSafetyDetector(store)
 
-        async def violation(_self: CustomPolicy, text: str) -> bool:
-            return text != "bad"
+        async def violation(_self: CustomPolicy, text: str) -> PawResult:
+            return PawResult(compliant=(text != "bad"), p_compliant=0.1 if text == "bad" else 0.9)
 
-        with patch.object(CustomPolicy, "__call__", violation):
+        with patch.object(CustomPolicy, "check_with_confidence", violation):
             sigs = await det.check(
                 input_text="fine",
                 output_text="bad",
@@ -525,10 +551,195 @@ class TestCustomSafetyDetector:
         det = CustomSafetyDetector(store)
         checked: list[str] = []
 
-        async def track(_self: CustomPolicy, text: str) -> bool:
+        async def track(_self: CustomPolicy, text: str) -> PawResult:
             checked.append(text)
-            return True
+            return PawResult(compliant=True, p_compliant=0.95)
 
-        with patch.object(CustomPolicy, "__call__", track):
+        with patch.object(CustomPolicy, "check_with_confidence", track):
             await det.check(input_text="in", output_text="out", call_id="c3")
         assert checked == ["out", "in"]
+
+
+def test_enabled_policy_writes_require_private_compiler(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PAW_API_URL", raising=False)
+    client = TestClient(create_proxy_app(detectors=[_NoopDetector()], dashboard=True))
+    original = client.get("/dashboard/api/custom-policies").json()["policies"]
+
+    refused = client.post(
+        "/dashboard/api/custom-policies",
+        json={"name": "Tenant rule", "rule": "private text", "enabled": True, "public": True},
+    )
+    assert refused.status_code == 503
+    assert refused.json() == {
+        "error": "private policy compiler unavailable",
+        "code": "paw_private_compile_unavailable",
+    }
+    assert client.get("/dashboard/api/custom-policies").json()["policies"] == original
+
+    disabled = client.post(
+        "/dashboard/api/custom-policies",
+        json={"name": "Tenant rule", "rule": "private text", "enabled": False},
+    )
+    assert disabled.status_code == 201
+    policy_id = disabled.json()["id"]
+    changed = client.put(
+        f"/dashboard/api/custom-policies/{policy_id}",
+        json={"name": "Tenant rule", "rule": "changed text", "enabled": True},
+    )
+    assert changed.status_code == 503
+    assert changed.json()["code"] == "paw_private_compile_unavailable"
+    assert client.get(f"/dashboard/api/custom-policies/{policy_id}").json() == disabled.json()
+
+    tested = client.post(
+        "/dashboard/api/policy-test", json={"policy_id": policy_id, "text": "hello"}
+    )
+    assert tested.status_code == 503
+    assert tested.json()["code"] == "paw_private_compile_unavailable"
+
+
+def test_enabled_write_without_sdk_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = TestClient(create_proxy_app(detectors=[_NoopDetector()], dashboard=True))
+    with patch.dict(sys.modules, {"programasweights": None}):
+        response = client.post(
+            "/dashboard/api/custom-policies",
+            json={"name": "Tenant rule", "rule": "private text", "enabled": True},
+        )
+    assert response.status_code == 503
+    assert response.json()["code"] == "paw_private_compile_unavailable"
+
+
+def test_proxy_blocks_when_enabled_policy_cannot_evaluate() -> None:
+    store = CustomPolicyStore([CustomPolicy(name="Tenant", rule="private", enabled=True)])
+    client = TestClient(create_proxy_app(detectors=[CustomSafetyDetector(store)], dashboard=False))
+
+    async def unavailable(_self: CustomPolicy, _text: str) -> PawResult:
+        raise RuntimeError("compiler unavailable")
+
+    with (
+        patch.object(CustomPolicy, "check_with_confidence", unavailable),
+        patch("aceteam_aep.proxy.app.httpx.AsyncClient") as upstream,
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "safety_block"
+    upstream.assert_not_called()
+
+
+async def test_evaluation_failure_blocks_even_with_allow_override() -> None:
+    store = CustomPolicyStore([CustomPolicy(name="Tenant", rule="private", enabled=True)])
+    detector = CustomSafetyDetector(store)
+
+    async def unavailable(_self: CustomPolicy, _text: str) -> PawResult:
+        raise RuntimeError("compiler unavailable")
+
+    with patch.object(CustomPolicy, "check_with_confidence", unavailable):
+        signals = await detector.check(input_text="hello", output_text="", call_id="call")
+    assert len(signals) == 1
+    assert signals[0].signal_type == "evaluation_unavailable"
+    assert signals[0].score == 1.0
+    policy = EnforcementPolicy.from_dict(
+        {
+            "allow_types": ["evaluation_unavailable"],
+            "detectors": {"custom_safety": {"action": "pass"}},
+        }
+    )
+    assert evaluate(signals, policy).action == "block"
+
+
+async def test_pipeline_cannot_pass_before_enabled_policy_fails() -> None:
+    store = CustomPolicyStore([CustomPolicy(name="Tenant", rule="private", enabled=True)])
+    detector = CustomSafetyDetector(store)
+
+    class SafeFirst:
+        name = "safe_first"
+        prior_p_safe = 1.0
+
+        async def score(self, **_kwargs) -> LayerResult:
+            return LayerResult(layer_name=self.name, p_safe=1.0)
+
+    async def unavailable(_self: CustomPolicy, _text: str) -> PawResult:
+        raise RuntimeError("compiler unavailable")
+
+    pipeline = SafetyPipeline([SafeFirst(), PawLayer(detector)], pass_above=0.4)
+    with patch.object(CustomPolicy, "check_with_confidence", unavailable):
+        result = await pipeline.evaluate(input_text="hello", output_text="", call_id="call")
+    assert result.layers_executed == 2
+    assert result.verdict == "block"
+    assert result.layer_results[-1].status == "failed"
+    assert result.evaluation_unavailable_reason is not None
+    assert "paw (failed)" in result.evaluation_unavailable_reason
+    policy = EnforcementPolicy.from_dict({"allow_types": ["evaluation_unavailable"]})
+    assert evaluate_pipeline(result, policy).action == "block"
+
+
+async def test_enabled_paw_layer_crash_blocks_request() -> None:
+    store = CustomPolicyStore([CustomPolicy(name="Tenant", rule="private", enabled=True)])
+    layer = PawLayer(CustomSafetyDetector(store))
+
+    async def crash(**_kwargs) -> LayerResult:
+        raise RuntimeError("compiler crashed")
+
+    with patch.object(layer, "score", crash):
+        result = await SafetyPipeline([layer]).evaluate(
+            input_text="hello", output_text="", call_id="call"
+        )
+    assert result.verdict == "block"
+    assert result.layer_results[0].status == "failed"
+    assert result.evaluation_unavailable_reason is not None
+    assert "paw (failed)" in result.evaluation_unavailable_reason
+    assert evaluate_pipeline(result, EnforcementPolicy()).action == "block"
+
+
+async def test_policy_enabled_after_pipeline_build_still_blocks() -> None:
+    store = CustomPolicyStore()
+    detector = CustomSafetyDetector(store)
+    policy = EnforcementPolicy.from_dict(
+        {"pipeline": {"enabled": True, "layers": [{"name": "paw"}]}}
+    )
+    pipeline = build_pipeline_from_policy(policy, [detector])
+    assert pipeline is not None
+    store.upsert(CustomPolicy(name="Later", rule="private", enabled=True))
+
+    async def unavailable(_self: CustomPolicy, _text: str) -> PawResult:
+        raise RuntimeError("compiler unavailable")
+
+    with patch.object(CustomPolicy, "check_with_confidence", unavailable):
+        result = await pipeline.evaluate(input_text="hello", output_text="", call_id="call")
+    assert result.verdict == "block"
+    assert evaluate_pipeline(result, policy).action == "block"
+
+
+def test_late_enabled_policy_without_paw_layer_blocks_through_residual() -> None:
+    store = CustomPolicyStore()
+    detectors = [AgentThreatDetector(), CustomSafetyDetector(store)]
+    policy = {"pipeline": {"enabled": True, "layers": [{"name": "regex"}]}}
+    state = ProxyState(detectors=detectors, policy=policy)
+    assert state.pipeline is not None
+    assert [layer.name for layer in state.pipeline._layers] == ["regex"]
+    assert state.residual_registry is not None
+    assert [detector.name for detector in state.residual_registry._detectors] == ["custom_safety"]
+
+    client = TestClient(create_proxy_app(detectors=detectors, policy=policy, dashboard=True))
+    store.upsert(CustomPolicy(name="Late policy", rule="private", enabled=True, applies_to="input"))
+    with (
+        patch.object(
+            CustomPolicy,
+            "check_with_confidence",
+            side_effect=PrivateCompileUnavailableError("private compiler unavailable"),
+        ) as unavailable,
+        patch("aceteam_aep.proxy.app.httpx.AsyncClient") as upstream,
+    ):
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "safety_block"
+    unavailable.assert_awaited_once()
+    upstream.assert_not_called()

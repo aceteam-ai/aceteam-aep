@@ -76,14 +76,18 @@ class TestObservabilityEvent:
     def test_action_valid_values(self):
         for action in ("pass", "flag", "block"):
             event = ObservabilityEvent(
-                session_id="s", type="enforcement", action=action  # type: ignore[arg-type]
+                session_id="s",
+                type="enforcement",
+                action=action,  # type: ignore[arg-type]
             )
             assert event.action == action
 
     def test_invalid_action_raises_validation_error(self):
         with pytest.raises(ValidationError):
             ObservabilityEvent(
-                session_id="s", type="enforcement", action="allow"  # type: ignore[arg-type]
+                session_id="s",
+                type="enforcement",
+                action="allow",  # type: ignore[arg-type]
             )
 
 

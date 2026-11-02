@@ -1,0 +1,61 @@
+# AEP Policy: Sequential Safety Pipeline
+#
+# The optional pipeline evaluates every configured layer before combining
+# P(safe) scores. An unavailable required layer blocks without a score.
+# Residual detectors outside those layers keep their configured legacy action.
+#
+# Uncomment the pipeline section below to enable the local layers. Add
+# trust_engine only after enabling its detector and configuring its API access.
+#
+default_action: flag
+block_on: [high]
+flag_on: [medium]
+
+# Pipeline is opt-in. Without it, registered detectors use legacy evaluation.
+#
+# pipeline:
+#   enabled: true
+#   pass_below: 0.3
+#   block_above: 0.7
+#   layers:
+#     - name: regex
+#     - name: paw
+#     - name: content_model
+#
+# Every listed layer must have an enabled detector. To add trust_engine, set
+# detectors.trust_engine.enabled to true and add a trust_engine layer.
+
+# Detector settings also apply to residual detectors in pipeline mode.
+
+detectors:
+  pii:
+    action: block
+    threshold: 0.6
+    enabled: true
+
+  content_safety:
+    action: flag
+    threshold: 0.5
+    enabled: true
+
+  agent_threat:
+    action: block
+    enabled: true
+
+  cost_anomaly:
+    action: flag
+    multiplier: 5
+    enabled: true
+
+  # Trust Engine: enable before adding its pipeline layer or for standalone use.
+  # Requires OPENAI_API_KEY for API calls.
+  trust_engine:
+    action: flag
+    threshold: 0.4
+    enabled: false
+    dimensions:
+      - pii
+      - toxicity
+      - agent_threat
+      - policy_compliance
+      - irreversibility

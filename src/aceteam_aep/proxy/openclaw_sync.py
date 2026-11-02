@@ -158,18 +158,14 @@ async def refresh_openclaw_config(
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                models_url, headers={"Authorization": f"Bearer {api_key}"}
-            )
+            resp = await client.get(models_url, headers={"Authorization": f"Bearer {api_key}"})
     except Exception as err:  # noqa: BLE001 — network errors are part of the contract
         log.warning("openclaw sync: gateway unreachable: %s", err)
         status["error"] = f"gateway unreachable: {err}"
         return status
 
     if resp.status_code != 200:
-        log.warning(
-            "openclaw sync: gateway %s returned %d", models_url, resp.status_code
-        )
+        log.warning("openclaw sync: gateway %s returned %d", models_url, resp.status_code)
         status["error"] = f"gateway returned HTTP {resp.status_code}"
         return status
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -123,10 +124,7 @@ class TestProxyForwarding:
             client.post("/v1/chat/completions", json=_openai_request())
 
             call_kwargs = mock_client.request.call_args
-            assert (
-                call_kwargs.kwargs["headers"]["Authorization"]
-                == "Bearer sk-byok-from-dashboard"
-            )
+            assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-byok-from-dashboard"
 
     def test_byok_overrides_caller_auth(self) -> None:
         """When the proxy has a managed key (env or dashboard BYOK), it
@@ -152,13 +150,9 @@ class TestProxyForwarding:
             )
 
             call_kwargs = mock_client.request.call_args
-            assert (
-                call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-proxy-managed"
-            )
+            assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-proxy-managed"
 
-    def test_proxy_state_inits_api_key_from_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_proxy_state_inits_api_key_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """ProxyState picks up OPENAI_API_KEY / ANTHROPIC_API_KEY from env at
         startup, matching the provider implied by target_base_url."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-openai-env")
@@ -275,7 +269,7 @@ class TestProxyDashboard:
         client = TestClient(app)
         resp = client.get("/dashboard/")
         assert resp.status_code == 200
-        assert "AEP Dashboard" in resp.text
+        assert "Agent Safety Net Dashboard" in resp.text
 
     def test_dashboard_redirects_without_trailing_slash(self) -> None:
         app = create_proxy_app(detectors=[CostAnomalyDetector()], dashboard=True)
@@ -292,3 +286,35 @@ class TestProxyDashboard:
         data = resp.json()
         assert "cost" in data
         assert "calls" in data
+
+
+class TestCostAggregation:
+    """Per-span cost totals must include fees and stay in Decimal while summing."""
+
+    def _state_with_two_nodes(self):
+        from aceteam_aep.proxy.app import ProxyState
+        from aceteam_aep.types import Usage
+
+        state = ProxyState()
+        for _ in range(2):
+            node = state.cost_tracker.record_llm_cost(
+                span_id="span-1",
+                model="gpt-4o",
+                usage=Usage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000),
+            )
+            node.value_added_fee = Decimal("0.01")
+            node.platform_fee = Decimal("0.02")
+        return state
+
+    def test_span_cost_includes_fees_and_matches_decimal_sum(self) -> None:
+        state = self._state_with_two_nodes()
+        nodes = state.cost_tracker.get_cost_tree()
+        expected = sum((n.total_cost() for n in nodes), Decimal("0"))
+        compute_only = sum((n.compute_cost for n in nodes), Decimal("0"))
+
+        lookup = state._cost_by_span_id()
+
+        # Exact: the sum happens in Decimal, with a single conversion at the end.
+        assert lookup["span-1"] == float(expected)
+        # compute_cost alone would omit the 0.06 of fees across both nodes.
+        assert lookup["span-1"] != float(compute_only)

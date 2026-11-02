@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import logging
+import math
+import threading
 from collections.abc import Sequence
 
-from .base import SafetyDetector, SafetySignal
+from .base import EvaluationUnavailableError, SafetyDetector, SafetySignal
 
 log = logging.getLogger(__name__)
+
+# The transformers pipeline is an immutable, read-only artifact — ``check()`` only
+# runs inference. Cache it at module level, keyed by model name, so per-session
+# detector instances share one in-memory copy instead of each rebuilding the model.
+_PIPELINE_CACHE: dict[str, object] = {}
+_PIPELINE_LOCK = threading.Lock()
 
 
 class ContentSafetyDetector(SafetyDetector):
@@ -32,20 +40,26 @@ class ContentSafetyDetector(SafetyDetector):
 
     def _load(self) -> None:
         self._load_attempted = True
-        try:
-            from transformers import pipeline
+        with _PIPELINE_LOCK:
+            cached = _PIPELINE_CACHE.get(self._model_name)
+            if cached is not None:
+                self._pipeline = cached
+                return
+            try:
+                from transformers import pipeline
 
-            self._pipeline = pipeline(
-                "text-classification",
-                model=self._model_name,
-                device=-1,
-            )
-        except ImportError:
-            log.warning("transformers not installed, content safety detector disabled")
-            self._available = False
-        except Exception:
-            log.warning("Content safety model unavailable", exc_info=True)
-            self._available = False
+                self._pipeline = pipeline(
+                    "text-classification",
+                    model=self._model_name,
+                    device=-1,
+                )
+                _PIPELINE_CACHE[self._model_name] = self._pipeline
+            except ImportError:
+                log.warning("transformers not installed, content safety detector disabled")
+                self._available = False
+            except Exception:
+                log.warning("Content safety model unavailable", exc_info=True)
+                self._available = False
 
     async def check(
         self,
@@ -58,6 +72,8 @@ class ContentSafetyDetector(SafetyDetector):
         if not self._load_attempted:
             self._load()
         if not self._available:
+            if kwargs.get("strict"):
+                raise EvaluationUnavailableError("content safety model unavailable")
             return []
 
         signals: list[SafetySignal] = []
@@ -66,6 +82,23 @@ class ContentSafetyDetector(SafetyDetector):
                 continue
             try:
                 result = self._pipeline(text[:512])  # type: ignore[operator]
+                if kwargs.get("strict"):
+                    if (
+                        not isinstance(result, list)
+                        or not result
+                        or not isinstance(result[0], dict)
+                    ):
+                        raise EvaluationUnavailableError("content classifier returned no score")
+                    raw_score = result[0].get("score")
+                    if (
+                        not isinstance(raw_score, (int, float))
+                        or isinstance(raw_score, bool)
+                        or not math.isfinite(raw_score)
+                        or not 0 <= raw_score <= 1
+                    ):
+                        raise EvaluationUnavailableError(
+                            "content classifier returned an invalid score"
+                        )
                 if result:
                     label = result[0].get("label", "").lower()
                     score = result[0].get("score", 0)
@@ -82,6 +115,8 @@ class ContentSafetyDetector(SafetyDetector):
                         )
             except Exception:
                 log.warning("Content safety check failed for %s", source, exc_info=True)
+                if kwargs.get("strict"):
+                    raise
         return signals
 
 

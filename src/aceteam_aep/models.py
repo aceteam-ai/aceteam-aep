@@ -285,6 +285,17 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         supports_vision=True,
         tags=("vision", "fast"),
     ),
+    # Default Ace model slug (aceteam models.agents.DEFAULT_AGENT_MODEL). Same
+    # Sonnet tier pricing as claude-sonnet-4-5; without this entry it prices at
+    # the flat _FALLBACK_LLM_COSTS ($1/$2 per M), under-counting real spend.
+    "claude-sonnet-4-6": _a(
+        input="0.000003",
+        output="0.000015",
+        context_window=200_000,
+        max_output_tokens=8_096,
+        supports_vision=True,
+        tags=("vision", "fast"),
+    ),
     "claude-haiku-4-5-20251001": _a(
         input="0.0000008",
         output="0.000004",

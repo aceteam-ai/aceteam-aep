@@ -74,6 +74,17 @@ All detectors implement `check(*, input_text, output_text, call_id, **kwargs) ->
 | `ContentSafetyDetector` | s-nlp/roberta_toxicity (~125MB) | Toxic, harmful, unsafe content |
 | `FerpaDetector` | Regex patterns | Student IDs, grades, transcripts, financial aid |
 | `TrustEngineDetector` | Multi-perspective LLM | Calibrated confidence across configurable dimensions |
+| `CustomSafetyDetector` | PAW LoRA on Qwen 0.6B | Arbitrary natural-language policy rules with logprob confidence |
+
+### Safety Pipeline (`safety/pipeline.py`)
+
+Optional sequential safety pipeline. Every configured layer runs; completed P(safe) scores are multiplied as a product heuristic. A required layer that cannot be evaluated blocks without a combined score.
+
+- **Layers**: RegexLayer, PawLayer, ContentModelLayer, and optionally TrustEngineLayer
+- **Residual coverage**: detectors outside those layers run through the legacy registry and their verdict is combined by severity
+- **Opt-in**: enabled via `pipeline:` in policy YAML; otherwise the detector registry retains its existing behavior
+
+See `docs/engineering/safety-pipeline.md` for full details.
 
 ### Enforcement (`enforcement.py`)
 
@@ -81,6 +92,8 @@ All detectors implement `check(*, input_text, output_text, call_id, **kwargs) ->
 - Priority: per-detector action override → severity fallback → default action
 - `build_detectors_from_policy()` creates detector instances from a policy YAML
 - `evaluate(signals, policy)` → `EnforcementDecision` with action (pass/flag/block) and reason
+- `build_pipeline_from_policy()` creates a `SafetyPipeline` from the `pipeline:` config section
+- `evaluate_pipeline(result, policy)` → `EnforcementDecision` from pipeline cascade output
 
 ### CLI (`proxy/cli.py`)
 
@@ -105,13 +118,15 @@ src/aceteam_aep/
 ├── mcp_gateway.py       # FastMCP Streamable HTTP gateway — 4 Tier 1 tools
 ├── safety/
 │   ├── base.py          # SafetySignal, DetectorRegistry — detector interface
+│   ├── pipeline.py      # SafetyPipeline with completed-score product evaluation
+│   ├── custom.py        # CustomSafetyDetector — PAW LoRA policies with logprob confidence
 │   ├── pii.py           # PII detector (HuggingFace piiranha + regex fallback)
 │   ├── content.py       # Content safety (HuggingFace toxicity classifier)
 │   ├── cost_anomaly.py  # Cost anomaly detection (statistical)
 │   ├── agent_threat.py  # Agent threat patterns (11 regex patterns)
 │   ├── ferpa.py         # FERPA education records detector
 │   └── trust_engine.py  # Trust Engine — multi-perspective + ensemble + external judge
-├── enforcement.py       # EnforcementPolicy, evaluate(), build_detectors_from_policy()
+├── enforcement.py       # EnforcementPolicy, evaluate(), pipeline support
 ├── attestation.py       # Ed25519 signed verdicts + Merkle audit chains
 ├── config.py            # Unified YAML config: proxy, enforcement, budget
 ├── feedback.py          # Signal feedback loop: verdicts → threshold recommendations

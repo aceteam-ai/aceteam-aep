@@ -19,12 +19,16 @@ Or from a YAML file::
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .attestation import canonical_json
 from .safety.base import SafetyDetector, SafetySignal
+from .safety.custom import CustomPolicy, CustomPolicyStore
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,29 @@ class DetectorPolicy:
     threshold: float | None = None  # score threshold — None means always apply
     enabled: bool = True
     extra: dict[str, Any] = field(default_factory=dict)  # detector-specific params
+
+
+@dataclass(frozen=True)
+class PipelinePolicy:
+    """Configuration for the cascading confidence pipeline."""
+
+    enabled: bool = False
+    pass_below: float = 0.3
+    block_above: float = 0.7
+    layers: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _pipeline_threshold(value: Any, name: str) -> float:
+    """Reject missing or unusable thresholds before enforcement or commitment."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"pipeline.{name} must be a finite number between 0 and 1")
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"pipeline.{name} must be a finite number between 0 and 1") from exc
+    if not math.isfinite(number) or not 0 <= number <= 1:
+        raise ValueError(f"pipeline.{name} must be a finite number between 0 and 1")
+    return number
 
 
 @dataclass(frozen=True)
@@ -52,6 +79,7 @@ class EnforcementPolicy:
     allow_types: frozenset[str] = frozenset()
     default_action: str = "flag"
     overrides: dict[str, DetectorPolicy] = field(default_factory=dict)
+    pipeline: PipelinePolicy = field(default_factory=PipelinePolicy)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EnforcementPolicy:
@@ -68,12 +96,21 @@ class EnforcementPolicy:
                     },
                 )
 
+        pipeline_data = data.get("pipeline", {})
+        pipeline = PipelinePolicy(
+            enabled=pipeline_data.get("enabled", False),
+            pass_below=_pipeline_threshold(pipeline_data.get("pass_below", 0.3), "pass_below"),
+            block_above=_pipeline_threshold(pipeline_data.get("block_above", 0.7), "block_above"),
+            layers=pipeline_data.get("layers", []),
+        )
+
         return cls(
             block_on=frozenset(data.get("block_on", {"high"})),
             flag_on=frozenset(data.get("flag_on", {"medium"})),
             allow_types=frozenset(data.get("allow_types", set())),
             default_action=data.get("default_action", "flag"),
             overrides=overrides,
+            pipeline=pipeline,
         )
 
     @classmethod
@@ -108,6 +145,56 @@ class EnforcementPolicy:
         raise TypeError(f"Cannot create EnforcementPolicy from {type(config).__name__}")
 
 
+def policy_commitment(
+    policy: EnforcementPolicy,
+    custom_policies: CustomPolicyStore | Iterable[CustomPolicy] = (),
+) -> str:
+    """Commit to the effective policy without placing custom rule text in a receipt.
+
+    The caller supplies the current policy and store at decision time. Disabled
+    custom rules are excluded because they cannot affect this evaluation.
+    """
+    policies = (
+        custom_policies.all()
+        if isinstance(custom_policies, CustomPolicyStore)
+        else list(custom_policies)
+    )
+    enabled_rules = [
+        {
+            "id": item.id,
+            "rule_hash": "sha256:" + hashlib.sha256(item.rule.encode("utf-8")).hexdigest(),
+            "applies_to": item.applies_to,
+            "severity": item.severity,
+        }
+        for item in policies
+        if item.enabled
+    ]
+    enabled_rules.sort(key=lambda item: item["id"])
+    payload = {
+        "block_on": sorted(policy.block_on),
+        "flag_on": sorted(policy.flag_on),
+        "allow_types": sorted(policy.allow_types),
+        "default_action": policy.default_action,
+        "overrides": {
+            name: {
+                "action": override.action,
+                "threshold": float(override.threshold) if override.threshold is not None else None,
+                "enabled": override.enabled,
+                "extra": override.extra,
+            }
+            for name, override in policy.overrides.items()
+        },
+        "pipeline": {
+            "enabled": policy.pipeline.enabled,
+            "pass_below": float(policy.pipeline.pass_below),
+            "block_above": float(policy.pipeline.block_above),
+            "layers": policy.pipeline.layers,
+        },
+        "custom_policies": enabled_rules,
+    }
+    return "sha256:" + hashlib.sha256(canonical_json(payload)).hexdigest()
+
+
 @dataclass
 class EnforcementDecision:
     """Result of evaluating safety signals against a policy."""
@@ -129,10 +216,18 @@ def _resolve_signal_action(signal: SafetySignal, policy: EnforcementPolicy) -> s
         if not override.enabled:
             return "pass"
         # If override has a threshold and signal has a score, check it
+        # PAW custom-safety scores now retain raw precision for recording.
+        # Compare at the legacy four-decimal precision until calibrated
+        # thresholds land, preserving the prior boundary decision.
+        threshold_score = (
+            round(signal.score, 4)
+            if signal.score is not None and signal.signal_type == "custom_safety"
+            else signal.score
+        )
         if (
             override.threshold is not None
-            and signal.score is not None
-            and signal.score < override.threshold
+            and threshold_score is not None
+            and threshold_score < override.threshold
         ):
             # Below threshold — downgrade to the lesser of default_action and "flag"
             return "pass" if policy.default_action == "pass" else "flag"
@@ -153,6 +248,14 @@ def evaluate(
     """Evaluate safety signals against a policy and return an enforcement decision."""
     if not signals:
         return EnforcementDecision(action="pass")
+
+    unavailable = [s for s in signals if s.signal_type == "evaluation_unavailable"]
+    if unavailable:
+        return EnforcementDecision(
+            action="block",
+            signals=list(signals),
+            reason="; ".join(f"evaluation_unavailable: {s.detail}" for s in unavailable),
+        )
 
     active = [s for s in signals if s.signal_type not in policy.allow_types]
     if len(active) == 0:
@@ -261,6 +364,149 @@ def build_detectors_from_policy(policy: EnforcementPolicy) -> list[SafetyDetecto
     return detectors
 
 
+def evaluate_pipeline(
+    pipeline_result: Any,
+    policy: EnforcementPolicy,
+) -> EnforcementDecision:
+    """Convert a PipelineResult into an EnforcementDecision.
+
+    Uses the pipeline's own verdict (product-based P(safe) thresholds)
+    and merges any signals raised by individual layers.
+    """
+    from .safety.pipeline import PipelineResult
+
+    if not isinstance(pipeline_result, PipelineResult):
+        raise TypeError(f"Expected PipelineResult, got {type(pipeline_result).__name__}")
+
+    unavailable = [
+        signal
+        for signal in pipeline_result.signals
+        if signal.signal_type == "evaluation_unavailable"
+    ]
+    if unavailable:
+        return EnforcementDecision(
+            action="block",
+            signals=pipeline_result.signals,
+            reason="; ".join(f"evaluation_unavailable: {s.detail}" for s in unavailable),
+        )
+
+    reasons: list[str] = []
+    if pipeline_result.evaluation_unavailable_reason:
+        reasons.append(f"pipeline: {pipeline_result.evaluation_unavailable_reason}")
+    elif pipeline_result.verdict in ("block", "flag"):
+        reasons.append(
+            f"pipeline: P(safe)={pipeline_result.p_safe:.4f} "
+            f"({pipeline_result.layers_executed} layers"
+            + (
+                f", short-circuited at {pipeline_result.short_circuited_at})"
+                if pipeline_result.short_circuited_at
+                else ")"
+            )
+        )
+
+    return EnforcementDecision(
+        action=pipeline_result.verdict,
+        signals=pipeline_result.signals,
+        reason="; ".join(reasons),
+    )
+
+
+def evaluate_pipeline_with_residual(
+    pipeline_result: Any,
+    residual_signals: Sequence[SafetySignal],
+    policy: EnforcementPolicy,
+) -> EnforcementDecision:
+    """Keep the stricter verdict after applying legacy policy to residual signals."""
+    pipeline_decision = evaluate_pipeline(pipeline_result, policy)
+    residual_decision = evaluate(residual_signals, policy)
+    return EnforcementDecision(
+        action=max(
+            (pipeline_decision.action, residual_decision.action),
+            key=_ACTION_PRIORITY.__getitem__,
+        ),
+        signals=[*pipeline_decision.signals, *residual_decision.signals],
+        reason="; ".join(
+            reason for reason in (pipeline_decision.reason, residual_decision.reason) if reason
+        ),
+    )
+
+
+def build_pipeline_from_policy(
+    policy: EnforcementPolicy,
+    detectors: list[SafetyDetector],
+) -> Any | None:
+    """Build a SafetyPipeline from policy config and available detectors.
+
+    Returns None if pipeline is not enabled in the policy.
+    """
+    if not policy.pipeline.enabled:
+        return None
+
+    from .safety.agent_threat import AgentThreatDetector
+    from .safety.content import ContentSafetyDetector
+    from .safety.custom import CustomSafetyDetector
+    from .safety.pii import PiiDetector
+    from .safety.pipeline import (
+        ContentModelLayer,
+        PawLayer,
+        RegexLayer,
+        SafetyPipeline,
+        TrustEngineLayer,
+    )
+    from .safety.trust_engine import TrustEngineDetector
+
+    detector_map: dict[str, SafetyDetector] = {d.name: d for d in detectors}
+    supported_layers = {"regex", "paw", "content_model", "trust_engine"}
+    configured_layers: set[str] = set()
+    for layer in policy.pipeline.layers:
+        if not isinstance(layer, dict):
+            raise ValueError("Pipeline layer must be a mapping with a name")
+        name = layer.get("name")
+        if not isinstance(name, str) or name not in supported_layers:
+            raise ValueError(f"Unknown pipeline layer: {name!r}")
+        if name in configured_layers:
+            raise ValueError(f"Duplicate pipeline layer: {name}")
+        configured_layers.add(name)
+
+    layers = []
+
+    if "regex" in configured_layers or not configured_layers:
+        regex_detectors = [
+            d for d in detectors if isinstance(d, (PiiDetector, AgentThreatDetector))
+        ]
+        if regex_detectors:
+            layers.append(RegexLayer(regex_detectors))
+
+    if "paw" in configured_layers or not configured_layers:
+        custom = detector_map.get("custom_safety")
+        if custom and isinstance(custom, CustomSafetyDetector):
+            layers.append(PawLayer(custom))
+
+    if "content_model" in configured_layers or not configured_layers:
+        content = detector_map.get("content_safety")
+        if content and isinstance(content, ContentSafetyDetector):
+            layers.append(ContentModelLayer(content))
+
+    if "trust_engine" in configured_layers or not configured_layers:
+        te = detector_map.get("trust_engine")
+        if te and isinstance(te, TrustEngineDetector):
+            layers.append(TrustEngineLayer(te))
+
+    if configured_layers:
+        missing = configured_layers - {layer.name for layer in layers}
+        if missing:
+            raise ValueError(f"Configured pipeline layer unavailable: {', '.join(sorted(missing))}")
+
+    if not layers:
+        return None
+
+    return SafetyPipeline(
+        layers=layers,
+        pass_above=1.0 - policy.pipeline.pass_below,
+        block_below=1.0 - policy.pipeline.block_above,
+    )
+
+
 DEFAULT_POLICY = EnforcementPolicy()
 
 
@@ -310,7 +556,12 @@ __all__ = [
     "DetectorPolicy",
     "EnforcementDecision",
     "EnforcementPolicy",
+    "PipelinePolicy",
     "build_detectors_from_policy",
+    "build_pipeline_from_policy",
     "discover_policy",
     "evaluate",
+    "evaluate_pipeline",
+    "evaluate_pipeline_with_residual",
+    "policy_commitment",
 ]

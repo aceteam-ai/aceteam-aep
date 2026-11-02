@@ -311,8 +311,10 @@ async def test_chat_caches_system_and_last_tool_when_enabled() -> None:
     client, create_mock = _make_chat_client(prompt_caching=True)
 
     await client.chat(
-        messages=[ChatMessage(role="system", content="You are helpful."),
-                  ChatMessage(role="user", content="hi")],
+        messages=[
+            ChatMessage(role="system", content="You are helpful."),
+            ChatMessage(role="user", content="hi"),
+        ],
         tools=_OPENAI_TOOLS,
     )
 
@@ -333,8 +335,10 @@ async def test_chat_no_cache_control_when_disabled() -> None:
     client, create_mock = _make_chat_client(prompt_caching=False)
 
     await client.chat(
-        messages=[ChatMessage(role="system", content="You are helpful."),
-                  ChatMessage(role="user", content="hi")],
+        messages=[
+            ChatMessage(role="system", content="You are helpful."),
+            ChatMessage(role="user", content="hi"),
+        ],
         tools=_OPENAI_TOOLS,
     )
 
@@ -362,8 +366,10 @@ async def test_chat_cache_control_wraps_full_system_with_schema() -> None:
     client, create_mock = _make_chat_client(prompt_caching=True)
 
     await client.chat(
-        messages=[ChatMessage(role="system", content="Base prompt."),
-                  ChatMessage(role="user", content="hi")],
+        messages=[
+            ChatMessage(role="system", content="Base prompt."),
+            ChatMessage(role="user", content="hi"),
+        ],
         response_format={
             "type": "json_schema",
             "json_schema": {"schema": {"type": "object", "properties": {"x": {"type": "string"}}}},
