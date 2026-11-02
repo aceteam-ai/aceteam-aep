@@ -102,3 +102,44 @@ def test_custom_pricing_without_cache_arguments_still_handles_uncached_usage():
     tracker = CostTracker(pricing=LegacyPricing())  # type: ignore[arg-type]
     node = tracker.record_llm_cost("span", "custom", Usage(prompt_tokens=5, completion_tokens=3))
     assert node.compute_cost == Decimal("0.008")
+
+
+def test_three_argument_pricing_accounts_for_anthropic_cache_usage():
+    class LegacyPricing:
+        def get_cost(self, model: str, input_tokens: int, output_tokens: int) -> Decimal:
+            return Decimal(input_tokens + output_tokens) / 1000
+
+    tracker = CostTracker(pricing=LegacyPricing())  # type: ignore[arg-type]
+    usage = Usage(
+        prompt_tokens=5,
+        completion_tokens=3,
+        cache_read_input_tokens=10,
+        cache_creation_input_tokens=20,
+    )
+    node = tracker.record_llm_cost("span", "claude-sonnet-4-5-20250514", usage)
+    assert node.compute_cost == Decimal("0.034")
+    assert tracker.total_spent() == Decimal("0.034")
+
+
+def test_prior_pricing_protocol_accounts_for_anthropic_cache_write():
+    class PriorPricing:
+        def get_cost(
+            self,
+            model: str,
+            input_tokens: int,
+            output_tokens: int,
+            cached_input_tokens: int = 0,
+        ) -> Decimal:
+            return (
+                Decimal(input_tokens + output_tokens) + Decimal("0.1") * cached_input_tokens
+            ) / 1000
+
+    tracker = CostTracker(pricing=PriorPricing())  # type: ignore[arg-type]
+    usage = Usage(
+        prompt_tokens=5,
+        completion_tokens=3,
+        cache_read_input_tokens=10,
+        cache_creation_input_tokens=20,
+    )
+    node = tracker.record_llm_cost("span", "claude-sonnet-4-5-20250514", usage)
+    assert node.compute_cost == Decimal("0.034")
