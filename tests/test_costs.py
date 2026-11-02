@@ -1,7 +1,10 @@
 """Tests for cost tracking."""
 
+from decimal import Decimal
+
 from aceteam_aep.costs import CostTracker
 from aceteam_aep.models import MODEL_REGISTRY
+from aceteam_aep.pricing import DefaultPricingProvider
 from aceteam_aep.types import Usage
 
 
@@ -70,3 +73,22 @@ def test_parent_cost_id():
         span_id="s2", model="gpt-4o", usage=usage, parent_cost_id=parent.id
     )
     assert child.parent_id == parent.id
+
+
+def test_anthropic_cache_read_and_write_are_priced_in_both_cost_paths():
+    model = "claude-sonnet-4-5-20250514"
+    input_rate = MODEL_REGISTRY[model].input_cost_per_token
+    usage = Usage(
+        prompt_tokens=1,
+        completion_tokens=0,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=100,
+    )
+    expected = input_rate * (Decimal(1) + Decimal("0.1") * 1000 + Decimal("1.25") * 100)
+    for pricing in (None, DefaultPricingProvider()):
+        tracker = CostTracker(pricing=pricing)
+        node = tracker.record_llm_cost("span", model, usage)
+        assert node.compute_cost == expected
+        assert tracker.total_spent() == expected
+        assert node.metadata["cache_read_input_tokens"] == 1000
+        assert node.metadata["cache_creation_input_tokens"] == 100

@@ -65,12 +65,37 @@ class CostTracker:
     ) -> CostNode:
         """Record cost for an LLM call based on token usage."""
         if self._pricing:
-            cost = self._pricing.get_cost(model, usage.prompt_tokens, usage.completion_tokens)
+            cost = self._pricing.get_cost(
+                model,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                cached_input_tokens=usage.cache_read_input_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens,
+            )
         else:
             info = MODEL_REGISTRY.get(model)
             input_rate = info.input_cost_per_token if info else _FALLBACK_LLM_COSTS[0]
             output_rate = info.output_cost_per_token if info else _FALLBACK_LLM_COSTS[1]
-            cost = (input_rate * usage.prompt_tokens) + (output_rate * usage.completion_tokens)
+            if info and info.provider == "anthropic":
+                cost = (
+                    input_rate
+                    * (
+                        usage.prompt_tokens
+                        + Decimal("0.1") * usage.cache_read_input_tokens
+                        + Decimal("1.25") * usage.cache_creation_input_tokens
+                    )
+                    + output_rate * usage.completion_tokens
+                )
+            else:
+                cost = (
+                    input_rate
+                    * (
+                        usage.prompt_tokens
+                        + usage.cache_read_input_tokens
+                        + usage.cache_creation_input_tokens
+                    )
+                    + output_rate * usage.completion_tokens
+                )
 
         node = CostNode(
             id=uuid.uuid4().hex,
@@ -84,6 +109,8 @@ class CostTracker:
                 "model": model,
                 "prompt_tokens": usage.prompt_tokens,
                 "completion_tokens": usage.completion_tokens,
+                "cache_read_input_tokens": usage.cache_read_input_tokens,
+                "cache_creation_input_tokens": usage.cache_creation_input_tokens,
             },
         )
         self._nodes.append(node)
