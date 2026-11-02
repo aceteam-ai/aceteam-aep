@@ -285,7 +285,9 @@ class OpenAIClient:
             try:
                 response = raw.parse()
             except Exception as exc:
-                raise GatewayResponseError(exc, metadata) from exc
+                if metadata is not None:
+                    raise GatewayResponseError(exc, metadata) from exc
+                raise
         else:
             response = await self._client.chat.completions.create(**kwargs)
         try:

@@ -370,8 +370,50 @@ async def test_missing_or_malformed_call_id_is_absent(value: str | None) -> None
         return httpx.Response(200, headers=headers, content=_openai_body())
 
     response = await _client("openai", handler).chat([])
-    assert response.response_metadata is not None
-    assert response.response_metadata.call_id is None
+    assert response.response_metadata is None
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_gateway_missing_headers_have_no_buffered_or_stream_metadata(protocol: str) -> None:
+    async def buffered(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "bad id", "X-AEP-Trace-ID": ""},
+            content=_openai_body() if protocol == "openai" else _anthropic_body(),
+        )
+
+    async def streaming(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "bad id"},
+            content=_openai_sse() if protocol == "openai" else _anthropic_sse(),
+        )
+
+    response = await _client(protocol, buffered).chat([])
+    assert response.response_metadata is None
+    chunks = [chunk async for chunk in _client(protocol, streaming).chat_stream([])]
+    assert chunks
+    assert all(chunk.response_metadata is None for chunk in chunks)
+    events = [
+        event
+        async for event in run_agent_loop_stream(
+            _client(protocol, streaming), [ChatMessage(role="user", content="hi")]
+        )
+    ]
+    assert not any(event.type == "response_metadata" for event in events)
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_gateway_partial_header_is_preserved(protocol: str) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-AEP-Call-ID": "bad id", "X-AEP-Trace-ID": "valid.trace"},
+            content=_openai_body() if protocol == "openai" else _anthropic_body(),
+        )
+
+    response = await _client(protocol, handler).chat([])
+    assert response.response_metadata == AepResponseMetadata(trace_id="valid.trace")
 
 
 @pytest.mark.parametrize("protocol", ["openai", "anthropic"])
@@ -600,7 +642,8 @@ async def test_direct_openai_cleanup_only_failure_surfaces() -> None:
 
 @pytest.mark.parametrize("primary", [ValueError("event failed"), asyncio.CancelledError()])
 async def test_direct_anthropic_primary_survives_context_exit_failure(
-    primary: BaseException, caplog: pytest.LogCaptureFixture,
+    primary: BaseException,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     class DirectStream:
         def __aiter__(self) -> DirectStream:

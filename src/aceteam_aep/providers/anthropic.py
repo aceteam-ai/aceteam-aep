@@ -251,7 +251,9 @@ class AnthropicClient:
             try:
                 response = raw.parse()
             except Exception as exc:
-                raise GatewayResponseError(exc, metadata) from exc
+                if metadata is not None:
+                    raise GatewayResponseError(exc, metadata) from exc
+                raise
         else:
             response = await self._client.messages.create(**kwargs)
 

@@ -78,13 +78,14 @@ def _valid_header(value: str | None) -> str | None:
     return None
 
 
-def _gateway_metadata(headers: Any) -> AepResponseMetadata:
+def _gateway_metadata(headers: Any) -> AepResponseMetadata | None:
     """Read only the three public AEP headers from a trusted raw response."""
-    return AepResponseMetadata(
+    metadata = AepResponseMetadata(
         call_id=_valid_header(headers.get("x-aep-call-id")),
         trace_id=_valid_header(headers.get("x-aep-trace-id")),
         entity=_valid_header(headers.get("x-aep-entity")),
     )
+    return metadata if any((metadata.call_id, metadata.trace_id, metadata.entity)) else None
 
 
 def _context_headers(context: AepRequestContext | None) -> dict[str, str]:
