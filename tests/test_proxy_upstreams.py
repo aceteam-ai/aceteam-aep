@@ -77,6 +77,42 @@ def test_client_alias_pointing_to_proxy_is_ignored_but_explicit_upstream_fails(
         )
 
 
+@pytest.mark.parametrize("provider", ["OPENAI", "ANTHROPIC"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost.",
+        "LOCALHOST.localdomain.",
+        "aep-proxy.",
+        "safeclaw-proxy.",
+        "127.0.0.1.",
+        "127.7.8.9.",
+        "host.docker.internal.",
+        "host.containers.internal.",
+    ],
+)
+def test_trailing_dns_dot_proxy_alias_is_ignored_and_explicit_upstream_rejected(
+    provider: str,
+    host: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    url = f"http://{host}:8899/v1"
+    with pytest.raises(ValueError, match="points back"):
+        load_provider_targets(listen_port=8899, env={f"UPSTREAM_{provider}_BASE_URL": url})
+    targets = load_provider_targets(listen_port=8899, env={f"{provider}_BASE_URL": url})
+    assert targets == UpstreamTargets()
+    assert f"Ignoring {provider}_BASE_URL" in caplog.text
+    assert url not in caplog.text
+
+
+def test_trailing_dns_dot_nonproxy_and_different_bridge_port_keep_prefix() -> None:
+    for value in [
+        "https://remote.example.test.:9000/tenant/v1",
+        "http://host.docker.internal.:9000/tenant/v1",
+    ]:
+        assert normalize_upstream_url(value, listen_port=8899) == value.removesuffix("/v1")
+
+
 def test_proxy_cli_loads_env_targets_without_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AEP_TARGET", "https://fallback.example.test/v1")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://openai.example.test/v1")

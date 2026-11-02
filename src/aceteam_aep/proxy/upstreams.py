@@ -51,6 +51,9 @@ def normalize_upstream_url(value: str, *, listen_port: int) -> str:
             "Upstream must be an HTTP or HTTPS URL without credentials, query, or fragment"
         )
 
+    # A terminal DNS root dot does not change the host identity. Normalize
+    # comparisons only; preserve the configured authority in the returned URL.
+    hostname = parsed.hostname.lower().removesuffix(".")
     local_hosts = {
         "localhost",
         "localhost.localdomain",
@@ -63,12 +66,12 @@ def normalize_upstream_url(value: str, *, listen_port: int) -> str:
         "host.containers.internal",
     }
     try:
-        address = ip_address(parsed.hostname)
+        address = ip_address(hostname)
         local_address = address.is_loopback or address.is_unspecified
     except ValueError:
         local_address = False
-    local_proxy = parsed.hostname.lower() in local_hosts or local_address
-    host_bridge = parsed.hostname.lower() in {"host.docker.internal", "host.containers.internal"}
+    local_proxy = hostname in local_hosts or local_address
+    host_bridge = hostname in {"host.docker.internal", "host.containers.internal"}
     if local_proxy and (not host_bridge or port == listen_port):
         raise ProxyLoopError("Upstream points back to the local proxy")
 
