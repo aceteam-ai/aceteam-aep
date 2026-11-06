@@ -11,6 +11,8 @@ from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlsplit
 
+import httpx
+
 Provider = Literal["openai", "anthropic"]
 log = logging.getLogger(__name__)
 
@@ -52,9 +54,15 @@ def normalize_upstream_url(value: str, *, listen_port: int) -> str:
             "Upstream must be an HTTP or HTTPS URL without credentials, query, or fragment"
         )
 
-    # A terminal DNS root dot does not change the host identity. Normalize
-    # comparisons only; preserve the configured authority in the returned URL.
-    hostname = parsed.hostname.lower().removesuffix(".")
+    # Match the forwarding client's IDNA normalization before comparing local
+    # aliases. Normalize comparisons only; preserve the configured authority.
+    hostname = parsed.hostname.lower()
+    if not hostname.isascii():
+        try:
+            hostname = httpx.URL(value.strip()).raw_host.decode("ascii").lower()
+        except (httpx.InvalidURL, UnicodeError) as exc:
+            raise ValueError("Upstream must be a valid HTTP or HTTPS base URL") from exc
+    hostname = hostname.removesuffix(".")
     local_hosts = {
         "localhost",
         "localhost.localdomain",

@@ -138,6 +138,54 @@ def test_legacy_numeric_local_alias_is_ignored_and_explicit_upstream_rejected(
     assert url not in caplog.text
 
 
+@pytest.mark.parametrize("provider", ["OPENAI", "ANTHROPIC"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "localhost。",
+        "127。0。0。1",
+        "localhost．",
+        "localhost｡",
+        "host。docker。internal",
+    ],
+)
+def test_idna_local_alias_is_ignored_and_explicit_upstream_rejected(
+    provider: str, host: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    url = f"http://{host}:8899/v1"
+    with pytest.raises(ValueError, match="points back"):
+        load_provider_targets(listen_port=8899, env={f"UPSTREAM_{provider}_BASE_URL": url})
+    assert (
+        load_provider_targets(listen_port=8899, env={f"{provider}_BASE_URL": url})
+        == UpstreamTargets()
+    )
+    assert f"Ignoring {provider}_BASE_URL" in caplog.text
+    assert url not in caplog.text
+
+
+@pytest.mark.parametrize("provider", ["OPENAI", "ANTHROPIC"])
+@pytest.mark.parametrize("host", ["ｌｏｃａｌｈｏｓｔ", "ａｅｐ-proxy"])
+@pytest.mark.parametrize("prefix", ["UPSTREAM_", ""])
+def test_idna_invalid_hostname_fails_before_forwarding(
+    provider: str, host: str, prefix: str
+) -> None:
+    url = f"http://{host}:8899/v1"
+    # These labels are rejected by the forwarding client, rather than mapped
+    # to ASCII. Both configuration paths must fail before making a request.
+    with pytest.raises(httpx.InvalidURL):
+        httpx.URL(url)
+    with pytest.raises(ValueError, match="valid HTTP or HTTPS"):
+        load_provider_targets(listen_port=8899, env={f"{prefix}{provider}_BASE_URL": url})
+
+
+def test_idna_remote_and_different_bridge_port_keep_prefix() -> None:
+    for value in [
+        "https://bücher.example.test:9000/tenant/v1",
+        "http://host。docker。internal:9000/tenant/v1",
+    ]:
+        assert normalize_upstream_url(value, listen_port=8899) == value.removesuffix("/v1")
+
+
 def test_trailing_dns_dot_nonproxy_and_different_bridge_port_keep_prefix() -> None:
     for value in [
         "https://remote.example.test.:9000/tenant/v1",
