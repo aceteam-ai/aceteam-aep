@@ -31,6 +31,8 @@ Custom policies require `PAW_API_URL` to point at a self-hosted PAW compile
 server. Compilation is refused against programasweights.com and its subdomains,
 and policy programs are always private.
 
+Release process: [CI trusted publishing](docs/engineering/releasing.md).
+
 ## Quick Start
 
 ```bash
