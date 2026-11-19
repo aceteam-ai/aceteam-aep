@@ -24,8 +24,8 @@ To prepare a release:
 
 For a recovery rerun, use the workflow's manual dispatch on `main`. An already
 published version is never uploaded again. The recovery path verifies that the
-built wheel and sdist match PyPI before it creates a missing tag or release.
-A tag pointing to a different commit fails closed.
+built wheel and sdist match PyPI, verifies or creates the tag and release, and
+reruns the image build. A tag pointing to a different commit fails closed.
 
 The old `scripts/release.sh` is removed because it could publish and push from a
 laptop. Retain `PYPI_API_TOKEN` only for the authorized emergency procedure.

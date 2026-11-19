@@ -56,7 +56,7 @@ def test_main_push_without_version_bump_is_noop(
     }
 
 
-def test_existing_release_does_not_republish(
+def test_existing_release_can_retry_image_without_republishing(
     release_tree: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(release_plan, "checked_tag", lambda version, sha: True)
@@ -64,7 +64,7 @@ def test_existing_release_does_not_republish(
     monkeypatch.setattr(release_plan, "request_json", lambda url, token: {"id": 1})
     assert release_plan.plan(
         "workflow_dispatch", "", "b" * 40, "aceteam-ai/aceteam-aep", "test"
-    ) == {"run": "false", "published": "true", "version": "0.12.0"}
+    ) == {"run": "true", "published": "true", "version": "0.12.0"}
 
 
 def test_published_version_recovers_metadata_without_republishing(

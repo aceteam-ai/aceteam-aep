@@ -136,7 +136,7 @@ def plan(event: str, before: str, sha: str, repository: str, token: str) -> dict
     if released and not tagged:
         fail("GitHub release exists without a tag on this commit")
     return {
-        "run": "false" if published and tagged and released else "true",
+        "run": "true",
         "published": str(published).lower(),
         "version": version,
     }
