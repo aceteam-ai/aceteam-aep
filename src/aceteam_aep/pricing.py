@@ -19,6 +19,7 @@ class PricingProvider(Protocol):
         output_tokens: int,
         *,
         cached_input_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
         organization_id: str | None = None,
     ) -> Decimal: ...
 
@@ -33,12 +34,25 @@ class DefaultPricingProvider:
         output_tokens: int,
         *,
         cached_input_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
         organization_id: str | None = None,
     ) -> Decimal:
         info = get_model_info(model)
         if not info:
             return Decimal("0")
-        return info.input_cost_per_token * input_tokens + info.output_cost_per_token * output_tokens
+        input_rate = info.input_cost_per_token
+        if info.provider == "anthropic":
+            # This SDK emits only five-minute ephemeral cache markers.
+            return (
+                input_rate * input_tokens
+                + input_rate * Decimal("0.1") * cached_input_tokens
+                + input_rate * Decimal("1.25") * cache_creation_input_tokens
+                + info.output_cost_per_token * output_tokens
+            )
+        return (
+            input_rate * (input_tokens + cached_input_tokens + cache_creation_input_tokens)
+            + info.output_cost_per_token * output_tokens
+        )
 
 
 __all__ = ["DefaultPricingProvider", "PricingProvider"]

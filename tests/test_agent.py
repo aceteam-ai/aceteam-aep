@@ -187,6 +187,27 @@ async def test_with_budget():
 
 
 @pytest.mark.asyncio
+async def test_cache_token_cost_reaches_agent_budget():
+    usage = Usage(
+        prompt_tokens=1,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=100,
+    )
+    client = MockClient(
+        [ChatResponse(ChatMessage("assistant", "Done"), usage, "claude-sonnet-4-5-20250514")]
+    )
+    budget = BudgetEnforcer(total="1.00")
+    tracker = CostTracker()
+    await run_agent_loop(
+        client,
+        [ChatMessage(role="user", content="Hi")],
+        budget=budget,
+        cost_tracker=tracker,
+    )
+    assert budget.state.spent == tracker.total_spent() == Decimal("0.000678")
+
+
+@pytest.mark.asyncio
 async def test_stream_basic():
     """Test streaming agent loop yields events."""
     client = MockClient(
