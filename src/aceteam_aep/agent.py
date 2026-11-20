@@ -8,12 +8,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+import sys
+from collections.abc import AsyncIterator, Awaitable, Callable
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from .budget import BudgetEnforcer
-from .client import ChatClient
+from .client import ChatClient, ContextChatClient, _tool_origin
 from .costs import CostTracker
 from .spans import SpanTracker
 from .stream import (
@@ -22,13 +23,21 @@ from .stream import (
     cost_event,
     end_event,
     error_event,
+    response_metadata_event,
     span_end_event,
     span_start_event,
     tool_call_end_event,
     tool_call_start_event,
 )
 from .tools import Tool
-from .types import AgentResult, ChatMessage, ChatResponse, Usage
+from .types import (
+    AepRequestContext,
+    AepResponseMetadata,
+    AgentResult,
+    ChatMessage,
+    ChatResponse,
+    Usage,
+)
 
 _DEFAULT_TOOL_TIMEOUT = 300.0  # 5 minutes
 
@@ -43,6 +52,18 @@ def _build_tool_schemas(tools: list[Tool]) -> list[dict[str, Any]]:
     return [t.to_openai_tool() for t in tools]
 
 
+async def _invoke_with_origin(
+    tool: Tool,
+    arguments: dict[str, Any],
+    metadata: AepResponseMetadata | None,
+) -> Any:
+    token = _tool_origin.set(metadata)
+    try:
+        return await tool.invoke(arguments)
+    finally:
+        _tool_origin.reset(token)
+
+
 async def run_agent_loop(
     client: ChatClient,
     messages: list[ChatMessage],
@@ -55,6 +76,7 @@ async def run_agent_loop(
     max_iterations: int = 25,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    request_context: AepRequestContext | None = None,
 ) -> AgentResult:
     """Run an agent loop: call model -> check tool_calls -> execute -> loop.
 
@@ -84,6 +106,8 @@ async def run_agent_loop(
 
     total_usage = Usage()
     last_finish_reason: str | None = None
+    response_metadata: list[AepResponseMetadata] = []
+    _iteration = -1
     root_span = None
 
     if span_tracker:
@@ -103,12 +127,26 @@ async def run_agent_loop(
                     "llm_call", client.model_name, parent_span_id=root_span.span_id
                 )
 
-            response: ChatResponse = await client.chat(
-                working,
-                tools=tool_schemas,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            if request_context is not None:
+                if not isinstance(client, ContextChatClient):
+                    raise TypeError("Client does not support AEP request context")
+                response: ChatResponse = await client.chat_with_context(
+                    working,
+                    request_context=request_context,
+                    tools=tool_schemas,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            else:
+                response = await client.chat(
+                    working,
+                    tools=tool_schemas,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+
+            if response.response_metadata is not None:
+                response_metadata.append(response.response_metadata)
 
             total_usage = total_usage + response.usage
             last_finish_reason = response.finish_reason
@@ -157,7 +195,9 @@ async def run_agent_loop(
                     )
 
                 try:
-                    result = await tool.invoke(tc.arguments)
+                    result = await _invoke_with_origin(
+                        tool, tc.arguments, response.response_metadata
+                    )
                     result_str = json.dumps(result) if not isinstance(result, str) else result
                     working.append(
                         ChatMessage(
@@ -189,6 +229,7 @@ async def run_agent_loop(
             usage=total_usage,
             iterations=min(_iteration + 1, max_iterations),
             finish_reason=last_finish_reason,
+            response_metadata=response_metadata,
         )
 
     except Exception:
@@ -209,6 +250,7 @@ async def run_agent_loop_stream(
     max_iterations: int = 25,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    request_context: AepRequestContext | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Stream agent loop, yielding AEP stream events.
 
@@ -224,6 +266,7 @@ async def run_agent_loop_stream(
 
     total_usage = Usage()
     last_finish_reason: str | None = None
+    response_metadata: AepResponseMetadata | None = None
     root_span = None
 
     if span_tracker:
@@ -252,6 +295,8 @@ async def run_agent_loop_stream(
             call_usage = Usage()
             cost_node = None
             ok = False
+            response_metadata = None
+            chunks: AsyncIterator[Any] | None = None
 
             # `finally` runs on any exit — exception, cancellation, or
             # forced close — so the llm_span ends and the reservation
@@ -262,15 +307,34 @@ async def run_agent_loop_stream(
             # status from the tracker (we can't safely yield during
             # cancellation or forced close).
             try:
-                async for stream_chunk in client.chat_stream(
-                    working,
-                    tools=tool_schemas,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                ):
+                if request_context is not None:
+                    if not isinstance(client, ContextChatClient):
+                        raise TypeError("Client does not support AEP request context")
+                    chunks = client.chat_stream_with_context(
+                        working,
+                        request_context=request_context,
+                        tools=tool_schemas,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                else:
+                    chunks = client.chat_stream(
+                        working,
+                        tools=tool_schemas,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                async for stream_chunk in chunks:
+                    if stream_chunk.response_metadata is not None and response_metadata is None:
+                        response_metadata = stream_chunk.response_metadata
+                        yield response_metadata_event(
+                            stream_chunk.response_metadata, complete=False
+                        )
                     if stream_chunk.delta_text:
                         accumulated_text += stream_chunk.delta_text
-                        yield chunk_event(stream_chunk.delta_text)
+                        event = chunk_event(stream_chunk.delta_text)
+                        event.response_metadata = response_metadata
+                        yield event
 
                     if stream_chunk.delta_tool_calls:
                         accumulated_tool_calls.extend(stream_chunk.delta_tool_calls)
@@ -292,12 +356,26 @@ async def run_agent_loop_stream(
                     yield cost_event(cost_node)
 
                 ok = True
+                if response_metadata is not None:
+                    yield response_metadata_event(response_metadata, complete=True)
             finally:
-                if llm_span and span_tracker:
-                    span_tracker.end_span(llm_span.span_id, status="OK" if ok else "ERROR")
-                if budget and reservation:
-                    actual_cost = cost_node.total_cost() if ok and cost_node else Decimal("0")
-                    budget.settle(reservation, actual_cost)
+                try:
+                    if chunks is not None:
+                        close = getattr(chunks, "aclose", None)
+                        if callable(close):
+                            active_error = sys.exc_info()[0]
+                            try:
+                                await cast(Callable[[], Awaitable[None]], close)()
+                            except Exception:
+                                if active_error is None:
+                                    raise
+                                logger.exception("Could not close agent stream after failure")
+                finally:
+                    if llm_span and span_tracker:
+                        span_tracker.end_span(llm_span.span_id, status="OK" if ok else "ERROR")
+                    if budget and reservation:
+                        actual_cost = cost_node.total_cost() if ok and cost_node else Decimal("0")
+                        budget.settle(reservation, actual_cost)
 
             if llm_span and span_tracker:
                 yield span_end_event(llm_span.span_id)
@@ -337,7 +415,9 @@ async def run_agent_loop_stream(
 
             # Execute tool calls
             for tc in accumulated_tool_calls:
-                yield tool_call_start_event(tc.id, tc.name, tc.arguments)
+                event = tool_call_start_event(tc.id, tc.name, tc.arguments)
+                event.response_metadata = response_metadata
+                yield event
 
                 tool = tools_by_name.get(tc.name)
                 if not tool:
@@ -350,7 +430,9 @@ async def run_agent_loop_stream(
                             name=tc.name,
                         )
                     )
-                    yield tool_call_end_event(tc.id, None, error=error_msg)
+                    event = tool_call_end_event(tc.id, None, error=error_msg)
+                    event.response_metadata = response_metadata
+                    yield event
                     continue
 
                 tool_span = None
@@ -361,7 +443,8 @@ async def run_agent_loop_stream(
 
                 try:
                     result = await asyncio.wait_for(
-                        tool.invoke(tc.arguments), timeout=_DEFAULT_TOOL_TIMEOUT
+                        _invoke_with_origin(tool, tc.arguments, response_metadata),
+                        timeout=_DEFAULT_TOOL_TIMEOUT,
                     )
                     result_str = json.dumps(result) if not isinstance(result, str) else result
                     working.append(
@@ -374,7 +457,9 @@ async def run_agent_loop_stream(
                     )
                     if tool_span and span_tracker:
                         span_tracker.end_span(tool_span.span_id)
-                    yield tool_call_end_event(tc.id, result)
+                    event = tool_call_end_event(tc.id, result)
+                    event.response_metadata = response_metadata
+                    yield event
                 except Exception as e:
                     working.append(
                         ChatMessage(
@@ -386,7 +471,9 @@ async def run_agent_loop_stream(
                     )
                     if tool_span and span_tracker:
                         span_tracker.end_span(tool_span.span_id, status="ERROR")
-                    yield tool_call_end_event(tc.id, None, error=str(e))
+                    event = tool_call_end_event(tc.id, None, error=str(e))
+                    event.response_metadata = response_metadata
+                    yield event
 
         if root_span and span_tracker:
             span_tracker.end_span(root_span.span_id)
