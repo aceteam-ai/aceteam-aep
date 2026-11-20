@@ -269,7 +269,7 @@ def evaluate(
         if _ACTION_PRIORITY.get(action, 0) > _ACTION_PRIORITY.get(max_action, 0):
             max_action = action
         if action in ("block", "flag"):
-            reasons.append(f"{s.signal_type}: {s.detail}")
+            reasons.append(f"{s.signal_type}: {s.detector or s.signal_type}")
 
     return EnforcementDecision(
         action=max_action,
