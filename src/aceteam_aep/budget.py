@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 
 class BudgetExceededError(Exception):
@@ -19,6 +19,10 @@ class BudgetExceededError(Exception):
             f"Budget exceeded: total={budget_total}, spent={spent}, "
             f"reserved={reserved}, remaining={remaining}"
         )
+
+
+class BudgetValidationError(ValueError):
+    """Raised when a reservation or settlement amount is not valid."""
 
 
 @dataclass
@@ -65,12 +69,30 @@ class BudgetEnforcer:
     def state(self) -> BudgetState:
         return self._state
 
+    @staticmethod
+    def _validated_amount(amount: Decimal | str, *, operation: str) -> Decimal:
+        """Return a non-negative, finite amount suitable for accounting.
+
+        Validation happens before callers mutate reservation or spending state.
+        Zero remains valid so failed calls can release their reservation without
+        inventing a cost.
+        """
+        try:
+            value = Decimal(amount)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise BudgetValidationError(f"Invalid {operation} amount: {amount!r}") from exc
+        if not value.is_finite() or value < 0:
+            raise BudgetValidationError(
+                f"{operation.capitalize()} amount must be finite and non-negative: {amount!r}"
+            )
+        return value
+
     def reserve(self, estimated_cost: Decimal | str) -> ReservationToken:
         """Reserve budget for an upcoming operation.
 
         Raises BudgetExceededError if insufficient budget.
         """
-        amount = Decimal(estimated_cost)
+        amount = self._validated_amount(estimated_cost, operation="reservation")
         if not self._state.can_reserve(amount):
             raise BudgetExceededError(self._state.total, self._state.spent, self._state.reserved)
         token_id = uuid.uuid4().hex
@@ -79,9 +101,18 @@ class BudgetEnforcer:
         return ReservationToken(id=token_id, amount=amount)
 
     def settle(self, token: ReservationToken, actual_cost: Decimal | str) -> None:
-        """Settle a reservation with the actual cost."""
-        actual = Decimal(actual_cost)
-        reserved = self._reservations.pop(token.id, token.amount)
+        """Settle a reservation exactly once with its actual incurred cost.
+
+        The recorded reservation, rather than the caller-owned token amount,
+        is released. An actual cost may exceed its estimate: it is still
+        recorded honestly, and :meth:`check` reports the resulting budget
+        exceedance through ``BudgetExceededError``.
+        """
+        actual = self._validated_amount(actual_cost, operation="settlement")
+        reserved = self._reservations.get(token.id)
+        if reserved is None:
+            raise BudgetValidationError("Unknown or already-settled reservation token")
+        del self._reservations[token.id]
         self._state.reserved -= reserved
         self._state.spent += actual
 
@@ -92,4 +123,10 @@ class BudgetEnforcer:
         return True
 
 
-__all__ = ["BudgetEnforcer", "BudgetExceededError", "BudgetState", "ReservationToken"]
+__all__ = [
+    "BudgetEnforcer",
+    "BudgetExceededError",
+    "BudgetState",
+    "BudgetValidationError",
+    "ReservationToken",
+]
